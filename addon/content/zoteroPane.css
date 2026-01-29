@@ -6,6 +6,8 @@
   gap: 10px;
   font-size: 12px;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   padding: 10px;
   box-sizing: border-box;
   color: var(--fill-primary);
@@ -139,7 +141,7 @@
 
 /* Messages Area */
 .llm-messages {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
   border: 1px solid var(--stroke-secondary);
@@ -149,7 +151,10 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 150px;
+  height: 50vh;
+  min-height: 320px;
+  max-height: 70vh;
+  user-select: text;
 }
 
 /* Welcome Message */
@@ -200,6 +205,11 @@
   word-break: break-word;
   line-height: 1.5;
   font-size: 12px;
+  user-select: text;
+}
+
+.llm-bubble.streaming {
+  white-space: pre-wrap;
 }
 
 .llm-bubble.user {
@@ -373,18 +383,39 @@
   margin: 12px 0;
 }
 
+.llm-bubble.assistant table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 11px;
+}
+
+.llm-bubble.assistant th,
+.llm-bubble.assistant td {
+  border: 1px solid var(--stroke-secondary);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.llm-bubble.assistant thead th {
+  background: var(--fill-quinary);
+  font-weight: 600;
+}
+
 /* Input Section */
 .llm-input-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .llm-input {
   width: 100%;
   resize: vertical;
-  min-height: 60px;
-  max-height: 150px;
+  min-height: 90px;
+  max-height: 220px;
   font: inherit;
   font-size: 12px;
   padding: 10px 12px;
@@ -434,6 +465,16 @@
   transition:
     background 0.15s,
     transform 0.1s;
+}
+
+.llm-cancel-btn {
+  border-color: #dc2626;
+  background: #dc2626;
+}
+
+.llm-cancel-btn:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
 }
 
 .llm-send-btn:hover:not(:disabled) {

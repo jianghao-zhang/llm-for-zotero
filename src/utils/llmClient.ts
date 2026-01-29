@@ -9,6 +9,7 @@ type ChatParams = {
   prompt: string;
   context?: string;
   history?: ChatMessage[];
+  signal?: AbortSignal;
 };
 
 const prefKey = (key: string) => `${config.prefsPrefix}.${key}`;
@@ -77,6 +78,7 @@ export async function callLLM(params: ChatParams): Promise<string> {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
+    signal: params.signal,
   });
 
   if (!res.ok) {
@@ -92,5 +94,112 @@ export async function callLLM(params: ChatParams): Promise<string> {
   return reply;
 }
 
-// Note: Streaming support can be added in the future if needed
-// The current implementation uses non-streaming requests for simplicity
+export async function callLLMStream(
+  params: ChatParams,
+  onDelta: (delta: string) => void,
+): Promise<string> {
+  const apiBase = (getPref("apiBase") || "").replace(/\/$/, "");
+  const apiKey = getPref("apiKey") || "";
+  const model = getPref("model") || "gpt-4o-mini";
+  const customSystemPrompt = getPref("systemPrompt") || "";
+
+  if (!apiBase) throw new Error("API base URL is missing in preferences");
+
+  const systemContent = customSystemPrompt || DEFAULT_SYSTEM_PROMPT;
+
+  const messages: ChatMessage[] = [
+    {
+      role: "system",
+      content: systemContent,
+    },
+  ];
+
+  if (params.context) {
+    messages.push({
+      role: "system",
+      content: `Document Context:\n${params.context}`,
+    });
+  }
+
+  if (params.history && params.history.length > 0) {
+    messages.push(...params.history);
+  }
+
+  messages.push({
+    role: "user",
+    content: params.prompt,
+  });
+
+  const payload = {
+    model,
+    messages,
+    temperature: 0.3,
+    max_tokens: 2048,
+    stream: true,
+  };
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+  const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
+  const res = await fetchFn(`${apiBase}/v1/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: params.signal,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status} ${res.statusText} - ${text}`);
+  }
+
+  if (!res.body) {
+    return callLLM(params);
+  }
+
+  const reader = res.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let fullText = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const data = trimmed.slice(5).trim();
+      if (!data) continue;
+      if (data === "[DONE]") {
+        return fullText;
+      }
+      try {
+        const parsed = JSON.parse(data) as {
+          choices?: Array<{
+            delta?: { content?: string };
+            message?: { content?: string };
+          }>;
+        };
+        const delta =
+          parsed?.choices?.[0]?.delta?.content ??
+          parsed?.choices?.[0]?.message?.content ??
+          "";
+        if (delta) {
+          fullText += delta;
+          onDelta(delta);
+        }
+      } catch (err) {
+        ztoolkit.log("LLM stream parse error:", err);
+      }
+    }
+  }
+
+  return fullText;
+}

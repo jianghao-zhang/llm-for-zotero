@@ -1,19 +1,38 @@
 import { getLocaleID } from "../utils/locale";
+import { renderMarkdown } from "../utils/markdown";
+import { callLLMStream, ChatMessage } from "../utils/llmClient";
 import { config } from "../../package.json";
 
 const PANE_ID = "llm-context-panel";
 
-// Simple conversation storage
+// Conversation storage
 interface Message {
   role: "user" | "assistant";
   text: string;
+  timestamp: number;
+  streaming?: boolean;
 }
 
 const chatHistory = new Map<number, Message[]>();
 const pdfTextCache = new Map<number, string>();
+const pdfSummaryCache = new Map<number, string>();
 
-// Max PDF text length (reduced to speed up API calls)
+// Track ongoing requests to allow cancellation
+let currentRequestId = 0;
+let cancelledRequestId = -1;
+
+// Max PDF text length
 const MAX_PDF_LENGTH = 8000;
+const MAX_HISTORY_MESSAGES = 12;
+
+let currentAbortController: AbortController | null = null;
+
+const getAbortController = () => {
+  const globalAny = ztoolkit.getGlobal("AbortController") as
+    | (new () => AbortController)
+    | undefined;
+  return globalAny || (globalThis as any).AbortController;
+};
 
 export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
   const doc = win.document;
@@ -49,6 +68,7 @@ export function registerReaderContextPanel() {
       if (item) {
         await cachePDFText(item);
       }
+      updateContextUI(body, item);
       setupHandlers(body, item);
       refreshChat(body, item);
     },
@@ -64,50 +84,169 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     "div",
   ) as HTMLDivElement;
   container.id = "llm-main";
-  container.style.cssText =
-    "display:flex; flex-direction:column; height:100%; padding:12px; box-sizing:border-box; font-family:system-ui,-apple-system,sans-serif;";
+  container.className = "llm-panel";
 
-  // Title
+  // Title row
   const header = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
     "div",
   ) as HTMLDivElement;
-  header.style.cssText =
-    "font-size:18px; font-weight:700; margin-bottom:12px; color:#222;";
-  header.textContent = "LLM Assistant";
+  header.className = "llm-header";
+
+  const headerTop = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  headerTop.className = "llm-header-top";
+
+  const headerInfo = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  headerInfo.className = "llm-header-info";
+
+  const title = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  title.className = "llm-title";
+  title.textContent = "LLM Assistant";
+
+  const subtitle = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  subtitle.className = "llm-subtitle";
+  subtitle.textContent = "Ask questions about your documents";
+
+  headerInfo.appendChild(title);
+  headerInfo.appendChild(subtitle);
+  headerTop.appendChild(headerInfo);
+
+  // Clear button
+  const clearBtn = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "button",
+  ) as HTMLButtonElement;
+  clearBtn.id = "llm-clear";
+  clearBtn.className = "llm-btn-icon";
+  clearBtn.textContent = "Clear";
+  headerTop.appendChild(clearBtn);
+  header.appendChild(headerTop);
+
   container.appendChild(header);
 
-  // Chat display area (big box)
+  // Context section
+  const contextSection = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  contextSection.className = "llm-context-section";
+
+  const contextHeader = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  contextHeader.className = "llm-context-header";
+
+  const contextLabel = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "span",
+  ) as HTMLSpanElement;
+  contextLabel.className = "llm-context-label";
+  contextLabel.textContent = "Document";
+
+  const contextStatus = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "span",
+  ) as HTMLSpanElement;
+  contextStatus.id = "llm-context-status";
+  contextStatus.className = "llm-context-status";
+  contextStatus.textContent = item ? "Loading..." : "No document";
+
+  contextHeader.appendChild(contextLabel);
+  contextHeader.appendChild(contextStatus);
+
+  const contextBox = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  contextBox.id = "llm-context-box";
+  contextBox.className = "llm-context";
+  contextBox.textContent = item
+    ? "Loading document context..."
+    : "Select an item or open a PDF to start";
+
+  contextSection.appendChild(contextHeader);
+  contextSection.appendChild(contextBox);
+  container.appendChild(contextSection);
+
+  // Quick actions
+  const quickActions = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  quickActions.className = "llm-quick-actions";
+  const actions = [
+    { label: "Summarize", prompt: "Summarize the document." },
+    { label: "Key Points", prompt: "List the key points from the document." },
+    { label: "Methodology", prompt: "Describe the methodology used." },
+    { label: "Limitations", prompt: "What are the limitations?" },
+    { label: "Future Work", prompt: "Suggest future work directions." },
+  ];
+
+  for (const action of actions) {
+    const btn = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "button",
+    ) as HTMLButtonElement;
+    btn.className = "llm-quick-btn";
+    btn.type = "button";
+    btn.dataset.prompt = action.prompt;
+    btn.disabled = !item;
+
+    const label = doc.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "span",
+    ) as HTMLSpanElement;
+    label.className = "llm-quick-label";
+    label.textContent = action.label;
+    btn.appendChild(label);
+    quickActions.appendChild(btn);
+  }
+  container.appendChild(quickActions);
+
+  // Chat display area
   const chatBox = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
     "div",
   ) as HTMLDivElement;
   chatBox.id = "llm-chat-box";
-  chatBox.style.cssText =
-    "flex:1; overflow-y:auto; border:2px solid #ddd; border-radius:10px; padding:12px; background:#fafafa; margin-bottom:12px; min-height:150px;";
-  chatBox.innerHTML = item
-    ? '<div style="color:#999;text-align:center;padding:30px;">Type a question below to start</div>'
-    : '<div style="color:#999;text-align:center;padding:30px;">Open a PDF to chat</div>';
+  chatBox.className = "llm-messages";
   container.appendChild(chatBox);
 
-  // Input area (below chat box)
-  const inputRow = doc.createElementNS(
+  // Input area
+  const inputSection = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
     "div",
   ) as HTMLDivElement;
-  inputRow.style.cssText = "display:flex; gap:10px;";
+  inputSection.className = "llm-input-section";
 
   const inputBox = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
-    "input",
-  ) as HTMLInputElement;
+    "textarea",
+  ) as HTMLTextAreaElement;
   inputBox.id = "llm-input";
-  inputBox.type = "text";
-  inputBox.placeholder = item ? "Type your question..." : "Open a PDF first";
+  inputBox.placeholder = item ? "Ask a question about this paper..." : "Open a PDF first";
   inputBox.disabled = !item;
-  inputBox.style.cssText =
-    "flex:1; padding:12px; font-size:14px; border:2px solid #bbb; border-radius:8px; outline:none;";
-  inputRow.appendChild(inputBox);
+  inputBox.className = "llm-input";
+  inputSection.appendChild(inputBox);
+
+  const actionsRow = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "div",
+  ) as HTMLDivElement;
+  actionsRow.className = "llm-actions";
 
   const sendBtn = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
@@ -116,21 +255,30 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   sendBtn.id = "llm-send";
   sendBtn.textContent = "Send";
   sendBtn.disabled = !item;
-  sendBtn.style.cssText =
-    "padding:12px 24px; font-size:14px; font-weight:700; background:#007bff; color:#fff; border:none; border-radius:8px; cursor:pointer;";
-  inputRow.appendChild(sendBtn);
+  sendBtn.className = "llm-send-btn";
+  actionsRow.appendChild(sendBtn);
 
-  container.appendChild(inputRow);
+  const cancelBtn = doc.createElementNS(
+    "http://www.w3.org/1999/xhtml",
+    "button",
+  ) as HTMLButtonElement;
+  cancelBtn.id = "llm-cancel";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.className = "llm-send-btn llm-cancel-btn";
+  cancelBtn.style.display = "none";
+  actionsRow.appendChild(cancelBtn);
 
-  // Status line
   const statusLine = doc.createElementNS(
     "http://www.w3.org/1999/xhtml",
     "div",
   ) as HTMLDivElement;
   statusLine.id = "llm-status";
-  statusLine.style.cssText = "margin-top:8px; font-size:12px; color:#666;";
-  statusLine.textContent = item ? "Ready" : "No document";
-  container.appendChild(statusLine);
+  statusLine.className = "llm-status";
+  statusLine.textContent = item ? "Ready" : "Select an item or open a PDF";
+  actionsRow.appendChild(statusLine);
+
+  inputSection.appendChild(actionsRow);
+  container.appendChild(inputSection);
 
   body.appendChild(container);
 }
@@ -140,14 +288,11 @@ async function cachePDFText(item: Zotero.Item) {
 
   try {
     let pdfText = "";
-
-    // Get the main item (parent if this is an attachment)
     const mainItem =
       item.isAttachment() && item.parentID
         ? Zotero.Items.get(item.parentID)
         : item;
 
-    // Build context from metadata
     const title = mainItem?.getField("title") || "";
     const abstract = mainItem?.getField("abstractNote") || "";
 
@@ -155,9 +300,7 @@ async function cachePDFText(item: Zotero.Item) {
     if (title) contextParts.push(`Title: ${title}`);
     if (abstract) contextParts.push(`Abstract: ${abstract}`);
 
-    // Try to get PDF text
     let pdfItem: Zotero.Item | null = null;
-
     if (
       item.isAttachment() &&
       item.attachmentContentType === "application/pdf"
@@ -179,37 +322,129 @@ async function cachePDFText(item: Zotero.Item) {
         const result = await Zotero.PDFWorker.getFullText(pdfItem.id);
         if (result && result.text) {
           pdfText = result.text;
-          // Limit text to speed up API calls
           if (pdfText.length > MAX_PDF_LENGTH) {
             pdfText =
               pdfText.substring(0, MAX_PDF_LENGTH) +
-              "\n\n...[Content truncated for faster processing. Full paper has " +
+              "\n\n...[Truncated. Full: " +
               result.text.length +
-              " characters]";
+              " chars]";
           }
         }
       } catch (e) {
-        ztoolkit.log("PDF text extraction failed:", e);
+        ztoolkit.log("PDF extraction failed:", e);
       }
     }
 
     if (pdfText) {
-      contextParts.push(`\nFull Paper Text:\n${pdfText}`);
+      contextParts.push(`\nPaper Text:\n${pdfText}`);
     }
 
     pdfTextCache.set(item.id, contextParts.join("\n\n"));
+
+    const summaryParts: string[] = [];
+    if (title) summaryParts.push(title);
+    if (abstract) summaryParts.push(abstract);
+    if (!title && !abstract) {
+      summaryParts.push("No title or abstract found.");
+    }
+    if (pdfText) {
+      summaryParts.push("PDF text loaded.");
+    }
+    pdfSummaryCache.set(item.id, summaryParts.join("\n\n"));
   } catch (e) {
     ztoolkit.log("Error caching PDF:", e);
     pdfTextCache.set(item.id, "");
+    pdfSummaryCache.set(item.id, "Failed to load document context.");
   }
 }
 
-function setupHandlers(body: Element, item?: Zotero.Item | null) {
-  const doc = body.ownerDocument!;
-  const inputBox = doc.getElementById("llm-input") as HTMLInputElement | null;
-  const sendBtn = doc.getElementById("llm-send") as HTMLButtonElement | null;
+function updateContextUI(body: Element, item?: Zotero.Item | null) {
+  const contextBox = body.querySelector(
+    "#llm-context-box",
+  ) as HTMLDivElement | null;
+  const contextStatus = body.querySelector(
+    "#llm-context-status",
+  ) as HTMLSpanElement | null;
+  if (!contextBox || !contextStatus) return;
 
-  if (!inputBox || !sendBtn) return;
+  if (!item) {
+    contextStatus.textContent = "No document";
+    contextBox.textContent = "Select an item or open a PDF to start.";
+    return;
+  }
+
+  const summary = pdfSummaryCache.get(item.id);
+  contextStatus.textContent = summary ? "Ready" : "Loading...";
+  contextBox.textContent = summary || "Loading document context...";
+}
+
+function setStatus(
+  statusEl: HTMLElement,
+  text: string,
+  variant: "ready" | "sending" | "error",
+) {
+  statusEl.textContent = text;
+  statusEl.className = `llm-status llm-status-${variant}`;
+}
+
+function formatTime(timestamp: number) {
+  if (!timestamp) return "";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  const hour = `${date.getHours()}`.padStart(2, "0");
+  const minute = `${date.getMinutes()}`.padStart(2, "0");
+  return `${hour}:${minute}`;
+}
+
+function sanitizeText(text: string) {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (
+      code <= 0x08 ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f)
+    ) {
+      continue;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += text[i] + text[i + 1];
+        i++;
+      } else {
+        out += "\uFFFD";
+      }
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      out += "\uFFFD";
+      continue;
+    }
+    out += text[i];
+  }
+  return out;
+}
+
+function setupHandlers(body: Element, item?: Zotero.Item | null) {
+  // Use querySelector on body to find elements
+  const inputBox = body.querySelector(
+    "#llm-input",
+  ) as HTMLTextAreaElement | null;
+  const sendBtn = body.querySelector("#llm-send") as HTMLButtonElement | null;
+  const cancelBtn = body.querySelector(
+    "#llm-cancel",
+  ) as HTMLButtonElement | null;
+  const clearBtn = body.querySelector("#llm-clear") as HTMLButtonElement | null;
+  const quickButtons = Array.from(
+    body.querySelectorAll(".llm-quick-btn"),
+  ) as HTMLButtonElement[];
+
+  if (!inputBox || !sendBtn) {
+    ztoolkit.log("LLM: Could not find input or send button");
+    return;
+  }
 
   const doSend = async () => {
     if (!item) return;
@@ -219,20 +454,69 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     await sendQuestion(body, item, text);
   };
 
-  // Click handler
-  sendBtn.onclick = (e: Event) => {
+  // Send button - use addEventListener
+  sendBtn.addEventListener("click", (e: Event) => {
     e.preventDefault();
+    e.stopPropagation();
     doSend();
-  };
+  });
 
-  // Enter key handler
-  inputBox.onkeydown = (e: Event) => {
+  // Enter key (Shift+Enter for newline)
+  inputBox.addEventListener("keydown", (e: Event) => {
     const ke = e as KeyboardEvent;
-    if (ke.key === "Enter") {
+    if (ke.key === "Enter" && !ke.shiftKey) {
       e.preventDefault();
+      e.stopPropagation();
       doSend();
     }
-  };
+  });
+
+  // Cancel button
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (currentAbortController) {
+        currentAbortController.abort();
+      }
+      cancelledRequestId = currentRequestId;
+      const status = body.querySelector("#llm-status") as HTMLElement | null;
+      if (status) setStatus(status, "Cancelled", "ready");
+      // Re-enable UI
+      if (inputBox) inputBox.disabled = false;
+      if (sendBtn) {
+        sendBtn.style.display = "";
+        sendBtn.disabled = false;
+      }
+      cancelBtn.style.display = "none";
+    });
+  }
+
+  // Clear button
+  if (clearBtn) {
+    clearBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (item) {
+        chatHistory.delete(item.id);
+        refreshChat(body, item);
+        const status = body.querySelector("#llm-status") as HTMLElement | null;
+        if (status) setStatus(status, "Cleared", "ready");
+      }
+    });
+  }
+
+  // Quick action buttons
+  for (const btn of quickButtons) {
+    btn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      const prompt = btn.dataset.prompt;
+      if (!prompt) return;
+      sendQuestion(body, item, prompt);
+    });
+  }
 }
 
 async function sendQuestion(
@@ -240,183 +524,194 @@ async function sendQuestion(
   item: Zotero.Item,
   question: string,
 ) {
-  const doc = body.ownerDocument!;
-  const inputBox = doc.getElementById("llm-input") as HTMLInputElement | null;
-  const sendBtn = doc.getElementById("llm-send") as HTMLButtonElement | null;
-  const status = doc.getElementById("llm-status") as HTMLElement | null;
+  const inputBox = body.querySelector(
+    "#llm-input",
+  ) as HTMLTextAreaElement | null;
+  const sendBtn = body.querySelector("#llm-send") as HTMLButtonElement | null;
+  const cancelBtn = body.querySelector(
+    "#llm-cancel",
+  ) as HTMLButtonElement | null;
+  const status = body.querySelector("#llm-status") as HTMLElement | null;
+  const quickButtons = Array.from(
+    body.querySelectorAll(".llm-quick-btn"),
+  ) as HTMLButtonElement[];
 
-  // Disable UI
+  // Track this request
+  currentRequestId++;
+  const thisRequestId = currentRequestId;
+
+  // Show cancel, hide send
+  if (sendBtn) sendBtn.style.display = "none";
+  if (cancelBtn) cancelBtn.style.display = "";
   if (inputBox) inputBox.disabled = true;
-  if (sendBtn) sendBtn.disabled = true;
-  if (status) status.textContent = "Sending to model...";
+  if (status) {
+    setStatus(status, "Thinking...", "sending");
+  }
+  for (const btn of quickButtons) btn.disabled = true;
 
-  // Add user message to history
+  // Add user message
   if (!chatHistory.has(item.id)) {
     chatHistory.set(item.id, []);
   }
   const history = chatHistory.get(item.id)!;
-  history.push({ role: "user", text: question });
+  const historyForLLM = history.slice(-MAX_HISTORY_MESSAGES);
+  history.push({ role: "user", text: question, timestamp: Date.now() });
+  const assistantMessage: Message = {
+    role: "assistant",
+    text: "",
+    timestamp: Date.now(),
+    streaming: true,
+  };
+  history.push(assistantMessage);
+  if (history.length > MAX_HISTORY_MESSAGES * 2) {
+    history.splice(0, history.length - MAX_HISTORY_MESSAGES * 2);
+  }
   refreshChat(body, item);
 
   try {
-    // Get PDF context
     const pdfContext = pdfTextCache.get(item.id) || "";
+    const llmHistory: ChatMessage[] = historyForLLM.map((msg) => ({
+      role: msg.role,
+      content: msg.text,
+    }));
 
-    // Get API settings
-    const apiBase = (
-      (Zotero.Prefs.get(`${config.prefsPrefix}.apiBase`, true) as string) || ""
-    ).replace(/\/$/, "");
-    const apiKey =
-      (Zotero.Prefs.get(`${config.prefsPrefix}.apiKey`, true) as string) || "";
-    const model =
-      (Zotero.Prefs.get(`${config.prefsPrefix}.model`, true) as string) ||
-      "gpt-4o-mini";
-
-    if (!apiBase) {
-      throw new Error("Please set API Base URL in Zotero settings");
-    }
-
-    // Build messages for API
-    const messages = [
-      {
-        role: "system",
-        content:
-          "You are a helpful research assistant. Answer questions about the paper based on the provided content. Be concise and accurate.",
-      },
-      {
-        role: "system",
-        content: `Paper content:\n${pdfContext || "No content available"}`,
-      },
-    ];
-
-    // Add conversation history
-    for (const msg of history.slice(0, -1)) {
-      messages.push({
-        role: msg.role,
-        content: msg.text,
-      });
-    }
-
-    // Add current question
-    messages.push({
-      role: "user",
-      content: question,
-    });
-
-    // Make API call
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
+    const AbortControllerCtor = getAbortController();
+    currentAbortController = AbortControllerCtor ? new AbortControllerCtor() : null;
+    let refreshQueued = false;
+    const queueRefresh = () => {
+      if (refreshQueued) return;
+      refreshQueued = true;
+      setTimeout(() => {
+        refreshQueued = false;
+        refreshChat(body, item);
+      }, 50);
     };
-    if (apiKey) {
-      headers["Authorization"] = `Bearer ${apiKey}`;
+
+    const answer = await callLLMStream(
+      {
+        prompt: question,
+        context: pdfContext,
+        history: llmHistory,
+        signal: currentAbortController?.signal,
+      },
+      (delta) => {
+        assistantMessage.text += sanitizeText(delta);
+        queueRefresh();
+      },
+    );
+
+    if (cancelledRequestId >= thisRequestId) {
+      return;
     }
 
-    // Update status to show we're waiting
-    if (status) {
-      status.textContent =
-        "Waiting for AI response (this may take a minute)...";
-    }
-
-    const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
-    const response = await fetchFn(`${apiBase}/v1/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.3,
-        max_tokens: 1024,
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`API error ${response.status}: ${errText.slice(0, 100)}`);
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const answer =
-      data?.choices?.[0]?.message?.content || "No response from model";
-
-    // Add assistant response
-    history.push({ role: "assistant", text: answer });
+    assistantMessage.text =
+      sanitizeText(answer) || assistantMessage.text || "No response.";
+    assistantMessage.streaming = false;
     refreshChat(body, item);
 
-    if (status) {
-      status.textContent = "Ready";
-      status.style.color = "#090";
-    }
+    if (status) setStatus(status, "Ready", "ready");
   } catch (err) {
-    const errMsg = (err as Error).message || "Unknown error";
-    history.push({ role: "assistant", text: `Error: ${errMsg}` });
+    if (cancelledRequestId >= thisRequestId) {
+      return;
+    }
+
+    const errMsg = (err as Error).message || "Error";
+    assistantMessage.text = `Error: ${errMsg}`;
+    assistantMessage.streaming = false;
     refreshChat(body, item);
 
     if (status) {
-      status.textContent = `Error: ${errMsg.slice(0, 50)}`;
-      status.style.color = "#c00";
+      setStatus(status, `Error: ${errMsg.slice(0, 40)}`, "error");
     }
   } finally {
-    if (inputBox) {
-      inputBox.disabled = false;
-      inputBox.focus();
+    // Only restore UI if this is still the current request
+    if (cancelledRequestId < thisRequestId) {
+      if (inputBox) {
+        inputBox.disabled = false;
+        inputBox.focus();
+      }
+      if (sendBtn) {
+        sendBtn.style.display = "";
+        sendBtn.disabled = false;
+      }
+      if (cancelBtn) cancelBtn.style.display = "none";
+      for (const btn of quickButtons) btn.disabled = false;
     }
-    if (sendBtn) sendBtn.disabled = false;
+    currentAbortController = null;
   }
 }
 
 function refreshChat(body: Element, item?: Zotero.Item | null) {
-  const doc = body.ownerDocument!;
-  const chatBox = doc.getElementById("llm-chat-box");
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
+  const doc = body.ownerDocument!;
 
   if (!item) {
-    chatBox.innerHTML =
-      '<div style="color:#999;text-align:center;padding:30px;">Open a PDF to chat</div>';
+    chatBox.innerHTML = `
+      <div class="llm-welcome">
+        <div class="llm-welcome-icon">📄</div>
+        <div class="llm-welcome-text">Select an item or open a PDF to start.</div>
+      </div>
+    `;
     return;
   }
 
   const history = chatHistory.get(item.id) || [];
 
   if (history.length === 0) {
-    chatBox.innerHTML =
-      '<div style="color:#999;text-align:center;padding:30px;">Type a question below to start</div>';
+    chatBox.innerHTML = `
+      <div class="llm-welcome">
+        <div class="llm-welcome-icon">💬</div>
+        <div class="llm-welcome-text">Start a conversation by asking a question or using one of the quick actions above.</div>
+      </div>
+    `;
     return;
   }
 
   chatBox.innerHTML = "";
 
   for (const msg of history) {
-    const bubble = doc.createElement("div");
     const isUser = msg.role === "user";
+    const wrapper = doc.createElement("div") as HTMLDivElement;
+    wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
 
-    bubble.style.cssText = `
-      margin-bottom: 12px;
-      padding: 12px 16px;
-      border-radius: 12px;
-      max-width: 85%;
-      word-wrap: break-word;
-      line-height: 1.5;
-      ${isUser ? "background:#007bff; color:#fff; margin-left:auto;" : "background:#e9e9e9; color:#222; margin-right:auto;"}
-    `;
+    const bubble = doc.createElement("div") as HTMLDivElement;
+    bubble.className = `llm-bubble ${isUser ? "user" : "assistant"}`;
 
     if (isUser) {
-      bubble.textContent = msg.text;
+      bubble.textContent = sanitizeText(msg.text || "");
     } else {
-      // Simple markdown: bold, newlines
-      const html = msg.text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-        .replace(/\n/g, "<br>");
-      bubble.innerHTML = html;
+      if (!msg.text) {
+        bubble.innerHTML =
+          '<div class="llm-typing"><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span></div>';
+      } else if (msg.streaming) {
+        bubble.classList.add("streaming");
+        bubble.textContent = sanitizeText(msg.text);
+      } else {
+        try {
+          const safeText = sanitizeText(msg.text);
+          bubble.innerHTML = renderMarkdown(safeText);
+        } catch (err) {
+          ztoolkit.log("LLM render error:", err);
+          bubble.textContent = sanitizeText(msg.text);
+        }
+      }
     }
 
-    chatBox.appendChild(bubble);
+    const meta = doc.createElement("div") as HTMLDivElement;
+    meta.className = "llm-message-meta";
+
+    const time = doc.createElement("span") as HTMLSpanElement;
+    time.className = "llm-message-time";
+    time.textContent = formatTime(msg.timestamp);
+    meta.appendChild(time);
+
+    wrapper.appendChild(bubble);
+    wrapper.appendChild(meta);
+    chatBox.appendChild(wrapper);
   }
 
+  // Scroll to bottom
   chatBox.scrollTop = chatBox.scrollHeight;
 }
 
