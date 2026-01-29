@@ -72,8 +72,8 @@ export class BasicExampleFactory {
     Zotero.PreferencePanes.register({
       pluginID: addon.data.config.addonID,
       src: rootURI + "content/preferences.xhtml",
-      label: getString("prefs-title"),
-      image: `chrome://${addon.data.config.addonRef}/content/icons/favicon.png`,
+      label: "zotero-llm",
+      image: `chrome://${addon.data.config.addonRef}/content/icons/neuron.jpg`,
     });
   }
 }
@@ -134,7 +134,7 @@ export class UIExampleFactory {
 
   @example
   static registerRightClickMenuItem() {
-    const menuIcon = `chrome://${addon.data.config.addonRef}/content/icons/favicon@0.5x.png`;
+    const menuIcon = `chrome://${addon.data.config.addonRef}/content/icons/neuron.jpg`;
     // item menuitem with icon
     ztoolkit.Menu.register("item", {
       tag: "menuitem",

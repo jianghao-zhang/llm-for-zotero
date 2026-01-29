@@ -8,6 +8,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  position: relative;
   padding: 10px;
   box-sizing: border-box;
   color: var(--fill-primary);
@@ -29,6 +30,16 @@
 
 .llm-header-info {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-header-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .llm-title {
@@ -98,47 +109,6 @@
   white-space: pre-wrap;
 }
 
-/* Quick Actions */
-.llm-quick-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.llm-quick-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 10px;
-  border-radius: 16px;
-  border: 1px solid var(--stroke-secondary);
-  background: var(--fill-quinary);
-  cursor: pointer;
-  font-size: 11px;
-  color: var(--fill-primary);
-  transition:
-    background 0.15s,
-    border-color 0.15s;
-}
-
-.llm-quick-btn:hover:not(:disabled) {
-  background: var(--color-accent10);
-  border-color: var(--color-accent);
-}
-
-.llm-quick-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.llm-quick-icon {
-  font-size: 12px;
-}
-
-.llm-quick-label {
-  white-space: nowrap;
-}
-
 /* Messages Area */
 .llm-messages {
   flex: 1 1 auto;
@@ -155,6 +125,61 @@
   min-height: 320px;
   max-height: 70vh;
   user-select: text;
+}
+
+/* Shortcuts */
+.llm-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.llm-shortcut-btn {
+  background: var(--fill-quinary);
+  border: 1px solid var(--stroke-secondary);
+  color: var(--fill-primary);
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.llm-shortcut-btn:hover:not(:disabled) {
+  background: var(--color-accent10);
+  border-color: var(--color-accent);
+}
+
+.llm-shortcut-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.llm-shortcut-menu {
+  position: absolute;
+  z-index: 10;
+  background: var(--material-background);
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.2);
+}
+
+.llm-shortcut-menu-item {
+  background: none;
+  border: none;
+  color: var(--fill-primary);
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.llm-shortcut-menu-item:hover {
+  background: var(--fill-quinary);
 }
 
 /* Welcome Message */
