@@ -486,7 +486,7 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
   if (menu && menuEdit) {
     if (!menu.dataset.listenerAttached) {
       menu.dataset.listenerAttached = "true";
-      menuEdit.addEventListener("click", (e: Event) => {
+      menuEdit.addEventListener("click", async (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       const shortcutId = menu.dataset.shortcutId || "";
@@ -494,29 +494,16 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
       const target = (menu as any)._target as HTMLButtonElement | null;
       const currentPrompt = target?.dataset.prompt || "";
       const currentLabel = target?.dataset.label || "";
-      const promptFn = ztoolkit.getGlobal("prompt") as (
-        message?: string,
-        _default?: string,
-      ) => string | null;
-
-      const nextLabel = promptFn(
-        "Edit shortcut label:",
-        currentLabel || "",
+      const updated = await openShortcutEditDialog(
+        currentLabel,
+        currentPrompt,
       );
-      if (nextLabel === null) {
+      if (!updated) {
         menu.style.display = "none";
         return;
       }
-
-      const updated = promptFn(
-        "Edit shortcut prompt:",
-        currentPrompt || "",
-      );
-      if (updated === null) {
-        menu.style.display = "none";
-        return;
-      }
-      const next = updated.trim();
+      const { label: nextLabel, prompt: nextPrompt } = updated;
+      const next = nextPrompt.trim();
       const nextOverrides = getShortcutOverrides();
       nextOverrides[shortcutId] = next;
       setShortcutOverrides(nextOverrides);
@@ -544,6 +531,92 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
       });
     }
   }
+}
+
+async function openShortcutEditDialog(
+  initialLabel: string,
+  initialPrompt: string,
+): Promise<{ label: string; prompt: string } | null> {
+  const dialogData: { [key: string]: any } = {
+    labelValue: initialLabel || "",
+    promptValue: initialPrompt || "",
+    loadCallback: () => {
+      return;
+    },
+    unloadCallback: () => {
+      return;
+    },
+  };
+
+  const dialog = new ztoolkit.Dialog(6, 2)
+    .addCell(0, 0, {
+      tag: "h2",
+      properties: { innerHTML: "Edit Shortcut" },
+      styles: { margin: "0 0 8px 0" },
+    })
+    .addCell(1, 0, {
+      tag: "label",
+      namespace: "html",
+      attributes: { for: "llm-shortcut-label-input" },
+      properties: { innerHTML: "Label" },
+    })
+    .addCell(
+      1,
+      1,
+      {
+        tag: "input",
+        namespace: "html",
+        id: "llm-shortcut-label-input",
+        attributes: {
+          "data-bind": "labelValue",
+          "data-prop": "value",
+          type: "text",
+        },
+        styles: {
+          width: "300px",
+        },
+      },
+      false,
+    )
+    .addCell(2, 0, {
+      tag: "label",
+      namespace: "html",
+      attributes: { for: "llm-shortcut-prompt-input" },
+      properties: { innerHTML: "Prompt" },
+    })
+    .addCell(
+      2,
+      1,
+      {
+        tag: "textarea",
+        namespace: "html",
+        id: "llm-shortcut-prompt-input",
+        attributes: {
+          "data-bind": "promptValue",
+          "data-prop": "value",
+          rows: "6",
+        },
+        styles: {
+          width: "300px",
+        },
+      },
+      false,
+    )
+    .addButton("Save", "save")
+    .addButton("Cancel", "cancel")
+    .setDialogData(dialogData)
+    .open("Edit Shortcut");
+
+  addon.data.dialog = dialog;
+  await dialogData.unloadLock.promise;
+  addon.data.dialog = undefined;
+
+  if (dialogData._lastButtonId !== "save") return null;
+
+  return {
+    label: dialogData.labelValue || "",
+    prompt: dialogData.promptValue || "",
+  };
 }
 
 function setupHandlers(body: Element, item?: Zotero.Item | null) {
