@@ -84,12 +84,8 @@ export class KeyExampleFactory {
     // Register an event key for Alt+L
     ztoolkit.Keyboard.register((ev, keyOptions) => {
       ztoolkit.log(ev, keyOptions.keyboard);
-      if (keyOptions.keyboard?.equals("shift,l")) {
-        addon.hooks.onShortcuts("larger");
-      }
-      if (ev.shiftKey && ev.key === "S") {
-        addon.hooks.onShortcuts("smaller");
-      }
+      if (keyOptions.keyboard?.equals("shift,l")) return;
+      if (ev.shiftKey && ev.key === "S") return;
     });
 
     new ztoolkit.ProgressWindow(addon.data.config.addonName)

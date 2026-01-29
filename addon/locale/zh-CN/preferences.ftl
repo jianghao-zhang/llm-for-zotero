@@ -1,5 +1,10 @@
-pref-title = 插件模板设置示例
-pref-enable =
-    .label = 开启
-pref-input = 输入
-pref-help = { $name } Build { $version } { $time }
+pref-title = LLM 设置
+pref-api-base = API 基础 URL
+pref-api-key = 密钥 / API Key
+pref-model = 模型名称
+pref-system-prompt = 系统提示词（可选）
+pref-system-prompt-placeholder = 为 AI 助手设置自定义指令...
+pref-test-button = 测试连接
+pref-test-running = 测试中...
+pref-test-success = 连接成功
+pref-test-failed = 失败

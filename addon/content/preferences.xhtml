@@ -1,26 +1,144 @@
 <linkset>
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
-<groupbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
-  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
+<vbox
+  id="__addonRef__-prefs"
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
+  xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+>
+  <groupbox>
+    <label><html:h2>LLM Assistant Settings</html:h2></label>
 
-  <vbox class="pref-row">
-    <html:label for="__addonRef__-api-base" data-l10n-id="pref-api-base" />
-    <html:input id="__addonRef__-api-base" type="text" preference="apiBase" flex="1" />
-  </vbox>
+    <html:div
+      style="display: flex; flex-direction: column; gap: 16px; padding: 10px"
+    >
+      <html:div style="display: flex; flex-direction: column; gap: 4px">
+        <html:label
+          for="__addonRef__-api-base"
+          style="font-weight: 600; font-size: 13px"
+        >
+          API Base URL
+        </html:label>
+        <html:input
+          id="__addonRef__-api-base"
+          type="text"
+          placeholder="https://api.openai.com"
+          style="
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+          "
+        />
+        <html:span style="font-size: 11px; color: #666">
+          The base URL for your OpenAI-compatible API (e.g.,
+          https://api.openai.com)
+        </html:span>
+      </html:div>
 
-  <vbox class="pref-row">
-    <html:label for="__addonRef__-api-key" data-l10n-id="pref-api-key" />
-    <html:input id="__addonRef__-api-key" type="password" preference="apiKey" flex="1" />
-  </vbox>
+      <html:div style="display: flex; flex-direction: column; gap: 4px">
+        <html:label
+          for="__addonRef__-api-key"
+          style="font-weight: 600; font-size: 13px"
+        >
+          API Key / Secret Key
+        </html:label>
+        <html:input
+          id="__addonRef__-api-key"
+          type="password"
+          placeholder="sk-..."
+          style="
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+          "
+        />
+        <html:span style="font-size: 11px; color: #666">
+          Your API key for authentication
+        </html:span>
+      </html:div>
 
-  <vbox class="pref-row">
-    <html:label for="__addonRef__-model" data-l10n-id="pref-model" />
-    <html:input id="__addonRef__-model" type="text" preference="model" flex="1" />
-  </vbox>
+      <html:div style="display: flex; flex-direction: column; gap: 4px">
+        <html:label
+          for="__addonRef__-model"
+          style="font-weight: 600; font-size: 13px"
+        >
+          Model Name
+        </html:label>
+        <html:input
+          id="__addonRef__-model"
+          type="text"
+          placeholder="gpt-4o-mini"
+          style="
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+          "
+        />
+        <html:span style="font-size: 11px; color: #666">
+          The model to use (e.g., gpt-4o-mini, gpt-4, claude-3-sonnet)
+        </html:span>
+      </html:div>
 
-  <hbox class="pref-row" align="center">
-    <button id="__addonRef__-test-button" data-l10n-id="pref-test-button" />
-    <html:label id="__addonRef__-test-status" class="pref-status" />
-  </hbox>
-</groupbox>
+      <html:div style="display: flex; flex-direction: column; gap: 4px">
+        <html:label
+          for="__addonRef__-system-prompt"
+          style="font-weight: 600; font-size: 13px"
+        >
+          Custom System Prompt (Optional)
+        </html:label>
+        <html:textarea
+          id="__addonRef__-system-prompt"
+          rows="4"
+          placeholder="Custom instructions for the AI assistant..."
+          style="
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 13px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+            resize: vertical;
+          "
+        ></html:textarea>
+        <html:span style="font-size: 11px; color: #666">
+          Override the default system prompt (leave empty to use default)
+        </html:span>
+      </html:div>
+
+      <html:div
+        style="display: flex; align-items: center; gap: 12px; margin-top: 8px"
+      >
+        <html:button
+          id="__addonRef__-test-button"
+          type="button"
+          style="
+            padding: 8px 20px;
+            font-size: 13px;
+            font-weight: 600;
+            background: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+          "
+        >
+          Test Connection
+        </html:button>
+        <html:span
+          id="__addonRef__-test-status"
+          style="font-size: 13px"
+        ></html:span>
+      </html:div>
+    </html:div>
+  </groupbox>
+</vbox>

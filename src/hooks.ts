@@ -1,7 +1,10 @@
 import { BasicExampleFactory, HelperExampleFactory } from "./modules/examples";
-import { initLocale } from "./utils/locale";
+import { getString, initLocale } from "./utils/locale";
 import { registerPrefsScripts } from "./modules/preferenceScript";
-import { registerReaderContextPanel } from "./modules/contextPanel";
+import {
+  registerReaderContextPanel,
+  registerLLMStyles,
+} from "./modules/contextPanel";
 import { createZToolkit } from "./utils/ztoolkit";
 
 async function onStartup() {
@@ -49,6 +52,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
     text: "[30%] Loading...",
   });
 
+  registerLLMStyles(win);
   registerReaderContextPanel();
 
   await Zotero.Promise.delay(1000);
@@ -115,19 +119,6 @@ async function onPrefsEvent(type: string, data: { [key: string]: any }) {
   }
 }
 
-function onShortcuts(type: string) {
-  switch (type) {
-    case "larger":
-      KeyExampleFactory.exampleShortcutLargerCallback();
-      break;
-    case "smaller":
-      KeyExampleFactory.exampleShortcutSmallerCallback();
-      break;
-    default:
-      break;
-  }
-}
-
 function onDialogEvents(type: string) {
   switch (type) {
     case "dialogExample":
@@ -161,6 +152,5 @@ export default {
   onMainWindowUnload,
   onNotify,
   onPrefsEvent,
-  onShortcuts,
   onDialogEvents,
 };

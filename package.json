@@ -1,14 +1,14 @@
 {
-  "name": "zotero-plugin-template",
+  "name": "zotero-llm",
   "type": "module",
   "version": "3.1.0",
-  "description": "Zotero Plugin Template",
+  "description": "Zotero LLM assistant in the reader side panel",
   "config": {
-    "addonName": "Zotero Plugin Template",
-    "addonID": "addontemplate@euclpts.com",
-    "addonRef": "addontemplate",
-    "addonInstance": "AddonTemplate",
-    "prefsPrefix": "extensions.zotero.addontemplate"
+    "addonName": "zotero-llm",
+    "addonID": "zotero-llm@local",
+    "addonRef": "zoterollm",
+    "addonInstance": "ZoteroLLM",
+    "prefsPrefix": "extensions.zotero.zoterollm"
   },
   "repository": {
     "type": "git",
