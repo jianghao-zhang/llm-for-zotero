@@ -12,7 +12,7 @@ item-info-row-example-label = 示例行
 
 # LLM 面板
 llm-panel-head =
-    .label = LLM 助手
+    .label = zotero-llm
 llm-panel-sidenav-tooltip =
     .tooltiptext = 与 AI 讨论当前文档
 llm-panel-title = LLM 助手
