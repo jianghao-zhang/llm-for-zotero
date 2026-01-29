@@ -23,6 +23,9 @@ export default defineConfig({
       buildVersion: pkg.version,
       buildTime: "{{buildTime}}",
     },
+    fluent: {
+      prefixFluentMessages: false,
+    },
     prefs: {
       prefix: pkg.config.prefsPrefix,
     },

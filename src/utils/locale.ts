@@ -75,25 +75,24 @@ function _getString(
   localeString: FluentMessageId,
   options: { branch?: string | undefined; args?: Record<string, unknown> } = {},
 ): string {
-  const localStringWithPrefix = `${config.addonRef}-${localeString}`;
   const { branch, args } = options;
   const pattern = addon.data.locale?.current.formatMessagesSync([
-    { id: localStringWithPrefix, args },
+    { id: localeString, args },
   ])[0] as Pattern;
 
   if (!pattern) {
-    return localStringWithPrefix;
+    return localeString;
   }
   if (branch && pattern.attributes) {
     return (
       pattern.attributes.find((attr) => attr.name === branch)?.value ||
-      localStringWithPrefix
+      localeString
     );
   } else {
-    return pattern.value || localStringWithPrefix;
+    return pattern.value || localeString;
   }
 }
 
 function getLocaleID(id: FluentMessageId) {
-  return `${config.addonRef}-${id}`;
+  return id;
 }
