@@ -1,6 +1,11 @@
 /**
  * Markdown to HTML renderer for chat messages
  *
+ * Features:
+ * - Block-level isolation: errors in one block don't affect others
+ * - Delimiter validation: incomplete patterns are left as raw text
+ * - Graceful degradation: failed blocks show as escaped text
+ *
  * Supports:
  * - Headers (h1-h4)
  * - Bold, italic, bold+italic
@@ -14,6 +19,24 @@
  */
 
 import katex from "katex";
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface TextBlock {
+  type:
+    | "codeblock"
+    | "mathblock"
+    | "header"
+    | "list"
+    | "blockquote"
+    | "table"
+    | "hr"
+    | "paragraph";
+  content: string;
+  raw: string;
+}
 
 // =============================================================================
 // Constants
@@ -40,7 +63,7 @@ const HTML_ESCAPE_MAP: Record<string, string> = {
 };
 
 // =============================================================================
-// Utilities
+// Utility Functions
 // =============================================================================
 
 /** Escape HTML special characters */
@@ -48,14 +71,476 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (m) => HTML_ESCAPE_MAP[m]);
 }
 
+/** Count non-overlapping occurrences of a pattern */
+function countOccurrences(text: string, pattern: string | RegExp): number {
+  const regex =
+    typeof pattern === "string"
+      ? new RegExp(escapeRegex(pattern), "g")
+      : pattern;
+  return (text.match(regex) || []).length;
+}
+
+/** Escape special regex characters */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /** Render LaTeX to HTML using KaTeX */
 function renderLatex(latex: string, displayMode: boolean): string {
   try {
     return katex.renderToString(latex, { ...KATEX_OPTIONS, displayMode });
   } catch {
-    // Fallback: show the raw LaTeX in a styled span
     return `<span class="math-error" title="LaTeX error">${escapeHtml(latex)}</span>`;
   }
+}
+
+// =============================================================================
+// Delimiter Validation
+// =============================================================================
+
+/** Check if paired delimiters are balanced */
+function isDelimiterBalanced(text: string, delimiter: string): boolean {
+  return countOccurrences(text, delimiter) % 2 === 0;
+}
+
+/** Check if code block delimiters are balanced */
+function hasBalancedCodeBlocks(text: string): boolean {
+  return countOccurrences(text, "```") % 2 === 0;
+}
+
+/** Check if display math delimiters are balanced */
+function hasBalancedDisplayMath(text: string): boolean {
+  return countOccurrences(text, "$$") % 2 === 0;
+}
+
+/** Check if inline delimiters are balanced (for $, `, **, etc.) */
+function hasBalancedInlineDelimiter(text: string, delimiter: string): boolean {
+  // For single-char delimiters, count them
+  // For multi-char like **, count occurrences
+  return isDelimiterBalanced(text, delimiter);
+}
+
+// =============================================================================
+// Block Splitting
+// =============================================================================
+
+/** Split text into independent blocks for isolated rendering */
+function splitIntoBlocks(text: string): TextBlock[] {
+  const blocks: TextBlock[] = [];
+  const remaining = text;
+
+  // First, extract fenced code blocks (they're atomic)
+  const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+  const codeBlockMatches: {
+    match: string;
+    index: number;
+    lang: string;
+    code: string;
+  }[] = [];
+
+  let match;
+  while ((match = codeBlockRegex.exec(text)) !== null) {
+    codeBlockMatches.push({
+      match: match[0],
+      index: match.index,
+      lang: match[1],
+      code: match[2],
+    });
+  }
+
+  // If we have unbalanced code blocks, treat entire text as one paragraph
+  if (!hasBalancedCodeBlocks(text)) {
+    return [{ type: "paragraph", content: text, raw: text }];
+  }
+
+  // Split around code blocks
+  let lastEnd = 0;
+  for (const cb of codeBlockMatches) {
+    // Text before this code block
+    if (cb.index > lastEnd) {
+      const beforeText = text.slice(lastEnd, cb.index);
+      blocks.push(...splitTextBlocks(beforeText));
+    }
+    // The code block itself
+    blocks.push({
+      type: "codeblock",
+      content: cb.code,
+      raw: cb.match,
+    });
+    lastEnd = cb.index + cb.match.length;
+  }
+
+  // Text after last code block
+  if (lastEnd < text.length) {
+    const afterText = text.slice(lastEnd);
+    blocks.push(...splitTextBlocks(afterText));
+  }
+
+  return blocks;
+}
+
+/** Split non-code text into blocks by blank lines and structure */
+function splitTextBlocks(text: string): TextBlock[] {
+  const blocks: TextBlock[] = [];
+  const lines = text.split(/\r?\n/);
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Skip empty lines
+    if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    // Display math block ($$...$$)
+    if (trimmed.startsWith("$$") || /^\$\$/.test(trimmed)) {
+      const mathLines: string[] = [line];
+      const startLine = i;
+      i++;
+
+      // If $$ is on its own line, collect until closing $$
+      if (trimmed === "$$" || !trimmed.endsWith("$$")) {
+        while (i < lines.length) {
+          mathLines.push(lines[i]);
+          if (lines[i].trim().endsWith("$$")) {
+            i++;
+            break;
+          }
+          i++;
+        }
+      }
+
+      const raw = mathLines.join("\n");
+      blocks.push({ type: "mathblock", content: raw, raw });
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^---+$/.test(trimmed) || /^\*\*\*+$/.test(trimmed)) {
+      blocks.push({ type: "hr", content: trimmed, raw: line });
+      i++;
+      continue;
+    }
+
+    // Header
+    if (/^#{1,4}\s+/.test(trimmed)) {
+      blocks.push({ type: "header", content: trimmed, raw: line });
+      i++;
+      continue;
+    }
+
+    // Blockquote
+    if (trimmed.startsWith(">")) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith(">")) {
+        quoteLines.push(lines[i]);
+        i++;
+      }
+      const raw = quoteLines.join("\n");
+      blocks.push({ type: "blockquote", content: raw, raw });
+      continue;
+    }
+
+    // Table (starts with |)
+    if (trimmed.includes("|") && i + 1 < lines.length) {
+      const nextTrimmed = lines[i + 1]?.trim() || "";
+      if (/^[\s|:-]+$/.test(nextTrimmed) && nextTrimmed.includes("-")) {
+        const tableLines: string[] = [line, lines[i + 1]];
+        i += 2;
+        while (i < lines.length && lines[i].trim().includes("|")) {
+          tableLines.push(lines[i]);
+          i++;
+        }
+        const raw = tableLines.join("\n");
+        blocks.push({ type: "table", content: raw, raw });
+        continue;
+      }
+    }
+
+    // Ordered list
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const listLines: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        listLines.push(lines[i]);
+        i++;
+      }
+      const raw = listLines.join("\n");
+      blocks.push({ type: "list", content: raw, raw });
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*]\s+/.test(trimmed)) {
+      const listLines: string[] = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        listLines.push(lines[i]);
+        i++;
+      }
+      const raw = listLines.join("\n");
+      blocks.push({ type: "list", content: raw, raw });
+      continue;
+    }
+
+    // Paragraph (collect until blank line or structural element)
+    const paraLines: string[] = [];
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^#{1,4}\s+/.test(lines[i].trim()) &&
+      !/^[-*]\s+/.test(lines[i].trim()) &&
+      !/^\d+\.\s+/.test(lines[i].trim()) &&
+      !/^>/.test(lines[i].trim()) &&
+      !/^---+$/.test(lines[i].trim()) &&
+      !/^\$\$/.test(lines[i].trim())
+    ) {
+      paraLines.push(lines[i]);
+      i++;
+    }
+
+    if (paraLines.length > 0) {
+      const raw = paraLines.join("\n");
+      blocks.push({ type: "paragraph", content: raw, raw });
+    }
+  }
+
+  return blocks;
+}
+
+// =============================================================================
+// Block Rendering
+// =============================================================================
+
+/** Render a single block to HTML */
+function renderBlock(block: TextBlock): string {
+  switch (block.type) {
+    case "codeblock":
+      return renderCodeBlock(block.content, block.raw);
+    case "mathblock":
+      return renderMathBlock(block.content);
+    case "header":
+      return renderHeader(block.content);
+    case "list":
+      return renderList(block.content);
+    case "blockquote":
+      return renderBlockquote(block.content);
+    case "table":
+      return renderTable(block.content);
+    case "hr":
+      return "<hr/>";
+    case "paragraph":
+      return renderParagraph(block.content);
+    default:
+      return `<p>${escapeHtml(block.raw)}</p>`;
+  }
+}
+
+/** Render fenced code block */
+function renderCodeBlock(code: string, raw: string): string {
+  // Extract language from raw if present
+  const langMatch = raw.match(/^```(\w*)/);
+  const lang = langMatch?.[1] || "";
+  const langClass = lang ? ` class="lang-${lang}"` : "";
+  return `<pre${langClass}><code>${escapeHtml(code.trim())}</code></pre>`;
+}
+
+/** Render display math block */
+function renderMathBlock(content: string): string {
+  // Remove $$ delimiters
+  let math = content.trim();
+  if (math.startsWith("$$")) math = math.slice(2);
+  if (math.endsWith("$$")) math = math.slice(0, -2);
+  math = math.trim();
+
+  const rendered = renderLatex(math, true);
+  return `<div class="math-display">${rendered}</div>`;
+}
+
+/** Render header */
+function renderHeader(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.startsWith("#### ")) {
+    return `<h5>${renderInline(trimmed.slice(5))}</h5>`;
+  }
+  if (trimmed.startsWith("### ")) {
+    return `<h4>${renderInline(trimmed.slice(4))}</h4>`;
+  }
+  if (trimmed.startsWith("## ")) {
+    return `<h3>${renderInline(trimmed.slice(3))}</h3>`;
+  }
+  if (trimmed.startsWith("# ")) {
+    return `<h2>${renderInline(trimmed.slice(2))}</h2>`;
+  }
+  return `<p>${renderInline(trimmed)}</p>`;
+}
+
+/** Render list (ordered or unordered) */
+function renderList(content: string): string {
+  const lines = content.split(/\r?\n/).filter((l) => l.trim());
+  const isOrdered = /^\d+\.\s+/.test(lines[0]?.trim() || "");
+  const tag = isOrdered ? "ol" : "ul";
+
+  const items = lines.map((line) => {
+    const text = line.trim().replace(/^(\d+\.)\s+|^[-*]\s+/, "");
+    return `<li>${renderInline(text)}</li>`;
+  });
+
+  return `<${tag}>${items.join("")}</${tag}>`;
+}
+
+/** Render blockquote */
+function renderBlockquote(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const innerLines = lines.map((l) => {
+    const trimmed = l.trim();
+    return trimmed.startsWith(">") ? trimmed.slice(1).trim() : trimmed;
+  });
+  return `<blockquote>${innerLines.map((l) => renderInline(l)).join("<br/>")}</blockquote>`;
+}
+
+/** Render table */
+function renderTable(content: string): string {
+  const lines = content.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) {
+    return `<p>${escapeHtml(content)}</p>`;
+  }
+
+  const readCells = (row: string) =>
+    row
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell, idx, arr) => {
+        const isEdge = (idx === 0 || idx === arr.length - 1) && cell === "";
+        return !isEdge;
+      });
+
+  const headerCells = readCells(lines[0]);
+  // Skip divider line (lines[1])
+  const bodyRows = lines.slice(2).map((line) => readCells(line));
+
+  const headerHtml = `<tr>${headerCells.map((c) => `<th>${renderInline(c)}</th>`).join("")}</tr>`;
+  const bodyHtml = bodyRows
+    .map(
+      (cells) =>
+        `<tr>${cells.map((c) => `<td>${renderInline(c)}</td>`).join("")}</tr>`,
+    )
+    .join("");
+
+  return `<table><thead>${headerHtml}</thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+/** Render paragraph */
+function renderParagraph(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const rendered = lines.map((l) => renderInline(l)).join("<br/>");
+  return `<p>${rendered}</p>`;
+}
+
+// =============================================================================
+// Inline Rendering (with delimiter validation)
+// =============================================================================
+
+/** Render inline elements within a line/block */
+function renderInline(text: string): string {
+  let result = text;
+
+  // Store protected content
+  const protectedBlocks: string[] = [];
+  const protect = (html: string): string => {
+    protectedBlocks.push(html);
+    return `@@PROTECTED${protectedBlocks.length - 1}@@`;
+  };
+
+  // 1. Normalize math delimiters \(...\) and \[...\] to $...$ and $$...$$
+  result = result.replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner) => `$${inner}$`);
+  result = result.replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner) => `$$${inner}$$`);
+
+  // 2. Inline math ($...$) - only if balanced
+  if (hasBalancedInlineDelimiter(result, "$")) {
+    // Display math first ($$...$$)
+    result = result.replace(/\$\$([^$]+?)\$\$/g, (_match, math) => {
+      const rendered = renderLatex(math.trim(), true);
+      return protect(`<span class="math-display-inline">${rendered}</span>`);
+    });
+
+    // Inline math ($...$)
+    result = result.replace(/\$([^$\n]+?)\$/g, (_match, inner) => {
+      const trimmed = inner.trim();
+      // Skip currency-like patterns
+      if (!trimmed || /^\d+([.,]\d+)?$/.test(trimmed)) {
+        return `$${inner}$`;
+      }
+      const rendered = renderLatex(trimmed, false);
+      return protect(`<span class="math-inline">${rendered}</span>`);
+    });
+  }
+
+  // 3. Inline code - only if balanced
+  if (hasBalancedInlineDelimiter(result, "`")) {
+    result = result.replace(/`([^`]+)`/g, (_match, code) => {
+      return protect(`<code>${escapeHtml(code)}</code>`);
+    });
+  }
+
+  // 4. HTML escape (after protecting code and math)
+  result = escapeHtml(result);
+
+  // 5. Bold+Italic (***...***)  - only if balanced
+  if (hasBalancedInlineDelimiter(result, "***")) {
+    result = result.replace(/\*\*\*(.+?)\*\*\*/g, (_m, inner) => {
+      return protect(`<strong><em>${inner}</em></strong>`);
+    });
+  }
+
+  // 6. Bold (**...**) - only if balanced
+  if (hasBalancedInlineDelimiter(result, "**")) {
+    result = result.replace(/\*\*(.+?)\*\*/g, (_m, inner) => {
+      return protect(`<strong>${inner}</strong>`);
+    });
+  }
+
+  // 7. Bold (__...__) - only if balanced
+  if (hasBalancedInlineDelimiter(result, "__")) {
+    result = result.replace(/__(.+?)__/g, (_m, inner) => {
+      return protect(`<strong>${inner}</strong>`);
+    });
+  }
+
+  // 8. Italic (*...* but not inside words)
+  // Only apply if there are potential matches (avoid false positives)
+  result = result.replace(
+    /(^|[\s(])\*([^\s*][^*]*?[^\s*])\*(?=[\s).,!?:;]|$)/g,
+    "$1<em>$2</em>",
+  );
+  result = result.replace(
+    /(^|[\s(])\*([^\s*])\*(?=[\s).,!?:;]|$)/g,
+    "$1<em>$2</em>",
+  );
+
+  // 9. Italic (_..._ but not inside words)
+  result = result.replace(
+    /(^|[\s(])_([^\s_][^_]*?[^\s_])_(?=[\s).,!?:;]|$)/g,
+    "$1<em>$2</em>",
+  );
+  result = result.replace(
+    /(^|[\s(])_([^\s_])_(?=[\s).,!?:;]|$)/g,
+    "$1<em>$2</em>",
+  );
+
+  // 10. Links [text](url)
+  result = result.replace(
+    /\[([^\]]+)\]\(([^)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener">$1</a>',
+  );
+
+  // 11. Restore protected blocks
+  result = result.replace(/@@PROTECTED(\d+)@@/g, (_match, idx) => {
+    return protectedBlocks[Number(idx)] || "";
+  });
+
+  return result;
 }
 
 // =============================================================================
@@ -64,222 +549,31 @@ function renderLatex(latex: string, displayMode: boolean): string {
 
 /**
  * Convert markdown text to HTML with LaTeX math support
+ *
+ * Features graceful degradation:
+ * - Each block is rendered independently
+ * - Failed blocks show as escaped text
+ * - Incomplete delimiters are left as raw text
  */
 export function renderMarkdown(text: string): string {
-  const codeBlocks: string[] = [];
-  const boldBlocks: string[] = [];
-  const mathBlocks: string[] = [];
-
-  // 1. Extract and protect code blocks first
-  let source = text.replace(
-    /```(\w*)\n?([\s\S]*?)```/g,
-    (_match, lang, code) => {
-      const langClass = lang ? ` class="lang-${lang}"` : "";
-      const escaped = escapeHtml(code.trim());
-      codeBlocks.push(`<pre${langClass}><code>${escaped}</code></pre>`);
-      return `@@BLOCK${codeBlocks.length - 1}@@`;
-    },
-  );
-
-  // 2. Extract and protect math expressions BEFORE any other processing
-  // This prevents markdown from corrupting LaTeX (e.g., _ for subscripts being treated as italics)
-
-  // First normalize \(...\) to $...$ and \[...\] to $$...$$
-  source = source.replace(/\\\(([\s\S]*?)\\\)/g, (_m, inner) => `$${inner}$`);
-  source = source.replace(/\\\[([\s\S]*?)\\\]/g, (_m, inner) => `$$${inner}$$`);
-
-  // Display math ($$...$$) - must come before inline math
-  source = source.replace(/\$\$([\s\S]*?)\$\$/g, (_match, math) => {
-    const cleanMath = math.trim();
-    // Render with KaTeX directly
-    const rendered = renderLatex(cleanMath, true);
-    mathBlocks.push(`<div class="math-display">${rendered}</div>`);
-    return `@@MATH${mathBlocks.length - 1}@@`;
-  });
-
-  // Inline math ($...$)
-  source = source.replace(/\$([^$\n]+?)\$/g, (_match, inner) => {
-    const trimmed = inner.trim();
-    // Skip if it looks like currency ($5, $100)
-    if (!trimmed || /^\d+([.,]\d+)?$/.test(trimmed)) {
-      return `$${inner}$`;
-    }
-    // Render with KaTeX directly
-    const rendered = renderLatex(trimmed, false);
-    mathBlocks.push(`<span class="math-inline">${rendered}</span>`);
-    return `@@MATH${mathBlocks.length - 1}@@`;
-  });
-
-  // 3. Now apply HTML escaping (math is already protected as placeholders)
-  source = escapeHtml(source);
-  source = source.replace(/(@@BLOCK\d+@@)/g, "\n$1\n");
-
-  // Inline code
-  source = source.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-  // Headers (h1-h3)
-  source = source.replace(/^### (.+)$/gm, "<h4>$1</h4>");
-  source = source.replace(/^## (.+)$/gm, "<h3>$1</h3>");
-  source = source.replace(/^# (.+)$/gm, "<h2>$1</h2>");
-
-  // Bold placeholders first to avoid overlapping tag mismatches
-  source = source.replace(/\*\*\*(.+?)\*\*\*/g, (_m, inner) => {
-    boldBlocks.push(`<strong><em>${inner}</em></strong>`);
-    return `@@BOLD${boldBlocks.length - 1}@@`;
-  });
-  source = source.replace(/\*\*(.+?)\*\*/g, (_m, inner) => {
-    boldBlocks.push(`<strong>${inner}</strong>`);
-    return `@@BOLD${boldBlocks.length - 1}@@`;
-  });
-  source = source.replace(/__(.+?)__/g, (_m, inner) => {
-    boldBlocks.push(`<strong>${inner}</strong>`);
-    return `@@BOLD${boldBlocks.length - 1}@@`;
-  });
-
-  // Italic (avoid underscores inside words)
-  source = source.replace(
-    /(^|[\s(])\*(.+?)\*(?=[\s).,!?:;]|$)/g,
-    "$1<em>$2</em>",
-  );
-  source = source.replace(
-    /(^|[\s(])_(.+?)_(?=[\s).,!?:;]|$)/g,
-    "$1<em>$2</em>",
-  );
-
-  // Links
-  source = source.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>',
-  );
-
-  const lines = source.split(/\r?\n/);
-  const blocks: string[] = [];
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (!trimmed) {
-      i++;
-      continue;
-    }
-
-    if (/^@@BLOCK\d+@@$/.test(trimmed)) {
-      blocks.push(trimmed);
-      i++;
-      continue;
-    }
-
-    if (/^---$/.test(trimmed)) {
-      blocks.push("<hr/>");
-      i++;
-      continue;
-    }
-
-    if (/^<h[234]>/.test(trimmed)) {
-      blocks.push(trimmed);
-      i++;
-      continue;
-    }
-
-    if (/^&gt; /.test(trimmed)) {
-      const quoteLines: string[] = [];
-      while (i < lines.length && lines[i].trim().startsWith("&gt; ")) {
-        quoteLines.push(lines[i].trim().slice(5));
-        i++;
-      }
-      blocks.push(`<blockquote>${quoteLines.join("<br/>")}</blockquote>`);
-      continue;
-    }
-
-    const isTableRow = (value: string) =>
-      value.includes("|") && !/^<h[234]>/.test(value.trim());
-    const isTableDivider = (value: string) =>
-      /^[\s|:-]+$/.test(value.trim()) && value.includes("-");
-
-    if (isTableRow(trimmed) && i + 1 < lines.length) {
-      const divider = lines[i + 1].trim();
-      if (isTableDivider(divider)) {
-        const readCells = (row: string) =>
-          row
-            .split("|")
-            .map((cell) => cell.trim())
-            .filter((cell, idx, arr) => {
-              const isEdge =
-                (idx === 0 || idx === arr.length - 1) && cell === "";
-              return !isEdge;
-            });
-
-        const headerCells = readCells(lines[i]);
-        const rows: string[] = [];
-        i += 2;
-        while (i < lines.length && lines[i].trim() && isTableRow(lines[i])) {
-          const cells = readCells(lines[i]);
-          rows.push(`<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`);
-          i++;
-        }
-
-        const headerHtml = `<tr>${headerCells
-          .map((c) => `<th>${c}</th>`)
-          .join("")}</tr>`;
-        const bodyHtml = rows.length ? `<tbody>${rows.join("")}</tbody>` : "";
-        blocks.push(`<table><thead>${headerHtml}</thead>${bodyHtml}</table>`);
-        continue;
-      }
-    }
-
-    if (/^(\d+\.)\s+/.test(trimmed) || /^[-*]\s+/.test(trimmed)) {
-      const isOrdered = /^(\d+\.)\s+/.test(trimmed);
-      const items: string[] = [];
-      while (
-        i < lines.length &&
-        (isOrdered
-          ? /^(\d+\.)\s+/.test(lines[i].trim())
-          : /^[-*]\s+/.test(lines[i].trim()))
-      ) {
-        const itemLine = lines[i].trim().replace(/^(\d+\.)\s+|^[-*]\s+/, "");
-        items.push(`<li>${itemLine}</li>`);
-        i++;
-      }
-      const tag = isOrdered ? "ol" : "ul";
-      blocks.push(`<${tag}>${items.join("")}</${tag}>`);
-      continue;
-    }
-
-    const paraLines: string[] = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() &&
-      !/^@@BLOCK\d+@@$/.test(lines[i].trim()) &&
-      !/^---$/.test(lines[i].trim()) &&
-      !/^<h[234]>/.test(lines[i].trim()) &&
-      !/^&gt; /.test(lines[i].trim()) &&
-      !/^(\d+\.)\s+/.test(lines[i].trim()) &&
-      !/^[-*]\s+/.test(lines[i].trim())
-    ) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    blocks.push(`<p>${paraLines.join("<br/>")}</p>`);
+  // Handle empty input
+  if (!text || !text.trim()) {
+    return "";
   }
 
-  let html = blocks.join("\n");
+  // Split into blocks
+  const blocks = splitIntoBlocks(text);
 
-  // Restore protected blocks in correct order
-  html = html.replace(/@@BLOCK(\d+)@@/g, (_match, idx) => {
-    const i = Number(idx);
-    return codeBlocks[i] || "";
-  });
-  html = html.replace(/@@BOLD(\d+)@@/g, (_match, idx) => {
-    const i = Number(idx);
-    return boldBlocks[i] || "";
-  });
-  // Restore math blocks last (they were extracted first, so restore last)
-  html = html.replace(/@@MATH(\d+)@@/g, (_match, idx) => {
-    const i = Number(idx);
-    return mathBlocks[i] || "";
+  // Render each block independently (errors isolated)
+  const renderedBlocks = blocks.map((block) => {
+    try {
+      return renderBlock(block);
+    } catch (err) {
+      // Graceful fallback: show raw text
+      console.warn("Markdown block render error:", err);
+      return `<div class="render-fallback">${escapeHtml(block.raw)}</div>`;
+    }
   });
 
-  return html;
+  return renderedBlocks.join("\n");
 }

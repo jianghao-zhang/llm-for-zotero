@@ -453,6 +453,24 @@
   border-radius: 3px;
 }
 
+/* Fallback for blocks that failed to render */
+.llm-bubble.assistant .render-fallback {
+  font-family: ui-monospace, "SF Mono", Monaco, "Cascadia Code", monospace;
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 8px 12px;
+  border-radius: 6px;
+  border-left: 3px solid rgba(0, 0, 0, 0.2);
+}
+
+/* Inline display math (within paragraphs) */
+.llm-bubble.assistant .math-display-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
 .llm-bubble.assistant table {
   width: 100%;
   border-collapse: collapse;

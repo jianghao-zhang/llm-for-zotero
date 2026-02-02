@@ -482,8 +482,7 @@ function scoreChunkBM25(
     const df = docFreq[term] || 0;
     const idf = Math.log(1 + (totalChunks - df + 0.5) / (df + 0.5));
     const norm =
-      tf *
-      (k1 + 1) /
+      (tf * (k1 + 1)) /
       (tf + k1 * (1 - b + (b * chunk.length) / avgChunkLength));
     score += idf * norm;
   }
@@ -590,13 +589,7 @@ async function buildContext(
 
   const terms = tokenizeQuery(question);
   const bm25Scores = chunkStats.map((chunk) =>
-    scoreChunkBM25(
-      chunk,
-      terms,
-      docFreq,
-      chunks.length,
-      avgChunkLength || 1,
-    ),
+    scoreChunkBM25(chunk, terms, docFreq, chunks.length, avgChunkLength || 1),
   );
 
   let embeddingScores: number[] | null = null;
@@ -615,9 +608,7 @@ async function buildContext(
   }
 
   const bm25Norm = normalizeScores(bm25Scores);
-  const embedNorm = embeddingScores
-    ? normalizeScores(embeddingScores)
-    : null;
+  const embedNorm = embeddingScores ? normalizeScores(embeddingScores) : null;
 
   const bm25Weight = embedNorm ? HYBRID_WEIGHT_BM25 : 1;
   const embedWeight = embedNorm ? HYBRID_WEIGHT_EMBEDDING : 0;
@@ -625,7 +616,9 @@ async function buildContext(
   const scored = chunkStats.map((chunk, idx) => ({
     index: chunk.index,
     chunk: chunks[chunk.index],
-    score: bm25Norm[idx] * bm25Weight + (embedNorm ? embedNorm[idx] * embedWeight : 0),
+    score:
+      bm25Norm[idx] * bm25Weight +
+      (embedNorm ? embedNorm[idx] * embedWeight : 0),
   }));
 
   scored.sort((a, b) => b.score - a.score);
