@@ -33,7 +33,7 @@ export type ChatMessage = {
   content: MessageContent;
 };
 
-export type ReasoningProvider = "openai" | "gemini" | "deepseek";
+export type ReasoningProvider = "openai" | "gemini" | "deepseek" | "kimi";
 export type ReasoningLevel = "default" | "medium" | "high" | "xhigh";
 export type ReasoningConfig = {
   provider: ReasoningProvider;
@@ -106,7 +106,7 @@ const RESPONSES_ENDPOINT = "/v1/responses";
 const EMBEDDINGS_ENDPOINT = "/v1/embeddings";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
-const DEFAULT_TEMPERATURE = 1.0;
+const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 2048;
 
 // =============================================================================
@@ -404,7 +404,144 @@ function buildReasoningPayload(
     };
   }
 
+  if (reasoning.provider === "kimi") {
+    // Kimi reasoning models generally expose reasoning by model choice;
+    // keep payload conservative to avoid provider-specific parameter errors.
+    return {
+      extra: {},
+      omitTemperature: false,
+    };
+  }
+
   return { extra: {}, omitTemperature: false };
+}
+
+function stripTemperature(payload: Record<string, unknown>) {
+  if (!Object.prototype.hasOwnProperty.call(payload, "temperature")) {
+    return payload;
+  }
+  const clone = { ...payload };
+  delete clone.temperature;
+  return clone;
+}
+
+type TemperaturePolicy =
+  | { mode: "default" }
+  | { mode: "omit" }
+  | { mode: "fixed"; value: number };
+
+const temperaturePolicyCache = new Map<string, TemperaturePolicy>();
+
+function getTemperaturePolicyKey(url: string, payload: Record<string, unknown>) {
+  const model =
+    typeof payload.model === "string" ? payload.model.trim().toLowerCase() : "";
+  return `${url}::${model}`;
+}
+
+function applyTemperaturePolicy(
+  payload: Record<string, unknown>,
+  policy: TemperaturePolicy,
+) {
+  if (policy.mode === "omit") {
+    return stripTemperature(payload);
+  }
+  if (policy.mode === "fixed") {
+    return {
+      ...payload,
+      temperature: policy.value,
+    };
+  }
+  return payload;
+}
+
+function extractFixedTemperature(message: string): number | null {
+  const text = message.toLowerCase();
+  const patterns = [
+    /only\s+(-?\d+(?:\.\d+)?)\s+is\s+allowed/,
+    /temperature[^.\n]*must\s+be\s+(-?\d+(?:\.\d+)?)/,
+    /temperature[^.\n]*should\s+be\s+(-?\d+(?:\.\d+)?)/,
+    /allowed\s+temperature[^.\n]*:\s*(-?\d+(?:\.\d+)?)/,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const value = Number.parseFloat(match[1]);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function getTemperatureRecoveryPolicy(
+  status: number,
+  message: string,
+): TemperaturePolicy | null {
+  if (status !== 400 && status !== 422) return null;
+  const text = message.toLowerCase();
+  if (!text.includes("temperature")) return null;
+
+  const fixedValue = extractFixedTemperature(text);
+  if (fixedValue !== null) {
+    return { mode: "fixed", value: fixedValue };
+  }
+
+  if (
+    text.includes("not supported") ||
+    text.includes("unsupported") ||
+    text.includes("not allowed") ||
+    text.includes("unknown parameter") ||
+    text.includes("invalid parameter") ||
+    text.includes("invalid temperature")
+  ) {
+    return { mode: "omit" };
+  }
+
+  return null;
+}
+
+async function postWithTemperatureFallback(params: {
+  url: string;
+  apiKey: string;
+  payload: Record<string, unknown>;
+  signal?: AbortSignal;
+}) {
+  const policyKey = getTemperaturePolicyKey(params.url, params.payload);
+  const hasTemperature = Object.prototype.hasOwnProperty.call(
+    params.payload,
+    "temperature",
+  );
+  const send = (bodyPayload: Record<string, unknown>) =>
+    getFetch()(params.url, {
+      method: "POST",
+      headers: buildHeaders(params.apiKey),
+      body: JSON.stringify(bodyPayload),
+      signal: params.signal,
+    });
+
+  let requestPayload = params.payload;
+  const cachedPolicy = temperaturePolicyCache.get(policyKey);
+  if (hasTemperature && cachedPolicy) {
+    requestPayload = applyTemperaturePolicy(params.payload, cachedPolicy);
+  }
+
+  let res = await send(requestPayload);
+  if (res.ok) return res;
+
+  const firstErr = await res.text();
+  const recoveryPolicy = hasTemperature
+    ? getTemperatureRecoveryPolicy(res.status, firstErr)
+    : null;
+  if (recoveryPolicy) {
+    const fallbackPayload = applyTemperaturePolicy(params.payload, recoveryPolicy);
+    res = await send(fallbackPayload);
+    if (res.ok) {
+      temperaturePolicyCache.set(policyKey, recoveryPolicy);
+      return res;
+    }
+    const secondErr = await res.text();
+    throw new Error(`${res.status} ${res.statusText} - ${secondErr}`);
+  }
+
+  throw new Error(`${res.status} ${res.statusText} - ${firstErr}`);
 }
 
 function extractResponsesOutputText(data: {
@@ -442,7 +579,7 @@ export async function callLLM(params: ChatParams): Promise<string> {
     ? {}
     : { temperature: DEFAULT_TEMPERATURE };
 
-  const payload = useResponses
+  const payload = (useResponses
     ? {
         model,
         ...buildResponsesInput(messages),
@@ -456,23 +593,18 @@ export async function callLLM(params: ChatParams): Promise<string> {
         ...reasoningPayload.extra,
         ...temperatureParam,
         ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
-      };
+      }) as Record<string, unknown>;
 
   const url = resolveEndpoint(
     apiBase,
     useResponses ? RESPONSES_ENDPOINT : API_ENDPOINT,
   );
-  const res = await getFetch()(url, {
-    method: "POST",
-    headers: buildHeaders(apiKey),
-    body: JSON.stringify(payload),
+  const res = await postWithTemperatureFallback({
+    url,
+    apiKey,
+    payload,
     signal: params.signal,
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText} - ${text}`);
-  }
 
   const data = (await res.json()) as CompletionResponse & {
     output_text?: string;
@@ -508,7 +640,7 @@ export async function callLLMStream(
     ? {}
     : { temperature: DEFAULT_TEMPERATURE };
 
-  const payload = useResponses
+  const payload = (useResponses
     ? {
         model,
         ...buildResponsesInput(messages),
@@ -524,23 +656,18 @@ export async function callLLMStream(
         ...temperatureParam,
         ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
         stream: true,
-      };
+      }) as Record<string, unknown>;
 
   const url = resolveEndpoint(
     apiBase,
     useResponses ? RESPONSES_ENDPOINT : API_ENDPOINT,
   );
-  const res = await getFetch()(url, {
-    method: "POST",
-    headers: buildHeaders(apiKey),
-    body: JSON.stringify(payload),
+  const res = await postWithTemperatureFallback({
+    url,
+    apiKey,
+    payload,
     signal: params.signal,
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status} ${res.statusText} - ${text}`);
-  }
 
   // Fallback to non-streaming if body is not available
   if (!res.body) {

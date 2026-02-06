@@ -50,7 +50,12 @@ interface Message {
   reasoningOpen?: boolean;
 }
 
-type ReasoningProviderKind = "openai" | "gemini" | "deepseek" | "unsupported";
+type ReasoningProviderKind =
+  | "openai"
+  | "gemini"
+  | "deepseek"
+  | "kimi"
+  | "unsupported";
 type ReasoningLevelSelection = "none" | LLMReasoningLevel;
 
 // =============================================================================
@@ -179,6 +184,13 @@ function detectReasoningProvider(modelName: string): ReasoningProviderKind {
   const name = modelName.trim().toLowerCase();
   if (!name) return "unsupported";
   if (name.includes("deepseek-reasoner")) return "deepseek";
+  if (
+    name === "kimi-k2.5" ||
+    name === "kimi-k2-thinking" ||
+    name === "kimi-k2-thinking-turbo"
+  ) {
+    return "kimi";
+  }
   if (name.includes("gemini")) return "gemini";
   if (/^gpt-5(\b|[.-])/.test(name)) return "openai";
   return "unsupported";
@@ -194,6 +206,9 @@ function getReasoningOptions(
     return ["default", "medium", "high"];
   }
   if (provider === "deepseek") {
+    return ["default"];
+  }
+  if (provider === "kimi") {
     return ["default"];
   }
   return [];
@@ -1870,6 +1885,52 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     });
   }
 
+  const positionFloatingMenu = (
+    menu: HTMLDivElement,
+    anchor: HTMLButtonElement,
+  ) => {
+    const win = body.ownerDocument?.defaultView;
+    if (!win) return;
+
+    const viewportMargin = 8;
+    const gap = 6;
+
+    menu.style.position = "fixed";
+    menu.style.display = "grid";
+    menu.style.visibility = "hidden";
+    menu.style.maxHeight = `${Math.max(120, win.innerHeight - viewportMargin * 2)}px`;
+    menu.style.overflowY = "auto";
+
+    const anchorRect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+
+    let left = anchorRect.left;
+    const maxLeft = Math.max(
+      viewportMargin,
+      win.innerWidth - menuRect.width - viewportMargin,
+    );
+    left = Math.min(Math.max(viewportMargin, left), maxLeft);
+
+    const belowTop = anchorRect.bottom + gap;
+    const aboveTop = anchorRect.top - gap - menuRect.height;
+    let top = belowTop;
+
+    if (belowTop + menuRect.height > win.innerHeight - viewportMargin) {
+      if (aboveTop >= viewportMargin) {
+        top = aboveTop;
+      } else {
+        top = Math.max(
+          viewportMargin,
+          win.innerHeight - menuRect.height - viewportMargin,
+        );
+      }
+    }
+
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.visibility = "visible";
+  };
+
   const openModelMenu = () => {
     if (!modelMenu || !modelBtn) return;
     closeReasoningMenu();
@@ -1879,11 +1940,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       closeModelMenu();
       return;
     }
-    const rect = modelBtn.getBoundingClientRect();
-    modelMenu.style.position = "fixed";
-    modelMenu.style.top = `${rect.bottom + 6}px`;
-    modelMenu.style.left = `${rect.left}px`;
-    modelMenu.style.display = "grid";
+    positionFloatingMenu(modelMenu, modelBtn);
     modelMenu.classList.add("llm-model-menu-open");
   };
 
@@ -1902,11 +1959,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       closeReasoningMenu();
       return;
     }
-    const rect = reasoningBtn.getBoundingClientRect();
-    reasoningMenu.style.position = "fixed";
-    reasoningMenu.style.top = `${rect.bottom + 6}px`;
-    reasoningMenu.style.left = `${rect.left}px`;
-    reasoningMenu.style.display = "grid";
+    positionFloatingMenu(reasoningMenu, reasoningBtn);
     reasoningMenu.classList.add("llm-reasoning-menu-open");
   };
 
@@ -2286,7 +2339,12 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
           label.textContent = "Summary";
           const text = doc.createElement("div") as HTMLDivElement;
           text.className = "llm-reasoning-text";
-          text.textContent = msg.reasoningSummary || "";
+          try {
+            text.innerHTML = renderMarkdown(msg.reasoningSummary || "");
+          } catch (err) {
+            ztoolkit.log("LLM reasoning render error:", err);
+            text.textContent = msg.reasoningSummary || "";
+          }
           summaryBlock.append(label, text);
           bodyWrap.appendChild(summaryBlock);
         }
@@ -2299,7 +2357,12 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
           label.textContent = "Details";
           const text = doc.createElement("div") as HTMLDivElement;
           text.className = "llm-reasoning-text";
-          text.textContent = msg.reasoningDetails || "";
+          try {
+            text.innerHTML = renderMarkdown(msg.reasoningDetails || "");
+          } catch (err) {
+            ztoolkit.log("LLM reasoning render error:", err);
+            text.textContent = msg.reasoningDetails || "";
+          }
           detailsBlock.append(label, text);
           bodyWrap.appendChild(detailsBlock);
         }

@@ -804,6 +804,8 @@
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
   min-width: 120px;
   max-width: 220px;
+  max-height: 60vh;
+  overflow-y: auto;
   z-index: 10000;
   opacity: 0;
   transform: translateY(-4px) scale(0.98);
