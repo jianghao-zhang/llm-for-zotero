@@ -183,7 +183,9 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
 function detectReasoningProvider(modelName: string): ReasoningProviderKind {
   const name = modelName.trim().toLowerCase();
   if (!name) return "unsupported";
-  if (name.includes("deepseek-reasoner")) return "deepseek";
+  if (name.startsWith("deepseek")) {
+    return "deepseek";
+  }
   if (
     name === "kimi-k2.5" ||
     name === "kimi-k2-thinking" ||
@@ -1681,10 +1683,14 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const provider = detectReasoningProvider(currentModel);
     const options = getReasoningOptions(provider);
     let selectedLevel = selectedReasoningCache.get(item.id) || "none";
-    if (
-      selectedLevel !== "none" &&
-      !options.includes(selectedLevel as LLMReasoningLevel)
-    ) {
+    if (options.length > 0) {
+      if (
+        selectedLevel === "none" ||
+        !options.includes(selectedLevel as LLMReasoningLevel)
+      ) {
+        selectedLevel = "default";
+      }
+    } else {
       selectedLevel = "none";
     }
     selectedReasoningCache.set(item.id, selectedLevel);

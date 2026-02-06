@@ -141,6 +141,50 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           throw new Error("API URL is required");
         }
 
+        const resolveEndpoint = (baseOrUrl: string, path: string) => {
+          const cleaned = baseOrUrl.trim().replace(/\/$/, "");
+          if (!cleaned) return "";
+          const chatSuffix = "/chat/completions";
+          const responsesSuffix = "/responses";
+          const embeddingSuffix = "/embeddings";
+          const hasChat = cleaned.endsWith(chatSuffix);
+          const hasResponses = cleaned.endsWith(responsesSuffix);
+          const hasEmbeddings = cleaned.endsWith(embeddingSuffix);
+
+          if (hasChat) {
+            if (path === "/v1/embeddings") {
+              return cleaned.replace(/\/chat\/completions$/, embeddingSuffix);
+            }
+            if (path === "/v1/responses") {
+              return cleaned.replace(/\/chat\/completions$/, responsesSuffix);
+            }
+            return cleaned;
+          }
+
+          if (hasResponses) {
+            if (path === "/v1/embeddings") {
+              return cleaned.replace(/\/responses$/, embeddingSuffix);
+            }
+            if (path === "/v1/chat/completions") {
+              return cleaned.replace(/\/responses$/, chatSuffix);
+            }
+            return cleaned;
+          }
+
+          if (hasEmbeddings) {
+            return path === "/v1/chat/completions"
+              ? cleaned.replace(/\/embeddings$/, chatSuffix)
+              : cleaned;
+          }
+
+          const hasVersion = /\/v\d+(?:beta)?\b/.test(cleaned);
+          const normalizedPath =
+            hasVersion && path.startsWith("/v1/")
+              ? path.replace(/^\/v1\//, "/")
+              : path;
+          return `${cleaned}${normalizedPath}`;
+        };
+
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
@@ -159,6 +203,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
         const isResponsesBase = apiBase.endsWith("/v1/responses") ||
           apiBase.endsWith("/responses");
+        const testUrl = resolveEndpoint(
+          apiBase,
+          isResponsesBase ? "/v1/responses" : "/v1/chat/completions",
+        );
 
         const tokenParam = isResponsesBase
           ? { max_output_tokens: 16 }
@@ -179,7 +227,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
             };
 
         const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
-        const response = await fetchFn(apiBase, {
+        const response = await fetchFn(testUrl, {
           method: "POST",
           headers,
           body: JSON.stringify(testPayload),
