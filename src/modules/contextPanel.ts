@@ -4,7 +4,9 @@ import {
   callEmbeddings,
   callLLMStream,
   ChatMessage,
+  ReasoningConfig as LLMReasoningConfig,
   ReasoningEvent,
+  ReasoningLevel as LLMReasoningLevel,
 } from "../utils/llmClient";
 import { config } from "../../package.json";
 
@@ -48,12 +50,16 @@ interface Message {
   reasoningOpen?: boolean;
 }
 
+type ReasoningProviderKind = "openai" | "gemini" | "deepseek" | "unsupported";
+type ReasoningLevelSelection = "none" | LLMReasoningLevel;
+
 // =============================================================================
 // State
 // =============================================================================
 
 const chatHistory = new Map<number, Message[]>();
 const selectedModelCache = new Map<number, "primary" | "secondary">();
+const selectedReasoningCache = new Map<number, ReasoningLevelSelection>();
 type PdfContext = {
   title: string;
   chunks: string[];
@@ -167,6 +173,30 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
   return `${base || ""}${chunk}`;
+}
+
+function detectReasoningProvider(modelName: string): ReasoningProviderKind {
+  const name = modelName.trim().toLowerCase();
+  if (!name) return "unsupported";
+  if (name.includes("deepseek-reasoner")) return "deepseek";
+  if (name.includes("gemini")) return "gemini";
+  if (/^gpt-5(\b|[.-])/.test(name)) return "openai";
+  return "unsupported";
+}
+
+function getReasoningOptions(
+  provider: ReasoningProviderKind,
+): LLMReasoningLevel[] {
+  if (provider === "openai") {
+    return ["default", "medium", "high", "xhigh"];
+  }
+  if (provider === "gemini") {
+    return ["default", "medium", "high"];
+  }
+  if (provider === "deepseek") {
+    return ["default"];
+  }
+  return [];
 }
 
 async function optimizeImageDataUrl(
@@ -711,6 +741,20 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   modelMenu.style.display = "none";
   modelDropdown.append(modelBtn, modelMenu);
 
+  const reasoningDropdown = createElement(doc, "div", "llm-reasoning-dropdown", {
+    id: "llm-reasoning-dropdown",
+  });
+  const reasoningBtn = createElement(doc, "button", "llm-reasoning-btn", {
+    id: "llm-reasoning-toggle",
+    textContent: "Reasoning",
+    disabled: !hasItem,
+  });
+  const reasoningMenu = createElement(doc, "div", "llm-reasoning-menu", {
+    id: "llm-reasoning-menu",
+  });
+  reasoningMenu.style.display = "none";
+  reasoningDropdown.append(reasoningBtn, reasoningMenu);
+
   const sendBtn = createElement(doc, "button", "llm-send-btn", {
     id: "llm-send",
     textContent: "Send",
@@ -735,6 +779,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   actionsRow.append(
     screenshotBtn,
     modelDropdown,
+    reasoningDropdown,
     sendBtn,
     cancelBtn,
     statusLine,
@@ -1479,6 +1524,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const modelMenu = body.querySelector(
     "#llm-model-menu",
   ) as HTMLDivElement | null;
+  const reasoningBtn = body.querySelector(
+    "#llm-reasoning-toggle",
+  ) as HTMLButtonElement | null;
+  const reasoningMenu = body.querySelector(
+    "#llm-reasoning-menu",
+  ) as HTMLDivElement | null;
   const clearBtn = body.querySelector("#llm-clear") as HTMLButtonElement | null;
   const screenshotBtn = body.querySelector(
     "#llm-screenshot",
@@ -1533,18 +1584,34 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     return { primary, secondary, choices };
   };
 
-  const updateModelButton = () => {
-    if (!item || !modelBtn) return;
+  const getSelectedModelInfo = () => {
     const { choices } = getModelChoices();
-    const hasSecondary = choices.length > 1;
+    if (!item) {
+      return {
+        selected: "primary" as const,
+        choices,
+        currentModel: choices[0]?.model || "default",
+      };
+    }
     let selected = selectedModelCache.get(item.id) || "primary";
     if (!choices.some((entry) => entry.key === selected)) {
       selected = "primary";
       selectedModelCache.set(item.id, selected);
     }
-    const name =
-      choices.find((entry) => entry.key === selected)?.model || choices[0].model;
-    modelBtn.textContent = `${name || "default"}`;
+    const current =
+      choices.find((entry) => entry.key === selected) || choices[0];
+    return {
+      selected,
+      choices,
+      currentModel: current?.model || "default",
+    };
+  };
+
+  const updateModelButton = () => {
+    if (!item || !modelBtn) return;
+    const { choices, currentModel } = getSelectedModelInfo();
+    const hasSecondary = choices.length > 1;
+    modelBtn.textContent = `${currentModel || "default"}`;
     modelBtn.disabled = !item;
     modelBtn.title = hasSecondary
       ? "Click to choose a model"
@@ -1573,17 +1640,114 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
         e.stopPropagation();
         if (!item) return;
         selectedModelCache.set(item.id, entry.key);
+        modelMenu.classList.remove("llm-model-menu-open");
         modelMenu.style.display = "none";
+        if (reasoningMenu) {
+          reasoningMenu.classList.remove("llm-reasoning-menu-open");
+          reasoningMenu.style.display = "none";
+        }
+        selectedReasoningCache.set(item.id, "none");
         updateModelButton();
+        updateReasoningButton();
       });
       modelMenu.appendChild(option);
     }
   };
 
+  const getReasoningState = () => {
+    if (!item) {
+      return {
+        provider: "unsupported" as const,
+        options: [] as LLMReasoningLevel[],
+        selectedLevel: "none" as ReasoningLevelSelection,
+      };
+    }
+    const { currentModel } = getSelectedModelInfo();
+    const provider = detectReasoningProvider(currentModel);
+    const options = getReasoningOptions(provider);
+    let selectedLevel = selectedReasoningCache.get(item.id) || "none";
+    if (
+      selectedLevel !== "none" &&
+      !options.includes(selectedLevel as LLMReasoningLevel)
+    ) {
+      selectedLevel = "none";
+    }
+    selectedReasoningCache.set(item.id, selectedLevel);
+    return { provider, options, selectedLevel };
+  };
+
+  const updateReasoningButton = () => {
+    if (!item || !reasoningBtn) return;
+    const { options, selectedLevel } = getReasoningState();
+    const available = options.length > 0;
+    const active = available && selectedLevel !== "none";
+    reasoningBtn.textContent = active
+      ? `Level: ${selectedLevel}`
+      : "Reasoning";
+    reasoningBtn.disabled = !item || !available;
+    reasoningBtn.classList.toggle(
+      "llm-reasoning-btn-unavailable",
+      !available,
+    );
+    reasoningBtn.classList.toggle(
+      "llm-reasoning-btn-active",
+      active,
+    );
+    // Inline style ensures visible state change even if theme/CSS caching overrides classes.
+    if (active) {
+      reasoningBtn.style.background = "#2563eb";
+      reasoningBtn.style.borderColor = "#2563eb";
+      reasoningBtn.style.color = "#fff";
+    } else if (!available) {
+      reasoningBtn.style.background = "var(--fill-quaternary)";
+      reasoningBtn.style.borderColor = "var(--stroke-secondary)";
+      reasoningBtn.style.color = "var(--fill-tertiary)";
+    } else {
+      reasoningBtn.style.background = "";
+      reasoningBtn.style.borderColor = "";
+      reasoningBtn.style.color = "";
+    }
+    reasoningBtn.title = available
+      ? "Click to choose reasoning level"
+      : "Reasoning unavailable for current model";
+  };
+
+  const rebuildReasoningMenu = () => {
+    if (!item || !reasoningMenu) return;
+    const { options, selectedLevel } = getReasoningState();
+    reasoningMenu.innerHTML = "";
+    for (const level of options) {
+      const option = createElement(
+        body.ownerDocument as Document,
+        "button",
+        "llm-reasoning-option",
+        {
+          type: "button",
+          textContent:
+            selectedLevel === level ? `\u2713 ${level}` : level,
+        },
+      );
+      option.addEventListener("click", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!item) return;
+        selectedReasoningCache.set(item.id, level);
+        reasoningMenu.classList.remove("llm-reasoning-menu-open");
+        reasoningMenu.style.display = "none";
+        updateReasoningButton();
+      });
+      reasoningMenu.appendChild(option);
+    }
+  };
+
   const syncModelFromPrefs = () => {
     updateModelButton();
+    updateReasoningButton();
     if (modelMenu && modelMenu.style.display !== "none") {
       rebuildModelMenu();
+    }
+    if (reasoningMenu && reasoningMenu.style.display !== "none") {
+      rebuildReasoningMenu();
     }
   };
 
@@ -1599,11 +1763,19 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const getSelectedProfile = () => {
     if (!item) return null;
     const { primary, secondary } = getApiProfiles();
-    const selected = selectedModelCache.get(item.id) || "primary";
+    const { selected } = getSelectedModelInfo();
     if (selected === "secondary" && secondary.model) {
       return { key: "secondary" as const, ...secondary };
     }
     return { key: "primary" as const, ...primary };
+  };
+
+  const getSelectedReasoning = (): LLMReasoningConfig | undefined => {
+    if (!item) return undefined;
+    const { provider, options, selectedLevel } = getReasoningState();
+    if (provider === "unsupported" || selectedLevel === "none") return undefined;
+    if (!options.includes(selectedLevel as LLMReasoningLevel)) return undefined;
+    return { provider, level: selectedLevel as LLMReasoningLevel };
   };
 
   const doSend = async () => {
@@ -1616,6 +1788,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedImageCache.delete(item.id);
     updateImagePreview();
     const selectedProfile = getSelectedProfile();
+    const selectedReasoning = getSelectedReasoning();
     await sendQuestion(
       body,
       item,
@@ -1624,6 +1797,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       selectedProfile?.model,
       selectedProfile?.apiBase,
       selectedProfile?.apiKey,
+      selectedReasoning,
     );
   };
 
@@ -1698,6 +1872,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   const openModelMenu = () => {
     if (!modelMenu || !modelBtn) return;
+    closeReasoningMenu();
     updateModelButton();
     rebuildModelMenu();
     if (!modelMenu.childElementCount) {
@@ -1718,6 +1893,29 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     modelMenu.style.display = "none";
   };
 
+  const openReasoningMenu = () => {
+    if (!reasoningMenu || !reasoningBtn) return;
+    closeModelMenu();
+    updateReasoningButton();
+    rebuildReasoningMenu();
+    if (!reasoningMenu.childElementCount) {
+      closeReasoningMenu();
+      return;
+    }
+    const rect = reasoningBtn.getBoundingClientRect();
+    reasoningMenu.style.position = "fixed";
+    reasoningMenu.style.top = `${rect.bottom + 6}px`;
+    reasoningMenu.style.left = `${rect.left}px`;
+    reasoningMenu.style.display = "grid";
+    reasoningMenu.classList.add("llm-reasoning-menu-open");
+  };
+
+  const closeReasoningMenu = () => {
+    if (!reasoningMenu) return;
+    reasoningMenu.classList.remove("llm-reasoning-menu-open");
+    reasoningMenu.style.display = "none";
+  };
+
   if (modelBtn) {
     modelBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
@@ -1731,6 +1929,19 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     });
   }
 
+  if (reasoningBtn) {
+    reasoningBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item || !reasoningMenu || reasoningBtn.disabled) return;
+      if (reasoningMenu.style.display === "none") {
+        openReasoningMenu();
+      } else {
+        closeReasoningMenu();
+      }
+    });
+  }
+
   const doc = body.ownerDocument;
   if (
     doc &&
@@ -1738,16 +1949,38 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       .__llmModelMenuDismiss
   ) {
     doc.addEventListener("click", (e: Event) => {
-      const menu = doc.querySelector(
+      const modelMenuEl = doc.querySelector(
         "#llm-model-menu",
       ) as HTMLDivElement | null;
-      const button = doc.querySelector(
+      const modelButtonEl = doc.querySelector(
         "#llm-model-toggle",
       ) as HTMLButtonElement | null;
-      if (!menu || menu.style.display === "none") return;
+      const reasoningMenuEl = doc.querySelector(
+        "#llm-reasoning-menu",
+      ) as HTMLDivElement | null;
+      const reasoningButtonEl = doc.querySelector(
+        "#llm-reasoning-toggle",
+      ) as HTMLButtonElement | null;
       const target = e.target as Node | null;
-      if (target && (menu.contains(target) || button?.contains(target))) return;
-      closeModelMenu();
+      if (
+        modelMenuEl &&
+        modelMenuEl.style.display !== "none" &&
+        (!target ||
+          (!modelMenuEl.contains(target) && !modelButtonEl?.contains(target)))
+      ) {
+        modelMenuEl.classList.remove("llm-model-menu-open");
+        modelMenuEl.style.display = "none";
+      }
+      if (
+        reasoningMenuEl &&
+        reasoningMenuEl.style.display !== "none" &&
+        (!target ||
+          (!reasoningMenuEl.contains(target) &&
+            !reasoningButtonEl?.contains(target)))
+      ) {
+        reasoningMenuEl.classList.remove("llm-reasoning-menu-open");
+        reasoningMenuEl.style.display = "none";
+      }
     });
     (doc as unknown as { __llmModelMenuDismiss?: boolean }).__llmModelMenuDismiss =
       true;
@@ -1812,6 +2045,7 @@ async function sendQuestion(
   model?: string,
   apiBase?: string,
   apiKey?: string,
+  reasoning?: LLMReasoningConfig,
 ) {
   const inputBox = body.querySelector(
     "#llm-input",
@@ -1891,12 +2125,16 @@ async function sendQuestion(
         model: model,
         apiBase: apiBase,
         apiKey: apiKey,
+        reasoning,
       },
       (delta) => {
         assistantMessage.text += sanitizeText(delta);
         queueRefresh();
       },
       (reasoning: ReasoningEvent) => {
+        if (typeof assistantMessage.reasoningOpen !== "boolean") {
+          assistantMessage.reasoningOpen = true;
+        }
         if (reasoning.summary) {
           assistantMessage.reasoningSummary = appendReasoningPart(
             assistantMessage.reasoningSummary,
@@ -1974,7 +2212,7 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
     chatBox.innerHTML = `
       <div class="llm-welcome">
         <div class="llm-welcome-icon">💬</div>
-        <div class="llm-welcome-text">Start a conversation by asking a question or using one of the quick actions above.</div>
+        <div class="llm-welcome-text">Start a conversation by asking a question or using one of the quick actions below.</div>
       </div>
     `;
     return;

@@ -33,6 +33,13 @@ export type ChatMessage = {
   content: MessageContent;
 };
 
+export type ReasoningProvider = "openai" | "gemini" | "deepseek";
+export type ReasoningLevel = "default" | "medium" | "high" | "xhigh";
+export type ReasoningConfig = {
+  provider: ReasoningProvider;
+  level: ReasoningLevel;
+};
+
 export type ChatParams = {
   prompt: string;
   context?: string;
@@ -46,6 +53,8 @@ export type ChatParams = {
   apiBase?: string;
   /** Override API key for this request */
   apiKey?: string;
+  /** Optional reasoning control from UI */
+  reasoning?: ReasoningConfig;
 };
 
 export type ReasoningEvent = {
@@ -97,7 +106,7 @@ const RESPONSES_ENDPOINT = "/v1/responses";
 const EMBEDDINGS_ENDPOINT = "/v1/embeddings";
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
-const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_TEMPERATURE = 1.0;
 const DEFAULT_MAX_TOKENS = 2048;
 
 // =============================================================================
@@ -332,6 +341,72 @@ function buildResponsesInput(messages: ChatMessage[]) {
   };
 }
 
+function buildReasoningPayload(
+  reasoning: ReasoningConfig | undefined,
+  useResponses: boolean,
+): { extra: Record<string, unknown>; omitTemperature: boolean } {
+  if (!reasoning) {
+    return { extra: {}, omitTemperature: false };
+  }
+
+  if (reasoning.provider === "openai") {
+    const effort = reasoning.level === "default" ? "medium" : reasoning.level;
+    if (useResponses) {
+      return {
+        extra: {
+          reasoning: {
+            effort,
+            summary: "detailed",
+          },
+        },
+        // GPT-5 reasoning modes may reject temperature when effort is enabled.
+        omitTemperature: true,
+      };
+    }
+    return {
+      extra: {
+        reasoning_effort: effort,
+      },
+      omitTemperature: true,
+    };
+  }
+
+  if (reasoning.provider === "gemini") {
+    const effort =
+      reasoning.level === "default"
+        ? "medium"
+        : reasoning.level === "xhigh"
+          ? "high"
+          : reasoning.level;
+    return {
+      extra: {
+        reasoning_effort: effort,
+        extra_body: {
+          google: {
+            thinking_config: {
+              include_thoughts: true,
+            },
+          },
+        },
+      },
+      omitTemperature: false,
+    };
+  }
+
+  if (reasoning.provider === "deepseek") {
+    return {
+      extra: {
+        thinking: {
+          type: "enabled",
+        },
+      },
+      omitTemperature: false,
+    };
+  }
+
+  return { extra: {}, omitTemperature: false };
+}
+
 function extractResponsesOutputText(data: {
   output_text?: string;
   output?: Array<{
@@ -362,18 +437,24 @@ export async function callLLM(params: ChatParams): Promise<string> {
   });
   const messages = buildMessages(params, systemPrompt);
   const useResponses = isResponsesBase(apiBase);
+  const reasoningPayload = buildReasoningPayload(params.reasoning, useResponses);
+  const temperatureParam = reasoningPayload.omitTemperature
+    ? {}
+    : { temperature: DEFAULT_TEMPERATURE };
 
   const payload = useResponses
     ? {
         model,
         ...buildResponsesInput(messages),
-        temperature: DEFAULT_TEMPERATURE,
+        ...reasoningPayload.extra,
+        ...temperatureParam,
         ...buildResponsesTokenParam(DEFAULT_MAX_TOKENS),
       }
     : {
         model,
         messages,
-        temperature: DEFAULT_TEMPERATURE,
+        ...reasoningPayload.extra,
+        ...temperatureParam,
         ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
       };
 
@@ -422,19 +503,25 @@ export async function callLLMStream(
   });
   const messages = buildMessages(params, systemPrompt);
   const useResponses = isResponsesBase(apiBase);
+  const reasoningPayload = buildReasoningPayload(params.reasoning, useResponses);
+  const temperatureParam = reasoningPayload.omitTemperature
+    ? {}
+    : { temperature: DEFAULT_TEMPERATURE };
 
   const payload = useResponses
     ? {
         model,
         ...buildResponsesInput(messages),
-        temperature: DEFAULT_TEMPERATURE,
+        ...reasoningPayload.extra,
+        ...temperatureParam,
         ...buildResponsesTokenParam(DEFAULT_MAX_TOKENS),
         stream: true,
       }
     : {
         model,
         messages,
-        temperature: DEFAULT_TEMPERATURE,
+        ...reasoningPayload.extra,
+        ...temperatureParam,
         ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
         stream: true,
       };
@@ -668,23 +755,39 @@ async function parseResponsesStream(
             }
           }
 
-          if (parsed.type === "response.reasoning_summary.delta" && parsed.delta) {
+          if (
+            (parsed.type === "response.reasoning_summary.delta" ||
+              parsed.type === "response.reasoning_summary_text.delta") &&
+            parsed.delta
+          ) {
             emitReasoning({ summary: parsed.delta });
             continue;
           }
 
-          if (parsed.type === "response.reasoning_summary.done" && parsed.text) {
-            emitReasoning({ summary: parsed.text });
+          if (
+            (parsed.type === "response.reasoning_summary.done" ||
+              parsed.type === "response.reasoning_summary_text.done") &&
+            (parsed.text || parsed.delta)
+          ) {
+            emitReasoning({ summary: parsed.text || parsed.delta });
             continue;
           }
 
-          if (parsed.type === "response.reasoning.delta" && parsed.delta) {
+          if (
+            (parsed.type === "response.reasoning.delta" ||
+              parsed.type === "response.reasoning_text.delta") &&
+            parsed.delta
+          ) {
             emitReasoning({ details: parsed.delta });
             continue;
           }
 
-          if (parsed.type === "response.reasoning.done" && parsed.text) {
-            emitReasoning({ details: parsed.text });
+          if (
+            (parsed.type === "response.reasoning.done" ||
+              parsed.type === "response.reasoning_text.done") &&
+            (parsed.text || parsed.delta)
+          ) {
+            emitReasoning({ details: parsed.text || parsed.delta });
             continue;
           }
 
