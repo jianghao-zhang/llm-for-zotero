@@ -249,6 +249,67 @@
   border-bottom-left-radius: 4px;
 }
 
+.llm-reasoning {
+  margin-top: 8px;
+  border-top: 1px solid var(--stroke-secondary);
+  padding-top: 6px;
+}
+
+.llm-reasoning-summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: var(--fill-secondary);
+  font-weight: 600;
+  list-style: none;
+}
+
+.llm-reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.llm-reasoning-summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 10px;
+  margin-right: 4px;
+  color: var(--fill-tertiary);
+}
+
+.llm-reasoning[open] > .llm-reasoning-summary::before {
+  content: "▾";
+}
+
+.llm-reasoning-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-reasoning-block {
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--fill-quaternary);
+  border: 1px solid var(--stroke-secondary);
+}
+
+.llm-reasoning-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fill-tertiary);
+  margin-bottom: 4px;
+}
+
+.llm-reasoning-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fill-secondary);
+  white-space: pre-wrap;
+}
+
 /* Message Meta */
 .llm-message-meta {
   display: flex;

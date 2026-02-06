@@ -1,6 +1,11 @@
 import { getLocaleID } from "../utils/locale";
 import { renderMarkdown } from "../utils/markdown";
-import { callEmbeddings, callLLMStream, ChatMessage } from "../utils/llmClient";
+import {
+  callEmbeddings,
+  callLLMStream,
+  ChatMessage,
+  ReasoningEvent,
+} from "../utils/llmClient";
 import { config } from "../../package.json";
 
 // =============================================================================
@@ -38,6 +43,9 @@ interface Message {
   text: string;
   timestamp: number;
   streaming?: boolean;
+  reasoningSummary?: string;
+  reasoningDetails?: string;
+  reasoningOpen?: boolean;
 }
 
 // =============================================================================
@@ -153,6 +161,12 @@ function getAbortController(): new () => AbortController {
       }
     ).AbortController
   );
+}
+
+function appendReasoningPart(base: string | undefined, next?: string): string {
+  const chunk = sanitizeText(next || "");
+  if (!chunk) return base || "";
+  return `${base || ""}${chunk}`;
 }
 
 async function optimizeImageDataUrl(
@@ -1501,48 +1515,50 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
   };
 
+  const getModelChoices = () => {
+    const { primary, secondary } = getApiProfiles();
+    const normalize = (value: string) =>
+      value.trim().replace(/\s+/g, " ").toLowerCase();
+    const primaryModel = (primary.model || "default").trim() || "default";
+    const secondaryModel = (secondary.model || "").trim();
+    const choices: Array<{ key: "primary" | "secondary"; model: string }> = [
+      { key: "primary", model: primaryModel },
+    ];
+    if (
+      secondaryModel &&
+      normalize(secondaryModel) !== normalize(primaryModel)
+    ) {
+      choices.push({ key: "secondary", model: secondaryModel });
+    }
+    return { primary, secondary, choices };
+  };
+
   const updateModelButton = () => {
     if (!item || !modelBtn) return;
-    const { primary, secondary } = getApiProfiles();
-    const hasSecondary = Boolean(secondary.model);
+    const { choices } = getModelChoices();
+    const hasSecondary = choices.length > 1;
     let selected = selectedModelCache.get(item.id) || "primary";
-    if (!hasSecondary) {
+    if (!choices.some((entry) => entry.key === selected)) {
       selected = "primary";
       selectedModelCache.set(item.id, selected);
     }
     const name =
-      selected === "secondary" && hasSecondary
-        ? secondary.model
-        : primary.model;
-    modelBtn.textContent = `${name || primary.model || "default"}`;
+      choices.find((entry) => entry.key === selected)?.model || choices[0].model;
+    modelBtn.textContent = `${name || "default"}`;
     modelBtn.disabled = !item;
     modelBtn.title = hasSecondary
       ? "Click to choose a model"
-      : "Only Profile A is configured";
+      : "Only one model is configured";
   };
 
   const rebuildModelMenu = () => {
     if (!item || !modelMenu) return;
-    const { primary, secondary } = getApiProfiles();
+    const { choices } = getModelChoices();
     const selected = selectedModelCache.get(item.id) || "primary";
-    const entries: Array<{
-      key: "primary" | "secondary";
-      label: string;
-      model: string;
-    }> = [];
-    if (selected !== "primary") {
-      entries.push({ key: "primary", label: "Profile A", model: primary.model });
-    }
-    if (secondary.model && selected !== "secondary") {
-      entries.push({
-        key: "secondary",
-        label: "Profile B",
-        model: secondary.model,
-      });
-    }
 
     modelMenu.innerHTML = "";
-    for (const entry of entries) {
+    for (const entry of choices) {
+      if (entry.key === selected) continue;
       const option = createElement(
         (body.ownerDocument as Document),
         "button",
@@ -1564,9 +1580,21 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
   };
 
+  const syncModelFromPrefs = () => {
+    updateModelButton();
+    if (modelMenu && modelMenu.style.display !== "none") {
+      rebuildModelMenu();
+    }
+  };
+
   // Initialize image preview state
   updateImagePreview();
-  updateModelButton();
+  syncModelFromPrefs();
+
+  // Preferences can change outside this panel (e.g., settings window).
+  // Re-sync model label when the user comes back and interacts.
+  body.addEventListener("pointerenter", syncModelFromPrefs);
+  body.addEventListener("focusin", syncModelFromPrefs);
 
   const getSelectedProfile = () => {
     if (!item) return null;
@@ -1670,7 +1698,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   const openModelMenu = () => {
     if (!modelMenu || !modelBtn) return;
+    updateModelButton();
     rebuildModelMenu();
+    if (!modelMenu.childElementCount) {
+      closeModelMenu();
+      return;
+    }
     const rect = modelBtn.getBoundingClientRect();
     modelMenu.style.position = "fixed";
     modelMenu.style.top = `${rect.bottom + 6}px`;
@@ -1863,6 +1896,21 @@ async function sendQuestion(
         assistantMessage.text += sanitizeText(delta);
         queueRefresh();
       },
+      (reasoning: ReasoningEvent) => {
+        if (reasoning.summary) {
+          assistantMessage.reasoningSummary = appendReasoningPart(
+            assistantMessage.reasoningSummary,
+            reasoning.summary,
+          );
+        }
+        if (reasoning.details) {
+          assistantMessage.reasoningDetails = appendReasoningPart(
+            assistantMessage.reasoningDetails,
+            reasoning.details,
+          );
+        }
+        queueRefresh();
+      },
     );
 
     if (cancelledRequestId >= thisRequestId) {
@@ -1945,10 +1993,8 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
     if (isUser) {
       bubble.textContent = sanitizeText(msg.text || "");
     } else {
-      if (!msg.text) {
-        bubble.innerHTML =
-          '<div class="llm-typing"><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span></div>';
-      } else {
+      const hasAnswerText = Boolean(msg.text);
+      if (hasAnswerText) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
         try {
@@ -1957,6 +2003,79 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
           ztoolkit.log("LLM render error:", err);
           bubble.textContent = safeText;
         }
+      }
+
+      const hasReasoningSummary = Boolean(msg.reasoningSummary?.trim());
+      const hasReasoningDetails = Boolean(msg.reasoningDetails?.trim());
+      if (hasReasoningSummary || hasReasoningDetails) {
+        const details = doc.createElement("details") as HTMLDetailsElement;
+        details.className = "llm-reasoning";
+        details.open =
+          typeof msg.reasoningOpen === "boolean"
+            ? msg.reasoningOpen
+            : Boolean(msg.streaming);
+
+        const summary = doc.createElement("summary") as HTMLElement;
+        summary.className = "llm-reasoning-summary";
+        summary.textContent = "Thinking";
+        const toggleReasoning = (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const next = !Boolean(msg.reasoningOpen);
+          msg.reasoningOpen = next;
+          details.open = next;
+        };
+        summary.addEventListener("mousedown", toggleReasoning);
+        summary.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        summary.addEventListener("keydown", (e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            toggleReasoning(e);
+          }
+        });
+        details.appendChild(summary);
+
+        const bodyWrap = doc.createElement("div") as HTMLDivElement;
+        bodyWrap.className = "llm-reasoning-body";
+
+        if (hasReasoningSummary) {
+          const summaryBlock = doc.createElement("div") as HTMLDivElement;
+          summaryBlock.className = "llm-reasoning-block";
+          const label = doc.createElement("div") as HTMLDivElement;
+          label.className = "llm-reasoning-label";
+          label.textContent = "Summary";
+          const text = doc.createElement("div") as HTMLDivElement;
+          text.className = "llm-reasoning-text";
+          text.textContent = msg.reasoningSummary || "";
+          summaryBlock.append(label, text);
+          bodyWrap.appendChild(summaryBlock);
+        }
+
+        if (hasReasoningDetails) {
+          const detailsBlock = doc.createElement("div") as HTMLDivElement;
+          detailsBlock.className = "llm-reasoning-block";
+          const label = doc.createElement("div") as HTMLDivElement;
+          label.className = "llm-reasoning-label";
+          label.textContent = "Details";
+          const text = doc.createElement("div") as HTMLDivElement;
+          text.className = "llm-reasoning-text";
+          text.textContent = msg.reasoningDetails || "";
+          detailsBlock.append(label, text);
+          bodyWrap.appendChild(detailsBlock);
+        }
+
+        details.appendChild(bodyWrap);
+        bubble.insertBefore(details, bubble.firstChild);
+      }
+
+      if (!hasAnswerText) {
+        const typing = doc.createElement("div") as HTMLDivElement;
+        typing.className = "llm-typing";
+        typing.innerHTML =
+          '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';
+        bubble.appendChild(typing);
       }
     }
 

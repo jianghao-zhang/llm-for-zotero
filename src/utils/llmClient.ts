@@ -48,9 +48,22 @@ export type ChatParams = {
   apiKey?: string;
 };
 
+export type ReasoningEvent = {
+  summary?: string;
+  details?: string;
+};
+
 interface StreamChoice {
-  delta?: { content?: string };
-  message?: { content?: string };
+  delta?: {
+    content?: string;
+    reasoning_content?: string;
+    reasoning?: string;
+  };
+  message?: {
+    content?: string;
+    reasoning_content?: string;
+    reasoning?: string;
+  };
 }
 
 interface CompletionResponse {
@@ -96,7 +109,7 @@ const getPref = (key: string) => Zotero.Prefs.get(prefKey(key), true) as string;
 
 /** Get configured API settings */
 function resolveEndpoint(baseOrUrl: string, path: string): string {
-  const cleaned = baseOrUrl.replace(/\/$/, "");
+  const cleaned = baseOrUrl.trim().replace(/\/$/, "");
   if (!cleaned) return "";
   const chatSuffix = "/chat/completions";
   const responsesSuffix = "/responses";
@@ -149,12 +162,13 @@ function getApiConfig(overrides?: {
 }) {
   const prefApiBase =
     getPref("apiBasePrimary") || getPref("apiBase") || "";
-  const apiBase = (overrides?.apiBase || prefApiBase).replace(/\/$/, "");
+  const apiBase = (overrides?.apiBase || prefApiBase).trim().replace(/\/$/, "");
   const apiKey =
-    overrides?.apiKey || getPref("apiKeyPrimary") || getPref("apiKey") || "";
+    (overrides?.apiKey || getPref("apiKeyPrimary") || getPref("apiKey") || "")
+      .trim();
   const modelPrimary =
     getPref("modelPrimary") || getPref("model") || DEFAULT_MODEL;
-  const model = overrides?.model || modelPrimary;
+  const model = (overrides?.model || modelPrimary).trim();
   const embeddingModel = getPref("embeddingModel") || DEFAULT_EMBEDDING_MODEL;
   const customSystemPrompt = getPref("systemPrompt") || "";
 
@@ -232,7 +246,7 @@ function getFetch(): typeof fetch {
 }
 
 function isResponsesBase(baseOrUrl: string): boolean {
-  const cleaned = baseOrUrl.replace(/\/$/, "");
+  const cleaned = baseOrUrl.trim().replace(/\/$/, "");
   return cleaned.endsWith("/v1/responses") || cleaned.endsWith("/responses");
 }
 
@@ -399,6 +413,7 @@ export async function callLLM(params: ChatParams): Promise<string> {
 export async function callLLMStream(
   params: ChatParams,
   onDelta: (delta: string) => void,
+  onReasoning?: (event: ReasoningEvent) => void,
 ): Promise<string> {
   const { apiBase, apiKey, model, systemPrompt } = getApiConfig({
     apiBase: params.apiBase,
@@ -446,8 +461,8 @@ export async function callLLMStream(
   }
 
   return useResponses
-    ? parseResponsesStream(res.body, onDelta)
-    : parseStreamResponse(res.body, onDelta);
+    ? parseResponsesStream(res.body, onDelta, onReasoning)
+    : parseStreamResponse(res.body, onDelta, onReasoning);
 }
 
 /**
@@ -489,6 +504,7 @@ export async function callEmbeddings(
 async function parseStreamResponse(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
+  onReasoning?: (event: ReasoningEvent) => void,
 ): Promise<string> {
   const reader = body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
   const decoder = new TextDecoder("utf-8");
@@ -513,6 +529,16 @@ async function parseStreamResponse(
 
         try {
           const parsed = JSON.parse(data) as { choices?: StreamChoice[] };
+          const reasoningDelta =
+            parsed?.choices?.[0]?.delta?.reasoning_content ??
+            parsed?.choices?.[0]?.delta?.reasoning ??
+            parsed?.choices?.[0]?.message?.reasoning_content ??
+            parsed?.choices?.[0]?.message?.reasoning ??
+            "";
+          if (reasoningDelta && onReasoning) {
+            onReasoning({ details: reasoningDelta });
+          }
+
           const delta =
             parsed?.choices?.[0]?.delta?.content ??
             parsed?.choices?.[0]?.message?.content ??
@@ -537,6 +563,7 @@ async function parseStreamResponse(
 async function parseResponsesStream(
   body: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
+  onReasoning?: (event: ReasoningEvent) => void,
 ): Promise<string> {
   const reader = body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
   const decoder = new TextDecoder("utf-8");
@@ -564,9 +591,62 @@ async function parseResponsesStream(
             type?: string;
             delta?: string;
             text?: string;
+            summary?: Array<{ type?: string; text?: string }> | string;
+            reasoning?: string | Array<{ text?: string; summary?: string }>;
+            message?: { content?: string };
             response?: {
               output_text?: string;
+              output?: Array<{
+                type?: string;
+                content?: Array<{
+                  type?: string;
+                  text?: string;
+                  summary?: string;
+                }>;
+                summary?: Array<{ type?: string; text?: string }> | string;
+              }>;
             };
+          };
+
+          const normalizeReasoningText = (value: unknown): string => {
+            if (typeof value === "string") return value;
+            if (Array.isArray(value)) {
+              return value
+                .map((entry) => {
+                  if (typeof entry === "string") return entry;
+                  if (entry && typeof entry === "object") {
+                    const row = entry as { text?: string; summary?: string };
+                    return row.text || row.summary || "";
+                  }
+                  return "";
+                })
+                .filter(Boolean)
+                .join("\n");
+            }
+            if (value && typeof value === "object") {
+              const row = value as { text?: string; summary?: string };
+              return row.text || row.summary || "";
+            }
+            return "";
+          };
+
+          const extractSummary = (
+            value: Array<{ type?: string; text?: string }> | string | undefined,
+          ): string => {
+            if (!value) return "";
+            if (typeof value === "string") return value;
+            return value
+              .map((entry) => entry.text || "")
+              .filter(Boolean)
+              .join("\n");
+          };
+
+          const emitReasoning = (event: ReasoningEvent) => {
+            if (!onReasoning) return;
+            const summary = event.summary?.trim();
+            const details = event.details?.trim();
+            if (!summary && !details) return;
+            onReasoning({ summary, details });
           };
 
           if (parsed.type === "response.output_text.delta" && parsed.delta) {
@@ -585,6 +665,46 @@ async function parseResponsesStream(
             if (!fullText) {
               fullText = parsed.response.output_text;
               onDelta(parsed.response.output_text);
+            }
+          }
+
+          if (parsed.type === "response.reasoning_summary.delta" && parsed.delta) {
+            emitReasoning({ summary: parsed.delta });
+            continue;
+          }
+
+          if (parsed.type === "response.reasoning_summary.done" && parsed.text) {
+            emitReasoning({ summary: parsed.text });
+            continue;
+          }
+
+          if (parsed.type === "response.reasoning.delta" && parsed.delta) {
+            emitReasoning({ details: parsed.delta });
+            continue;
+          }
+
+          if (parsed.type === "response.reasoning.done" && parsed.text) {
+            emitReasoning({ details: parsed.text });
+            continue;
+          }
+
+          if (parsed.type === "response.reasoning" && parsed.reasoning) {
+            emitReasoning({ details: normalizeReasoningText(parsed.reasoning) });
+            continue;
+          }
+
+          if (
+            parsed.type === "response.output_item.added" ||
+            parsed.type === "response.output_item.done" ||
+            parsed.type === "response.completed"
+          ) {
+            const outputs = parsed.response?.output || [];
+            for (const out of outputs) {
+              if (out.type !== "reasoning") continue;
+              emitReasoning({
+                summary: extractSummary(out.summary),
+                details: normalizeReasoningText(out.content),
+              });
             }
           }
         } catch (err) {
