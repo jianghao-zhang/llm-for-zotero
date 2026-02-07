@@ -66,6 +66,16 @@ type ReasoningOption = {
   level: LLMReasoningLevel;
   enabled: boolean;
 };
+type ActionDropdownSpec = {
+  slotId: string;
+  slotClassName: string;
+  buttonId: string;
+  buttonClassName: string;
+  buttonText: string;
+  menuId: string;
+  menuClassName: string;
+  disabled?: boolean;
+};
 
 // =============================================================================
 // State
@@ -170,6 +180,26 @@ function createElement<K extends keyof HTMLElementTagNameMap>(
   if (className) el.className = className;
   if (props) Object.assign(el, props);
   return el;
+}
+
+function createActionDropdown(doc: Document, spec: ActionDropdownSpec) {
+  const slot = createElement(
+    doc,
+    "div",
+    `llm-action-slot ${spec.slotClassName}`.trim(),
+    { id: spec.slotId },
+  );
+  const button = createElement(doc, "button", spec.buttonClassName, {
+    id: spec.buttonId,
+    textContent: spec.buttonText,
+    disabled: spec.disabled,
+  });
+  const menu = createElement(doc, "div", spec.menuClassName, {
+    id: spec.menuId,
+  });
+  menu.style.display = "none";
+  slot.append(button, menu);
+  return { slot, button, menu };
 }
 
 /** Get AbortController constructor from global scope */
@@ -280,9 +310,7 @@ async function optimizeImageDataUrl(
 /**
  * Screenshot selection overlay for capturing regions from the PDF reader
  */
-async function captureScreenshotSelection(
-  win: Window,
-): Promise<string | null> {
+async function captureScreenshotSelection(win: Window): Promise<string | null> {
   return new Promise((resolve) => {
     const doc = win.document;
 
@@ -403,7 +431,12 @@ async function captureScreenshotSelection(
     const safeResolve = (value: string | null, reason: string) => {
       if (resolved) return;
       resolved = true;
-      ztoolkit.log("Screenshot: Resolving with", value ? "image" : "null", "-", reason);
+      ztoolkit.log(
+        "Screenshot: Resolving with",
+        value ? "image" : "null",
+        "-",
+        reason,
+      );
       cleanup();
       resolve(value);
     };
@@ -431,7 +464,12 @@ async function captureScreenshotSelection(
     }, 200);
 
     overlay.addEventListener("mousedown", (e: MouseEvent) => {
-      ztoolkit.log("Screenshot: mousedown, isReady:", isReady, "target:", (e.target as Element)?.tagName);
+      ztoolkit.log(
+        "Screenshot: mousedown, isReady:",
+        isReady,
+        "target:",
+        (e.target as Element)?.tagName,
+      );
       if (!isReady) {
         ztoolkit.log("Screenshot: Ignoring mousedown - not ready yet");
         return;
@@ -468,7 +506,12 @@ async function captureScreenshotSelection(
     });
 
     overlay.addEventListener("mouseup", async (e: MouseEvent) => {
-      ztoolkit.log("Screenshot: mouseup, isReady:", isReady, "isSelecting:", isSelecting);
+      ztoolkit.log(
+        "Screenshot: mouseup, isReady:",
+        isReady,
+        "isSelecting:",
+        isSelecting,
+      );
       if (!isReady) {
         ztoolkit.log("Screenshot: Ignoring mouseup - not ready yet");
         return;
@@ -777,43 +820,36 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const screenshotSlot = createElement(doc, "div", "llm-action-slot");
   screenshotSlot.appendChild(screenshotBtn);
 
-  const modelDropdown = createElement(doc, "div", "llm-model-dropdown", {
-    id: "llm-model-dropdown",
+  const {
+    slot: modelDropdown,
+    button: modelBtn,
+    menu: modelMenu,
+  } = createActionDropdown(doc, {
+    slotId: "llm-model-dropdown",
+    slotClassName: "llm-model-dropdown",
+    buttonId: "llm-model-toggle",
+    buttonClassName: "llm-action-btn llm-action-btn-secondary llm-model-btn",
+    buttonText: "Model: ...",
+    menuId: "llm-model-menu",
+    menuClassName: "llm-model-menu",
+    disabled: !hasItem,
   });
-  const modelBtn = createElement(
-    doc,
-    "button",
-    "llm-action-btn llm-action-btn-secondary llm-model-btn",
-    {
-      id: "llm-model-toggle",
-      textContent: "Model: ...",
-      disabled: !hasItem,
-    },
-  );
-  const modelMenu = createElement(doc, "div", "llm-model-menu", {
-    id: "llm-model-menu",
-  });
-  modelMenu.style.display = "none";
-  modelDropdown.append(modelBtn, modelMenu);
 
-  const reasoningDropdown = createElement(doc, "div", "llm-reasoning-dropdown", {
-    id: "llm-reasoning-dropdown",
+  const {
+    slot: reasoningDropdown,
+    button: reasoningBtn,
+    menu: reasoningMenu,
+  } = createActionDropdown(doc, {
+    slotId: "llm-reasoning-dropdown",
+    slotClassName: "llm-reasoning-dropdown",
+    buttonId: "llm-reasoning-toggle",
+    buttonClassName:
+      "llm-action-btn llm-action-btn-secondary llm-reasoning-btn",
+    buttonText: "Reasoning",
+    menuId: "llm-reasoning-menu",
+    menuClassName: "llm-reasoning-menu",
+    disabled: !hasItem,
   });
-  const reasoningBtn = createElement(
-    doc,
-    "button",
-    "llm-action-btn llm-action-btn-secondary llm-reasoning-btn",
-    {
-      id: "llm-reasoning-toggle",
-      textContent: "Reasoning",
-      disabled: !hasItem,
-    },
-  );
-  const reasoningMenu = createElement(doc, "div", "llm-reasoning-menu", {
-    id: "llm-reasoning-menu",
-  });
-  reasoningMenu.style.display = "none";
-  reasoningDropdown.append(reasoningBtn, reasoningMenu);
 
   const sendBtn = createElement(
     doc,
@@ -1313,13 +1349,10 @@ function getApiProfiles(): {
   secondary: { apiBase: string; apiKey: string; model: string };
 } {
   const primary = {
-    apiBase:
-      getStringPref("apiBasePrimary") || getStringPref("apiBase") || "",
+    apiBase: getStringPref("apiBasePrimary") || getStringPref("apiBase") || "",
     apiKey: getStringPref("apiKeyPrimary") || getStringPref("apiKey") || "",
     model:
-      getStringPref("modelPrimary") ||
-      getStringPref("model") ||
-      "gpt-4o-mini",
+      getStringPref("modelPrimary") || getStringPref("model") || "gpt-4o-mini",
   };
   const secondary = {
     apiBase: getStringPref("apiBaseSecondary") || "",
@@ -1669,6 +1702,24 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   }
   panelRoot.tabIndex = 0;
   applyPanelFontScale(panelRoot);
+  const MODEL_MENU_OPEN_CLASS = "llm-model-menu-open";
+  const REASONING_MENU_OPEN_CLASS = "llm-reasoning-menu-open";
+  const setFloatingMenuOpen = (
+    menu: HTMLDivElement | null,
+    openClass: string,
+    isOpen: boolean,
+  ) => {
+    if (!menu) return;
+    if (isOpen) {
+      menu.style.display = "grid";
+      menu.classList.add(openClass);
+      return;
+    }
+    menu.classList.remove(openClass);
+    menu.style.display = "none";
+  };
+  const isFloatingMenuOpen = (menu: HTMLDivElement | null) =>
+    Boolean(menu && menu.style.display !== "none");
 
   // Clicking non-interactive panel area gives keyboard focus to the panel.
   panelRoot.addEventListener("mousedown", (e: Event) => {
@@ -1764,7 +1815,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     for (const entry of choices) {
       if (entry.key === selected) continue;
       const option = createElement(
-        (body.ownerDocument as Document),
+        body.ownerDocument as Document,
         "button",
         "llm-model-option",
         {
@@ -1777,12 +1828,8 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
         e.stopPropagation();
         if (!item) return;
         selectedModelCache.set(item.id, entry.key);
-        modelMenu.classList.remove("llm-model-menu-open");
-        modelMenu.style.display = "none";
-        if (reasoningMenu) {
-          reasoningMenu.classList.remove("llm-reasoning-menu-open");
-          reasoningMenu.style.display = "none";
-        }
+        setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
+        setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
         selectedReasoningCache.set(item.id, "none");
         updateModelButton();
         updateReasoningButton();
@@ -1826,18 +1873,10 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const { enabledLevels, selectedLevel } = getReasoningState();
     const available = enabledLevels.length > 0;
     const active = available && selectedLevel !== "none";
-    reasoningBtn.textContent = active
-      ? `Level: ${selectedLevel}`
-      : "Reasoning";
+    reasoningBtn.textContent = active ? `Level: ${selectedLevel}` : "Reasoning";
     reasoningBtn.disabled = !item || !available;
-    reasoningBtn.classList.toggle(
-      "llm-reasoning-btn-unavailable",
-      !available,
-    );
-    reasoningBtn.classList.toggle(
-      "llm-reasoning-btn-active",
-      active,
-    );
+    reasoningBtn.classList.toggle("llm-reasoning-btn-unavailable", !available);
+    reasoningBtn.classList.toggle("llm-reasoning-btn-active", active);
     // Inline style ensures visible state change even if theme/CSS caching overrides classes.
     if (active) {
       reasoningBtn.style.background = "#2563eb";
@@ -1869,8 +1908,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
         "llm-reasoning-option",
         {
           type: "button",
-          textContent:
-            selectedLevel === level ? `\u2713 ${level}` : level,
+          textContent: selectedLevel === level ? `\u2713 ${level}` : level,
         },
       );
       if (optionState.enabled) {
@@ -1879,8 +1917,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
           e.stopPropagation();
           if (!item) return;
           selectedReasoningCache.set(item.id, level);
-          reasoningMenu.classList.remove("llm-reasoning-menu-open");
-          reasoningMenu.style.display = "none";
+          setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
           updateReasoningButton();
         });
       } else {
@@ -1894,10 +1931,10 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const syncModelFromPrefs = () => {
     updateModelButton();
     updateReasoningButton();
-    if (modelMenu && modelMenu.style.display !== "none") {
+    if (isFloatingMenuOpen(modelMenu)) {
       rebuildModelMenu();
     }
-    if (reasoningMenu && reasoningMenu.style.display !== "none") {
+    if (isFloatingMenuOpen(reasoningMenu)) {
       rebuildReasoningMenu();
     }
   };
@@ -1924,7 +1961,8 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const getSelectedReasoning = (): LLMReasoningConfig | undefined => {
     if (!item) return undefined;
     const { provider, enabledLevels, selectedLevel } = getReasoningState();
-    if (provider === "unsupported" || selectedLevel === "none") return undefined;
+    if (provider === "unsupported" || selectedLevel === "none")
+      return undefined;
     if (!enabledLevels.includes(selectedLevel as LLMReasoningLevel)) {
       return undefined;
     }
@@ -1984,7 +2022,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       const activeEl = panelDoc.activeElement;
       const inPanel = Boolean(
         (target && panel.contains(target)) ||
-          (activeEl && panel.contains(activeEl)),
+        (activeEl && panel.contains(activeEl)),
       );
       if (!inPanel) return null;
       return panel;
@@ -2067,8 +2105,9 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       true,
     );
 
-    (panelDoc as unknown as { __llmFontScaleShortcut?: boolean }).__llmFontScaleShortcut =
-      true;
+    (
+      panelDoc as unknown as { __llmFontScaleShortcut?: boolean }
+    ).__llmFontScaleShortcut = true;
   }
 
   // Screenshot button
@@ -2098,8 +2137,14 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
         return;
       }
 
-      ztoolkit.log("Screenshot: Using window, body exists:", !!mainWindow.document.body);
-      ztoolkit.log("Screenshot: documentElement exists:", !!mainWindow.document.documentElement);
+      ztoolkit.log(
+        "Screenshot: Using window, body exists:",
+        !!mainWindow.document.body,
+      );
+      ztoolkit.log(
+        "Screenshot: documentElement exists:",
+        !!mainWindow.document.documentElement,
+      );
 
       const status = body.querySelector("#llm-status") as HTMLElement | null;
       if (status) setStatus(status, "Select a region...", "sending");
@@ -2107,7 +2152,10 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       try {
         ztoolkit.log("Screenshot: Starting capture selection...");
         const dataUrl = await captureScreenshotSelection(mainWindow);
-        ztoolkit.log("Screenshot: Capture returned:", dataUrl ? "image data" : "null");
+        ztoolkit.log(
+          "Screenshot: Capture returned:",
+          dataUrl ? "image data" : "null",
+        );
         if (dataUrl) {
           const optimized = await optimizeImageDataUrl(mainWindow, dataUrl);
           selectedImageCache.set(item.id, optimized);
@@ -2179,13 +2227,11 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       return;
     }
     positionFloatingMenu(modelMenu, modelBtn);
-    modelMenu.classList.add("llm-model-menu-open");
+    setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, true);
   };
 
   const closeModelMenu = () => {
-    if (!modelMenu) return;
-    modelMenu.classList.remove("llm-model-menu-open");
-    modelMenu.style.display = "none";
+    setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
   };
 
   const openReasoningMenu = () => {
@@ -2198,13 +2244,11 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       return;
     }
     positionFloatingMenu(reasoningMenu, reasoningBtn);
-    reasoningMenu.classList.add("llm-reasoning-menu-open");
+    setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, true);
   };
 
   const closeReasoningMenu = () => {
-    if (!reasoningMenu) return;
-    reasoningMenu.classList.remove("llm-reasoning-menu-open");
-    reasoningMenu.style.display = "none";
+    setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
   };
 
   if (modelBtn) {
@@ -2212,7 +2256,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (!item || !modelMenu) return;
-      if (modelMenu.style.display === "none") {
+      if (!isFloatingMenuOpen(modelMenu)) {
         openModelMenu();
       } else {
         closeModelMenu();
@@ -2225,7 +2269,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (!item || !reasoningMenu || reasoningBtn.disabled) return;
-      if (reasoningMenu.style.display === "none") {
+      if (!isFloatingMenuOpen(reasoningMenu)) {
         openReasoningMenu();
       } else {
         closeReasoningMenu();
@@ -2255,26 +2299,25 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       const target = e.target as Node | null;
       if (
         modelMenuEl &&
-        modelMenuEl.style.display !== "none" &&
+        isFloatingMenuOpen(modelMenuEl) &&
         (!target ||
           (!modelMenuEl.contains(target) && !modelButtonEl?.contains(target)))
       ) {
-        modelMenuEl.classList.remove("llm-model-menu-open");
-        modelMenuEl.style.display = "none";
+        setFloatingMenuOpen(modelMenuEl, MODEL_MENU_OPEN_CLASS, false);
       }
       if (
         reasoningMenuEl &&
-        reasoningMenuEl.style.display !== "none" &&
+        isFloatingMenuOpen(reasoningMenuEl) &&
         (!target ||
           (!reasoningMenuEl.contains(target) &&
             !reasoningButtonEl?.contains(target)))
       ) {
-        reasoningMenuEl.classList.remove("llm-reasoning-menu-open");
-        reasoningMenuEl.style.display = "none";
+        setFloatingMenuOpen(reasoningMenuEl, REASONING_MENU_OPEN_CLASS, false);
       }
     });
-    (doc as unknown as { __llmModelMenuDismiss?: boolean }).__llmModelMenuDismiss =
-      true;
+    (
+      doc as unknown as { __llmModelMenuDismiss?: boolean }
+    ).__llmModelMenuDismiss = true;
   }
 
   // Remove image button
@@ -2489,7 +2532,8 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
   const prevScrollTop = chatBox.scrollTop;
   const distanceFromBottom =
     chatBox.scrollHeight - chatBox.clientHeight - chatBox.scrollTop;
-  const shouldStickToBottom = distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+  const shouldStickToBottom =
+    distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
 
   if (!item) {
     chatBox.innerHTML = `
