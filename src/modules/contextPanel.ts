@@ -1,6 +1,13 @@
 import { getLocaleID } from "../utils/locale";
 import { renderMarkdown } from "../utils/markdown";
 import {
+  appendMessage as appendStoredMessage,
+  clearConversation as clearStoredConversation,
+  loadConversation,
+  pruneConversation,
+  StoredChatMessage,
+} from "../utils/chatStore";
+import {
   callEmbeddings,
   callLLMStream,
   ChatMessage,
@@ -26,6 +33,7 @@ const EMBEDDING_BATCH_SIZE = 16;
 const HYBRID_WEIGHT_BM25 = 0.5;
 const HYBRID_WEIGHT_EMBEDDING = 0.5;
 const MAX_HISTORY_MESSAGES = 12;
+const PERSISTED_HISTORY_LIMIT = 200;
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const AUTO_SCROLL_BOTTOM_THRESHOLD = 64;
 const FONT_SCALE_DEFAULT_PERCENT = 100;
@@ -44,7 +52,11 @@ const SHORTCUT_FILES = [
   { id: "key-points", label: "Key Points", file: "key-points.txt" },
   { id: "methodology", label: "Methodology", file: "methodology.txt" },
   { id: "limitations", label: "Limitations", file: "limitations.txt" },
-  { id: INCLUDE_SELECTED_TEXT_SHORTCUT_ID, label: "Add Text Selection", file: "" },
+  {
+    id: INCLUDE_SELECTED_TEXT_SHORTCUT_ID,
+    label: "Add Text Selection",
+    file: "",
+  },
 ] as const;
 
 // =============================================================================
@@ -94,6 +106,8 @@ type AdvancedModelParams = {
 // =============================================================================
 
 const chatHistory = new Map<number, Message[]>();
+const loadedConversationKeys = new Set<number>();
+const loadingConversationTasks = new Map<number, Promise<void>>();
 const selectedModelCache = new Map<number, "primary" | "secondary">();
 const selectedReasoningCache = new Map<number, ReasoningLevelSelection>();
 type PdfContext = {
@@ -237,6 +251,76 @@ function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
   return `${base || ""}${chunk}`;
+}
+
+function getConversationKey(item: Zotero.Item): number {
+  if (item.isAttachment() && item.parentID) {
+    return item.parentID;
+  }
+  return item.id;
+}
+
+async function persistConversationMessage(
+  conversationKey: number,
+  message: StoredChatMessage,
+): Promise<void> {
+  try {
+    await appendStoredMessage(conversationKey, message);
+    await pruneConversation(conversationKey, PERSISTED_HISTORY_LIMIT);
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to persist chat message", err);
+  }
+}
+
+function toPanelMessage(message: StoredChatMessage): Message {
+  return {
+    role: message.role,
+    text: message.text,
+    timestamp: message.timestamp,
+    reasoningSummary: message.reasoningSummary,
+    reasoningDetails: message.reasoningDetails,
+    reasoningOpen: false,
+  };
+}
+
+async function ensureConversationLoaded(item: Zotero.Item): Promise<void> {
+  const conversationKey = getConversationKey(item);
+
+  if (loadedConversationKeys.has(conversationKey)) return;
+  if (chatHistory.has(conversationKey)) {
+    loadedConversationKeys.add(conversationKey);
+    return;
+  }
+
+  const existingTask = loadingConversationTasks.get(conversationKey);
+  if (existingTask) {
+    await existingTask;
+    return;
+  }
+
+  const task = (async () => {
+    try {
+      const storedMessages = await loadConversation(
+        conversationKey,
+        PERSISTED_HISTORY_LIMIT,
+      );
+      chatHistory.set(
+        conversationKey,
+        storedMessages.map((message) => toPanelMessage(message)),
+      );
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to load chat history", err);
+      if (!chatHistory.has(conversationKey)) {
+        chatHistory.set(conversationKey, []);
+      }
+    } finally {
+      loadedConversationKeys.add(conversationKey);
+      loadingConversationTasks.delete(conversationKey);
+    }
+  })();
+
+  loadingConversationTasks.set(conversationKey, task);
+  await task;
 }
 
 function detectReasoningProvider(modelName: string): ReasoningProviderKind {
@@ -721,7 +805,7 @@ export function registerReaderContextPanel() {
     },
     onAsyncRender: async ({ body, item }) => {
       if (item) {
-        await cachePDFText(item);
+        await Promise.all([cachePDFText(item), ensureConversationLoaded(item)]);
       }
       await renderShortcuts(body, item);
       setupHandlers(body, item);
@@ -736,10 +820,12 @@ export function registerReaderSelectionTracking() {
   };
   if (!readerAPI || readerAPI.__llmSelectionTrackingRegistered) return;
 
-  const handler: _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup"> = (
-    event,
-  ) => {
-    const selectedText = normalizeSelectedText(event.params?.annotation?.text || "");
+  const handler: _ZoteroTypes.Reader.EventHandler<
+    "renderTextSelectionPopup"
+  > = (event) => {
+    const selectedText = normalizeSelectedText(
+      event.params?.annotation?.text || "",
+    );
     const itemId = event.reader?._item?.id || event.reader?.itemID;
     if (typeof itemId !== "number") return;
     const item = Zotero.Items.get(itemId) || null;
@@ -858,10 +944,19 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     id: "llm-selected-context",
   });
   selectedContext.style.display = "none";
-  const selectedContextTop = createElement(doc, "div", "llm-selected-context-top");
-  const selectedContextLabel = createElement(doc, "div", "llm-selected-context-label", {
-    textContent: "Selected Context",
-  });
+  const selectedContextTop = createElement(
+    doc,
+    "div",
+    "llm-selected-context-top",
+  );
+  const selectedContextLabel = createElement(
+    doc,
+    "div",
+    "llm-selected-context-label",
+    {
+      textContent: "Selected Context",
+    },
+  );
   const selectedContextClear = createElement(
     doc,
     "button",
@@ -1441,7 +1536,10 @@ function sanitizeText(text: string) {
 }
 
 function normalizeSelectedText(text: string): string {
-  return sanitizeText(text).replace(/\s+/g, " ").trim().slice(0, SELECTED_TEXT_MAX_LENGTH);
+  return sanitizeText(text)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, SELECTED_TEXT_MAX_LENGTH);
 }
 
 function truncateSelectedText(text: string): string {
@@ -1453,11 +1551,14 @@ function buildQuestionWithSelectedText(
   selectedText: string,
   userPrompt: string,
 ): string {
-  const normalizedPrompt = userPrompt.trim() || "Please explain this selected text.";
+  const normalizedPrompt =
+    userPrompt.trim() || "Please explain this selected text.";
   return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""\n\nUser question:\n${normalizedPrompt}`;
 }
 
-function getItemSelectionCacheKeys(item: Zotero.Item | null | undefined): number[] {
+function getItemSelectionCacheKeys(
+  item: Zotero.Item | null | undefined,
+): number[] {
   if (!item) return [];
   const keys = new Set<number>();
   keys.add(item.id);
@@ -1509,7 +1610,9 @@ function getActiveReaderSelectionText(
   const fromPanelDoc = selectionFrom(panelDoc);
   if (fromPanelDoc) return fromPanelDoc;
 
-  const iframes = Array.from(panelDoc.querySelectorAll("iframe")) as HTMLIFrameElement[];
+  const iframes = Array.from(
+    panelDoc.querySelectorAll("iframe"),
+  ) as HTMLIFrameElement[];
   for (const frame of iframes) {
     const fromFrame = selectionFrom(frame.contentDocument);
     if (fromFrame) return fromFrame;
@@ -1567,7 +1670,10 @@ function resolveParentItemForNote(item: Zotero.Item): Zotero.Item | null {
   return item;
 }
 
-function buildAssistantNoteHtml(contentText: string, modelName: string): string {
+function buildAssistantNoteHtml(
+  contentText: string,
+  modelName: string,
+): string {
   const response = sanitizeText(contentText || "").trim();
   const source = modelName.trim() || "unknown";
   let responseHtml = "";
@@ -1945,7 +2051,9 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
         selectedTextCache.set(item.id, selectedText);
         applySelectedTextPreview(body, item.id);
         if (status) setStatus(status, "Selected text included", "ready");
-        const inputEl = body.querySelector("#llm-input") as HTMLTextAreaElement | null;
+        const inputEl = body.querySelector(
+          "#llm-input",
+        ) as HTMLTextAreaElement | null;
         inputEl?.focus();
         return;
       }
@@ -2919,7 +3027,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (item) {
-        chatHistory.delete(item.id);
+        const conversationKey = getConversationKey(item);
+        chatHistory.delete(conversationKey);
+        loadedConversationKeys.add(conversationKey);
+        void clearStoredConversation(conversationKey).catch((err) => {
+          ztoolkit.log("LLM: Failed to clear persisted chat history", err);
+        });
         selectedImageCache.delete(item.id);
         selectedTextCache.delete(item.id);
         updateImagePreview();
@@ -2966,11 +3079,14 @@ async function sendQuestion(
     setStatus(status, statusText, "sending");
   }
 
+  await ensureConversationLoaded(item);
+  const conversationKey = getConversationKey(item);
+
   // Add user message (include indicator if image was attached)
-  if (!chatHistory.has(item.id)) {
-    chatHistory.set(item.id, []);
+  if (!chatHistory.has(conversationKey)) {
+    chatHistory.set(conversationKey, []);
   }
-  const history = chatHistory.get(item.id)!;
+  const history = chatHistory.get(conversationKey)!;
   const historyForLLM = history.slice(-MAX_HISTORY_MESSAGES);
   const fallbackProfile = getSelectedProfileForItem(item.id);
   const effectiveModel = (
@@ -2990,7 +3106,18 @@ async function sendQuestion(
   const userMessageText = image
     ? `${shownQuestion}\n[📷 Image attached]`
     : shownQuestion;
-  history.push({ role: "user", text: userMessageText, timestamp: Date.now() });
+  const userMessage: Message = {
+    role: "user",
+    text: userMessageText,
+    timestamp: Date.now(),
+  };
+  history.push(userMessage);
+  await persistConversationMessage(conversationKey, {
+    role: "user",
+    text: userMessage.text,
+    timestamp: userMessage.timestamp,
+  });
+
   const assistantMessage: Message = {
     role: "assistant",
     text: "",
@@ -2999,10 +3126,33 @@ async function sendQuestion(
     streaming: true,
   };
   history.push(assistantMessage);
-  if (history.length > MAX_HISTORY_MESSAGES * 2) {
-    history.splice(0, history.length - MAX_HISTORY_MESSAGES * 2);
+  if (history.length > PERSISTED_HISTORY_LIMIT) {
+    history.splice(0, history.length - PERSISTED_HISTORY_LIMIT);
   }
   refreshChat(body, item);
+
+  let assistantPersisted = false;
+  const persistAssistantOnce = async () => {
+    if (assistantPersisted) return;
+    assistantPersisted = true;
+    await persistConversationMessage(conversationKey, {
+      role: "assistant",
+      text: assistantMessage.text,
+      timestamp: assistantMessage.timestamp,
+      reasoningSummary: assistantMessage.reasoningSummary,
+      reasoningDetails: assistantMessage.reasoningDetails,
+    });
+  };
+  const markCancelled = async () => {
+    assistantMessage.text = "[Cancelled]";
+    assistantMessage.streaming = false;
+    assistantMessage.reasoningSummary = undefined;
+    assistantMessage.reasoningDetails = undefined;
+    assistantMessage.reasoningOpen = false;
+    refreshChat(body, item);
+    await persistAssistantOnce();
+    if (status) setStatus(status, "Cancelled", "ready");
+  };
 
   try {
     const pdfContext = await buildContext(
@@ -3068,7 +3218,11 @@ async function sendQuestion(
       },
     );
 
-    if (cancelledRequestId >= thisRequestId) {
+    if (
+      cancelledRequestId >= thisRequestId ||
+      Boolean(currentAbortController?.signal.aborted)
+    ) {
+      await markCancelled();
       return;
     }
 
@@ -3076,10 +3230,16 @@ async function sendQuestion(
       sanitizeText(answer) || assistantMessage.text || "No response.";
     assistantMessage.streaming = false;
     refreshChat(body, item);
+    await persistAssistantOnce();
 
     if (status) setStatus(status, "Ready", "ready");
   } catch (err) {
-    if (cancelledRequestId >= thisRequestId) {
+    const isCancelled =
+      cancelledRequestId >= thisRequestId ||
+      Boolean(currentAbortController?.signal.aborted) ||
+      (err as { name?: string }).name === "AbortError";
+    if (isCancelled) {
+      await markCancelled();
       return;
     }
 
@@ -3087,6 +3247,7 @@ async function sendQuestion(
     assistantMessage.text = `Error: ${errMsg}`;
     assistantMessage.streaming = false;
     refreshChat(body, item);
+    await persistAssistantOnce();
 
     if (status) {
       setStatus(status, `Error: ${errMsg.slice(0, 40)}`, "error");
@@ -3128,7 +3289,8 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
     return;
   }
 
-  const history = chatHistory.get(item.id) || [];
+  const conversationKey = getConversationKey(item);
+  const history = chatHistory.get(conversationKey) || [];
 
   if (history.length === 0) {
     chatBox.innerHTML = `
@@ -3301,6 +3463,10 @@ function refreshChat(body: Element, item?: Zotero.Item | null) {
 
 export function clearConversation(itemId: number) {
   chatHistory.delete(itemId);
+  loadedConversationKeys.add(itemId);
+  void clearStoredConversation(itemId).catch((err) => {
+    ztoolkit.log("LLM: Failed to clear persisted chat history", err);
+  });
 }
 
 export function getConversationHistory(itemId: number): Message[] {

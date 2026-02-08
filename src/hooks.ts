@@ -5,6 +5,7 @@ import {
   registerLLMStyles,
   registerReaderSelectionTracking,
 } from "./modules/contextPanel";
+import { initChatStore } from "./utils/chatStore";
 import { createZToolkit } from "./utils/ztoolkit";
 
 async function onStartup() {
@@ -15,6 +16,12 @@ async function onStartup() {
   ]);
 
   initLocale();
+
+  try {
+    await initChatStore();
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to initialize chat store", err);
+  }
 
   registerPrefsPane();
 
