@@ -13,6 +13,10 @@ declare namespace _ZoteroTypes {
       "apiKey": string;
       "model": string;
       "systemPrompt": string;
+      "temperaturePrimary": string;
+      "maxTokensPrimary": string;
+      "temperatureSecondary": string;
+      "maxTokensSecondary": string;
     };
   }
 }

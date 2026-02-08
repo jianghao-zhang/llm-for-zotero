@@ -32,6 +32,9 @@ const FONT_SCALE_DEFAULT_PERCENT = 100;
 const FONT_SCALE_MIN_PERCENT = 80;
 const FONT_SCALE_MAX_PERCENT = 180;
 const FONT_SCALE_STEP_PERCENT = 10;
+const DEFAULT_TEMPERATURE = 0.3;
+const DEFAULT_MAX_TOKENS = 2048;
+const MAX_ALLOWED_TOKENS = 65536;
 
 const SHORTCUT_FILES = [
   { id: "summarize", label: "Summarize", file: "summarize.txt" },
@@ -75,6 +78,11 @@ type ActionDropdownSpec = {
   menuId: string;
   menuClassName: string;
   disabled?: boolean;
+};
+type ModelProfileKey = "primary" | "secondary";
+type AdvancedModelParams = {
+  temperature: number;
+  maxTokens: number;
 };
 
 // =============================================================================
@@ -1344,6 +1352,18 @@ function getStringPref(key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function normalizeTemperaturePref(raw: string): number {
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) return DEFAULT_TEMPERATURE;
+  return Math.min(2, Math.max(0, value));
+}
+
+function normalizeMaxTokensPref(raw: string): number {
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < 1) return DEFAULT_MAX_TOKENS;
+  return Math.min(value, MAX_ALLOWED_TOKENS);
+}
+
 function getApiProfiles(): {
   primary: { apiBase: string; apiKey: string; model: string };
   secondary: { apiBase: string; apiKey: string; model: string };
@@ -1958,6 +1978,19 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     return { key: "primary" as const, ...primary };
   };
 
+  const getAdvancedModelParams = (
+    profileKey: ModelProfileKey | undefined,
+  ): AdvancedModelParams | undefined => {
+    if (!profileKey) return undefined;
+    const suffix = profileKey === "secondary" ? "Secondary" : "Primary";
+    return {
+      temperature: normalizeTemperaturePref(
+        getStringPref(`temperature${suffix}`),
+      ),
+      maxTokens: normalizeMaxTokensPref(getStringPref(`maxTokens${suffix}`)),
+    };
+  };
+
   const getSelectedReasoning = (): LLMReasoningConfig | undefined => {
     if (!item) return undefined;
     const { provider, enabledLevels, selectedLevel } = getReasoningState();
@@ -1980,6 +2013,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     updateImagePreview();
     const selectedProfile = getSelectedProfile();
     const selectedReasoning = getSelectedReasoning();
+    const advancedParams = getAdvancedModelParams(selectedProfile?.key);
     await sendQuestion(
       body,
       item,
@@ -1989,6 +2023,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       selectedProfile?.apiBase,
       selectedProfile?.apiKey,
       selectedReasoning,
+      advancedParams,
     );
   };
 
@@ -2380,6 +2415,7 @@ async function sendQuestion(
   apiBase?: string,
   apiKey?: string,
   reasoning?: LLMReasoningConfig,
+  advanced?: AdvancedModelParams,
 ) {
   const inputBox = body.querySelector(
     "#llm-input",
@@ -2460,6 +2496,8 @@ async function sendQuestion(
         apiBase: apiBase,
         apiKey: apiKey,
         reasoning,
+        temperature: advanced?.temperature,
+        maxTokens: advanced?.maxTokens,
       },
       (delta) => {
         assistantMessage.text += sanitizeText(delta);

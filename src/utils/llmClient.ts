@@ -34,12 +34,7 @@ export type ChatMessage = {
 };
 
 export type ReasoningProvider = "openai" | "gemini" | "deepseek" | "kimi";
-export type ReasoningLevel =
-  | "default"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh";
+export type ReasoningLevel = "default" | "low" | "medium" | "high" | "xhigh";
 export type ReasoningConfig = {
   provider: ReasoningProvider;
   level: ReasoningLevel;
@@ -60,6 +55,10 @@ export type ChatParams = {
   apiKey?: string;
   /** Optional reasoning control from UI */
   reasoning?: ReasoningConfig;
+  /** Optional custom sampling temperature */
+  temperature?: number;
+  /** Optional custom token budget for completion/output */
+  maxTokens?: number;
 };
 
 export type ReasoningEvent = {
@@ -117,6 +116,7 @@ const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_TEMPERATURE = 0.3;
 const DEFAULT_MAX_TOKENS = 2048;
+const MAX_ALLOWED_TOKENS = 65536;
 
 // =============================================================================
 // Utilities
@@ -166,9 +166,7 @@ function resolveEndpoint(baseOrUrl: string, path: string): string {
   // avoid appending a second /v1 from the default OpenAI path.
   const hasVersion = /\/v\d+(?:beta)?\b/.test(cleaned);
   const normalizedPath =
-    hasVersion && path.startsWith("/v1/")
-      ? path.replace(/^\/v1\//, "/")
-      : path;
+    hasVersion && path.startsWith("/v1/") ? path.replace(/^\/v1\//, "/") : path;
 
   return `${cleaned}${normalizedPath}`;
 }
@@ -178,12 +176,14 @@ function getApiConfig(overrides?: {
   apiKey?: string;
   model?: string;
 }) {
-  const prefApiBase =
-    getPref("apiBasePrimary") || getPref("apiBase") || "";
+  const prefApiBase = getPref("apiBasePrimary") || getPref("apiBase") || "";
   const apiBase = (overrides?.apiBase || prefApiBase).trim().replace(/\/$/, "");
-  const apiKey =
-    (overrides?.apiKey || getPref("apiKeyPrimary") || getPref("apiKey") || "")
-      .trim();
+  const apiKey = (
+    overrides?.apiKey ||
+    getPref("apiKeyPrimary") ||
+    getPref("apiKey") ||
+    ""
+  ).trim();
   const modelPrimary =
     getPref("modelPrimary") || getPref("model") || DEFAULT_MODEL;
   const model = (overrides?.model || modelPrimary).trim();
@@ -385,6 +385,18 @@ function buildResponsesTokenParam(maxTokens: number) {
   return { max_output_tokens: maxTokens };
 }
 
+function normalizeTemperature(temperature?: number): number {
+  if (!Number.isFinite(temperature)) return DEFAULT_TEMPERATURE;
+  return Math.min(2, Math.max(0, Number(temperature)));
+}
+
+function normalizeMaxTokens(maxTokens?: number): number {
+  if (!Number.isFinite(maxTokens)) return DEFAULT_MAX_TOKENS;
+  const normalized = Math.floor(Number(maxTokens));
+  if (normalized < 1) return DEFAULT_MAX_TOKENS;
+  return Math.min(normalized, MAX_ALLOWED_TOKENS);
+}
+
 function stringifyContent(content: MessageContent): string {
   if (typeof content === "string") return content;
   return content
@@ -567,7 +579,10 @@ type TemperaturePolicy =
 
 const temperaturePolicyCache = new Map<string, TemperaturePolicy>();
 
-function getTemperaturePolicyKey(url: string, payload: Record<string, unknown>) {
+function getTemperaturePolicyKey(
+  url: string,
+  payload: Record<string, unknown>,
+) {
   const model =
     typeof payload.model === "string" ? payload.model.trim().toLowerCase() : "";
   return `${url}::${model}`;
@@ -666,7 +681,10 @@ async function postWithTemperatureFallback(params: {
     ? getTemperatureRecoveryPolicy(res.status, firstErr)
     : null;
   if (recoveryPolicy) {
-    const fallbackPayload = applyTemperaturePolicy(params.payload, recoveryPolicy);
+    const fallbackPayload = applyTemperaturePolicy(
+      params.payload,
+      recoveryPolicy,
+    );
     res = await send(fallbackPayload);
     if (res.ok) {
       temperaturePolicyCache.set(policyKey, recoveryPolicy);
@@ -689,8 +707,8 @@ function extractResponsesOutputText(data: {
   const firstText =
     data?.output
       ?.flatMap((item) => item.content || [])
-      .find((content) => content.type === "output_text" && content.text)?.text ||
-    "";
+      .find((content) => content.type === "output_text" && content.text)
+      ?.text || "";
   return firstText || JSON.stringify(data);
 }
 
@@ -714,25 +732,29 @@ export async function callLLM(params: ChatParams): Promise<string> {
     useResponses,
     model,
   );
+  const effectiveTemperature = normalizeTemperature(params.temperature);
+  const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
   const temperatureParam = reasoningPayload.omitTemperature
     ? {}
-    : { temperature: DEFAULT_TEMPERATURE };
+    : { temperature: effectiveTemperature };
 
-  const payload = (useResponses
-    ? {
-        model,
-        ...buildResponsesInput(messages),
-        ...reasoningPayload.extra,
-        ...temperatureParam,
-        ...buildResponsesTokenParam(DEFAULT_MAX_TOKENS),
-      }
-    : {
-        model,
-        messages,
-        ...reasoningPayload.extra,
-        ...temperatureParam,
-        ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
-      }) as Record<string, unknown>;
+  const payload = (
+    useResponses
+      ? {
+          model,
+          ...buildResponsesInput(messages),
+          ...reasoningPayload.extra,
+          ...temperatureParam,
+          ...buildResponsesTokenParam(effectiveMaxTokens),
+        }
+      : {
+          model,
+          messages,
+          ...reasoningPayload.extra,
+          ...temperatureParam,
+          ...buildTokenParam(model, effectiveMaxTokens),
+        }
+  ) as Record<string, unknown>;
 
   const url = resolveEndpoint(
     apiBase,
@@ -779,27 +801,31 @@ export async function callLLMStream(
     useResponses,
     model,
   );
+  const effectiveTemperature = normalizeTemperature(params.temperature);
+  const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
   const temperatureParam = reasoningPayload.omitTemperature
     ? {}
-    : { temperature: DEFAULT_TEMPERATURE };
+    : { temperature: effectiveTemperature };
 
-  const payload = (useResponses
-    ? {
-        model,
-        ...buildResponsesInput(messages),
-        ...reasoningPayload.extra,
-        ...temperatureParam,
-        ...buildResponsesTokenParam(DEFAULT_MAX_TOKENS),
-        stream: true,
-      }
-    : {
-        model,
-        messages,
-        ...reasoningPayload.extra,
-        ...temperatureParam,
-        ...buildTokenParam(model, DEFAULT_MAX_TOKENS),
-        stream: true,
-      }) as Record<string, unknown>;
+  const payload = (
+    useResponses
+      ? {
+          model,
+          ...buildResponsesInput(messages),
+          ...reasoningPayload.extra,
+          ...temperatureParam,
+          ...buildResponsesTokenParam(effectiveMaxTokens),
+          stream: true,
+        }
+      : {
+          model,
+          messages,
+          ...reasoningPayload.extra,
+          ...temperatureParam,
+          ...buildTokenParam(model, effectiveMaxTokens),
+          stream: true,
+        }
+  ) as Record<string, unknown>;
 
   const url = resolveEndpoint(
     apiBase,
@@ -1068,7 +1094,10 @@ async function parseResponsesStream(
             continue;
           }
 
-          if (parsed.type === "response.completed" && parsed.response?.output_text) {
+          if (
+            parsed.type === "response.completed" &&
+            parsed.response?.output_text
+          ) {
             if (!fullText) {
               const { answer, thought } = splitThoughtTaggedText(
                 parsed.response.output_text,
@@ -1131,7 +1160,9 @@ async function parseResponsesStream(
           if (parsed.type === "response.reasoning" && parsed.reasoning) {
             sawDetailsFinal = true;
             if (!sawDetailsDelta) {
-              emitReasoning({ details: normalizeReasoningText(parsed.reasoning) });
+              emitReasoning({
+                details: normalizeReasoningText(parsed.reasoning),
+              });
             }
             continue;
           }
