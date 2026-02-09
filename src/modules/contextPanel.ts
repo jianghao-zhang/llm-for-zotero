@@ -2108,14 +2108,6 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
   );
   let customShortcuts = getCustomShortcuts();
 
-  // Safety fallback: if editable shortcuts were fully removed, restore defaults.
-  if (!builtins.length && !customShortcuts.length) {
-    deletedIds = new Set();
-    builtins = [...BUILTIN_SHORTCUT_FILES];
-    setDeletedShortcutIds([]);
-    setShortcutOrder([]);
-  }
-
   const availableCustomSlots = Math.max(
     0,
     MAX_EDITABLE_SHORTCUTS - builtins.length,
