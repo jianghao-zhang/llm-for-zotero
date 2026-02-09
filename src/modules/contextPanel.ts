@@ -125,8 +125,15 @@ type PdfContext = {
 };
 
 const pdfTextCache = new Map<number, PdfContext>();
+const pdfTextLoadingTasks = new Map<number, Promise<void>>();
 const shortcutTextCache = new Map<string, string>();
 const shortcutMoveModeState = new WeakMap<Element, boolean>();
+const shortcutRenderItemState = new WeakMap<
+  Element,
+  Zotero.Item | null | undefined
+>();
+const shortcutEscapeListenerAttached = new WeakSet<Document>();
+let readerContextPanelRegistered = false;
 
 let currentRequestId = 0;
 let cancelledRequestId = -1;
@@ -788,6 +795,8 @@ export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
 }
 
 export function registerReaderContextPanel() {
+  if (readerContextPanelRegistered) return;
+  readerContextPanelRegistered = true;
   Zotero.ItemPaneManager.registerSection({
     paneID: PANE_ID,
     pluginID: config.addonID,
@@ -808,11 +817,15 @@ export function registerReaderContextPanel() {
     },
     onAsyncRender: async ({ body, item }) => {
       if (item) {
-        await Promise.all([cachePDFText(item), ensureConversationLoaded(item)]);
+        await ensureConversationLoaded(item);
       }
       await renderShortcuts(body, item);
       setupHandlers(body, item);
       refreshChat(body, item);
+      // Defer PDF extraction so the panel becomes interactive sooner.
+      if (item) {
+        void ensurePDFTextCached(item);
+      }
     },
   });
 }
@@ -1200,6 +1213,24 @@ async function cachePDFText(item: Zotero.Item) {
       embeddingFailed: false,
     });
   }
+}
+
+async function ensurePDFTextCached(item: Zotero.Item): Promise<void> {
+  if (pdfTextCache.has(item.id)) return;
+  const existingTask = pdfTextLoadingTasks.get(item.id);
+  if (existingTask) {
+    await existingTask;
+    return;
+  }
+  const task = (async () => {
+    try {
+      await cachePDFText(item);
+    } finally {
+      pdfTextLoadingTasks.delete(item.id);
+    }
+  })();
+  pdfTextLoadingTasks.set(item.id, task);
+  await task;
 }
 
 type ChunkStat = {
@@ -2043,6 +2074,7 @@ async function loadShortcutText(file: string): Promise<string> {
 }
 
 async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
+  shortcutRenderItemState.set(body, item);
   const container = body.querySelector(
     "#llm-shortcuts",
   ) as HTMLDivElement | null;
@@ -2311,6 +2343,7 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
     positionShortcutMenu(event.clientX + 4, event.clientY + 4);
   };
 
+  let pendingSelectedText = "";
   for (const shortcut of editableShortcuts) {
     const btn = body.ownerDocument!.createElementNS(
       "http://www.w3.org/1999/xhtml",
@@ -2352,98 +2385,8 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
     label.textContent = shortcut.label;
     btn.appendChild(label);
 
-    btn.addEventListener("click", (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (moveMode) return;
-      if (!item) return;
-      const nextPrompt = (btn.dataset.prompt || "").trim();
-      if (!nextPrompt) return;
-      sendQuestion(body, item, nextPrompt);
-    });
-
-    btn.addEventListener("contextmenu", (e: Event) => {
-      const event = e as MouseEvent;
-      event.preventDefault();
-      event.stopPropagation();
-      openMenuForShortcut(event, shortcut.id, shortcut.kind);
-    });
-
-    if (moveMode) {
-      btn.addEventListener("dragstart", (e: DragEvent) => {
-        draggingShortcutId = shortcut.id;
-        draggingButton = btn;
-        btn.classList.add("llm-shortcut-dragging");
-        if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = "move";
-          e.dataTransfer.setData("text/plain", shortcut.id);
-          // Use the full shortcut chip as the drag ghost for clearer feedback.
-          const rect = btn.getBoundingClientRect();
-          e.dataTransfer.setDragImage(
-            btn,
-            Math.floor(rect.width / 2),
-            Math.floor(rect.height / 2),
-          );
-        }
-      });
-      btn.addEventListener("dragenter", (e: DragEvent) => {
-        e.preventDefault();
-        if (!draggingShortcutId || draggingShortcutId === shortcut.id) return;
-        btn.classList.add("llm-shortcut-drop-target");
-      });
-      btn.addEventListener("dragover", (e: DragEvent) => {
-        e.preventDefault();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-        if (!draggingShortcutId || draggingShortcutId === shortcut.id) return;
-        btn.classList.add("llm-shortcut-drop-target");
-      });
-      btn.addEventListener("dragleave", () => {
-        btn.classList.remove("llm-shortcut-drop-target");
-      });
-      btn.addEventListener("drop", async (e: DragEvent) => {
-        e.preventDefault();
-        btn.classList.remove("llm-shortcut-drop-target");
-        const sourceId =
-          draggingShortcutId ||
-          (e.dataTransfer ? e.dataTransfer.getData("text/plain") : "");
-        const targetId = shortcut.id;
-        if (!sourceId || !targetId || sourceId === targetId) return;
-
-        const nextOrder = orderedEditableIds.slice();
-        const fromIndex = nextOrder.indexOf(sourceId);
-        const toIndex = nextOrder.indexOf(targetId);
-        if (fromIndex < 0 || toIndex < 0) return;
-        const [moved] = nextOrder.splice(fromIndex, 1);
-        nextOrder.splice(toIndex, 0, moved);
-        setShortcutOrder(nextOrder);
-        await renderShortcuts(body, item);
-      });
-      btn.addEventListener("dragend", () => {
-        draggingShortcutId = "";
-        if (draggingButton) {
-          draggingButton.classList.remove("llm-shortcut-dragging");
-          draggingButton = null;
-        }
-        const highlighted = container.querySelectorAll(
-          ".llm-shortcut-drop-target",
-        );
-        highlighted.forEach((el: Element) =>
-          (el as HTMLElement).classList.remove("llm-shortcut-drop-target"),
-        );
-      });
-    }
-
     container.appendChild(btn);
   }
-
-  container.oncontextmenu = (e: Event) => {
-    const event = e as MouseEvent;
-    const target = event.target as HTMLElement | null;
-    if (target?.closest(".llm-shortcut-btn")) return;
-    event.preventDefault();
-    event.stopPropagation();
-    openMenuForPanel(event);
-  };
 
   const includeSelectedBtn = body.ownerDocument!.createElementNS(
     "http://www.w3.org/1999/xhtml",
@@ -2456,7 +2399,6 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
   includeSelectedBtn.dataset.shortcutKind = "special";
   includeSelectedBtn.dataset.prompt = "";
   includeSelectedBtn.disabled = !item || moveMode;
-  let pendingSelectedText = "";
   const cacheSelectionBeforeFocusShift = () => {
     pendingSelectedText = getActiveReaderSelectionText(
       body.ownerDocument as Document,
@@ -2471,33 +2413,195 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
     "mousedown",
     cacheSelectionBeforeFocusShift,
   );
-  includeSelectedBtn.addEventListener("click", (e: Event) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (moveMode) return;
-    if (!item) return;
-    const selectedText =
-      pendingSelectedText ||
-      getActiveReaderSelectionText(body.ownerDocument as Document, item);
-    pendingSelectedText = "";
-    const status = body.querySelector("#llm-status") as HTMLElement | null;
-    if (!selectedText) {
-      if (status) setStatus(status, "No text selected in reader", "error");
+  container.appendChild(includeSelectedBtn);
+
+  const getShortcutButtonFromEventTarget = (
+    target: EventTarget | null,
+  ): HTMLButtonElement | null => {
+    const node = target as Node | null;
+    if (!node || typeof node !== "object") return null;
+    let element: Element | null = null;
+    if ((node as any).nodeType === 1) {
+      element = node as unknown as Element;
+    } else if ((node as any).nodeType === 3) {
+      element = (node as any).parentElement || null;
+    }
+    if (!element || typeof (element as any).closest !== "function") return null;
+    const btn = element.closest(".llm-shortcut-btn") as HTMLButtonElement | null;
+    if (!btn || !container.contains(btn)) return null;
+    return btn;
+  };
+
+  container.onclick = (e: Event) => {
+    const mouseEvent = e as MouseEvent;
+    const btn = getShortcutButtonFromEventTarget(mouseEvent.target);
+    if (!btn) return;
+    mouseEvent.preventDefault();
+    mouseEvent.stopPropagation();
+    const shortcutId = btn.dataset.shortcutId || "";
+    const shortcutKind = btn.dataset.shortcutKind || "";
+    if (shortcutKind === "special") {
+      if (moveMode || !item) return;
+      const selectedText =
+        pendingSelectedText ||
+        getActiveReaderSelectionText(body.ownerDocument as Document, item);
+      pendingSelectedText = "";
+      const status = body.querySelector("#llm-status") as HTMLElement | null;
+      if (!selectedText) {
+        if (status) setStatus(status, "No text selected in reader", "error");
+        return;
+      }
+      selectedTextCache.set(item.id, selectedText);
+      applySelectedTextPreview(body, item.id);
+      if (status) setStatus(status, "Selected text included", "ready");
+      const inputEl = body.querySelector(
+        "#llm-input",
+      ) as HTMLTextAreaElement | null;
+      inputEl?.focus();
       return;
     }
-    selectedTextCache.set(item.id, selectedText);
-    applySelectedTextPreview(body, item.id);
-    if (status) setStatus(status, "Selected text included", "ready");
-    const inputEl = body.querySelector(
-      "#llm-input",
-    ) as HTMLTextAreaElement | null;
-    inputEl?.focus();
-  });
-  includeSelectedBtn.addEventListener("contextmenu", (e: Event) => {
-    e.preventDefault();
-    e.stopPropagation();
-  });
-  container.appendChild(includeSelectedBtn);
+    if (!shortcutId || moveMode || !item) return;
+    const nextPrompt = (btn.dataset.prompt || "").trim();
+    if (!nextPrompt) return;
+    sendQuestion(body, item, nextPrompt);
+  };
+
+  container.oncontextmenu = (e: Event) => {
+    const mouseEvent = e as MouseEvent;
+    const btn = getShortcutButtonFromEventTarget(mouseEvent.target);
+    mouseEvent.preventDefault();
+    mouseEvent.stopPropagation();
+    if (!btn) {
+      openMenuForPanel(mouseEvent);
+      return;
+    }
+    const shortcutId = btn.dataset.shortcutId || "";
+    const shortcutKind = btn.dataset.shortcutKind || "";
+    if (shortcutKind === "special") return;
+    if (
+      shortcutId &&
+      (shortcutKind === "builtin" || shortcutKind === "custom")
+    ) {
+      openMenuForShortcut(mouseEvent, shortcutId, shortcutKind);
+    }
+  };
+
+  container.ondragstart = (e: Event) => {
+    const dragEvent = e as DragEvent;
+    if (!moveMode) return;
+    const btn = getShortcutButtonFromEventTarget(dragEvent.target);
+    if (!btn) return;
+    const shortcutId = btn.dataset.shortcutId || "";
+    const shortcutKind = btn.dataset.shortcutKind || "";
+    if (!shortcutId || shortcutKind === "special") {
+      dragEvent.preventDefault();
+      return;
+    }
+    draggingShortcutId = shortcutId;
+    draggingButton = btn;
+    btn.classList.add("llm-shortcut-dragging");
+    if (dragEvent.dataTransfer) {
+      dragEvent.dataTransfer.effectAllowed = "move";
+      dragEvent.dataTransfer.setData("text/plain", shortcutId);
+      const rect = btn.getBoundingClientRect();
+      dragEvent.dataTransfer.setDragImage(
+        btn,
+        Math.floor(rect.width / 2),
+        Math.floor(rect.height / 2),
+      );
+    }
+  };
+
+  container.ondragenter = (e: Event) => {
+    const dragEvent = e as DragEvent;
+    if (!moveMode) return;
+    dragEvent.preventDefault();
+    const btn = getShortcutButtonFromEventTarget(dragEvent.target);
+    if (!btn) return;
+    const targetId = btn.dataset.shortcutId || "";
+    const targetKind = btn.dataset.shortcutKind || "";
+    if (
+      !draggingShortcutId ||
+      !targetId ||
+      targetKind === "special" ||
+      draggingShortcutId === targetId
+    ) {
+      return;
+    }
+    btn.classList.add("llm-shortcut-drop-target");
+  };
+
+  container.ondragover = (e: Event) => {
+    const dragEvent = e as DragEvent;
+    if (!moveMode) return;
+    dragEvent.preventDefault();
+    if (dragEvent.dataTransfer) dragEvent.dataTransfer.dropEffect = "move";
+    const btn = getShortcutButtonFromEventTarget(dragEvent.target);
+    if (!btn) return;
+    const targetId = btn.dataset.shortcutId || "";
+    const targetKind = btn.dataset.shortcutKind || "";
+    if (
+      !draggingShortcutId ||
+      !targetId ||
+      targetKind === "special" ||
+      draggingShortcutId === targetId
+    ) {
+      return;
+    }
+    btn.classList.add("llm-shortcut-drop-target");
+  };
+
+  container.ondragleave = (e: Event) => {
+    const dragEvent = e as DragEvent;
+    if (!moveMode) return;
+    const btn = getShortcutButtonFromEventTarget(dragEvent.target);
+    btn?.classList.remove("llm-shortcut-drop-target");
+  };
+
+  container.ondrop = async (e: Event) => {
+    const dragEvent = e as DragEvent;
+    if (!moveMode) return;
+    dragEvent.preventDefault();
+    const btn = getShortcutButtonFromEventTarget(dragEvent.target);
+    if (!btn) return;
+    btn.classList.remove("llm-shortcut-drop-target");
+    const targetId = btn.dataset.shortcutId || "";
+    const targetKind = btn.dataset.shortcutKind || "";
+    if (
+      !targetId ||
+      targetKind === "special" ||
+      !draggingShortcutId ||
+      draggingShortcutId === targetId
+    ) {
+      return;
+    }
+    const sourceId =
+      draggingShortcutId ||
+      (dragEvent.dataTransfer
+        ? dragEvent.dataTransfer.getData("text/plain")
+        : "");
+    if (!sourceId) return;
+    const nextOrder = orderedEditableIds.slice();
+    const fromIndex = nextOrder.indexOf(sourceId);
+    const toIndex = nextOrder.indexOf(targetId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const [moved] = nextOrder.splice(fromIndex, 1);
+    nextOrder.splice(toIndex, 0, moved);
+    setShortcutOrder(nextOrder);
+    await renderShortcuts(body, item);
+  };
+
+  container.ondragend = () => {
+    draggingShortcutId = "";
+    if (draggingButton) {
+      draggingButton.classList.remove("llm-shortcut-dragging");
+      draggingButton = null;
+    }
+    const highlighted = container.querySelectorAll(".llm-shortcut-drop-target");
+    highlighted.forEach((el: Element) =>
+      (el as HTMLElement).classList.remove("llm-shortcut-drop-target"),
+    );
+  };
 
   if (menu && menuEdit && menuDelete && menuAdd && menuMove && menuReset) {
     menuEdit.onclick = async (e: Event) => {
@@ -2622,8 +2726,9 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
       await renderShortcuts(body, item);
     };
 
-    if (!menu.dataset.bodyClickAttached) {
-      menu.dataset.bodyClickAttached = "true";
+    const bodyEl = body as HTMLElement;
+    if (!bodyEl.dataset.llmShortcutBodyClickAttached) {
+      bodyEl.dataset.llmShortcutBodyClickAttached = "true";
       body.addEventListener("click", (e: Event) => {
         const target = e.target as Node | null;
         const targetEl = target as Element | null;
@@ -2634,20 +2739,26 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
         menu.dataset.menuKind = "";
         menu.dataset.shortcutId = "";
         menu.dataset.shortcutKind = "";
-        if (shortcutMoveModeState.get(body) === true && !clickedShortcutButton) {
+        if (
+          shortcutMoveModeState.get(body) === true &&
+          !clickedShortcutButton
+        ) {
           shortcutMoveModeState.set(body, false);
-          void renderShortcuts(body, item);
+          const latestItem = shortcutRenderItemState.get(body);
+          void renderShortcuts(body, latestItem);
         }
         if (shortcutMoveModeState.get(body) === true && !target) {
           shortcutMoveModeState.set(body, false);
-          void renderShortcuts(body, item);
+          const latestItem = shortcutRenderItemState.get(body);
+          void renderShortcuts(body, latestItem);
         }
       });
     }
 
-    if (!menu.dataset.escapeKeyAttached) {
-      menu.dataset.escapeKeyAttached = "true";
-      body.ownerDocument?.addEventListener(
+    const ownerDoc = body.ownerDocument;
+    if (ownerDoc && !shortcutEscapeListenerAttached.has(ownerDoc)) {
+      shortcutEscapeListenerAttached.add(ownerDoc);
+      ownerDoc.addEventListener(
         "keydown",
         (e: Event) => {
           const keyEvent = e as KeyboardEvent;
@@ -2655,7 +2766,8 @@ async function renderShortcuts(body: Element, item?: Zotero.Item | null) {
           if (shortcutMoveModeState.get(body) !== true) return;
           keyEvent.preventDefault();
           shortcutMoveModeState.set(body, false);
-          void renderShortcuts(body, item);
+          const latestItem = shortcutRenderItemState.get(body);
+          void renderShortcuts(body, latestItem);
         },
         true,
       );
@@ -3723,6 +3835,7 @@ async function sendQuestion(
   };
 
   try {
+    await ensurePDFTextCached(item);
     const pdfContext = await buildContext(
       pdfTextCache.get(item.id),
       question,
