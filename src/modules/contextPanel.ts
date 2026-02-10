@@ -854,13 +854,59 @@ export function registerReaderSelectionTracking() {
     if (typeof itemId !== "number") return;
     const item = Zotero.Items.get(itemId) || null;
     const cacheKeys = getItemSelectionCacheKeys(item);
+    const keys = cacheKeys.length ? cacheKeys : [itemId];
+
     if (selectedText) {
-      if (cacheKeys.length) {
-        for (const key of cacheKeys) {
-          recentReaderSelectionCache.set(key, selectedText);
-        }
-      } else {
-        recentReaderSelectionCache.set(itemId, selectedText);
+      for (const key of keys) {
+        recentReaderSelectionCache.set(key, selectedText);
+      }
+
+      // Append a hidden sentinel element to the selection popup so we can
+      // detect when the popup is dismissed (element becomes disconnected).
+      // Once dismissed, clear the stale cache entry.
+      try {
+        const sentinel = event.doc.createElementNS(
+          "http://www.w3.org/1999/xhtml",
+          "span",
+        ) as HTMLSpanElement;
+        sentinel.style.display = "none";
+        event.append(sentinel);
+
+        let wasConnected = false;
+        let checks = 0;
+        const maxChecks = 600; // safety cap ≈ 5 min
+
+        const watchSentinel = () => {
+          if (++checks > maxChecks) return;
+          if (sentinel.isConnected) {
+            wasConnected = true;
+            setTimeout(watchSentinel, 500);
+            return;
+          }
+          if (!wasConnected && checks <= 6) {
+            // Popup may not be mounted yet — retry briefly
+            setTimeout(watchSentinel, 200);
+            return;
+          }
+          if (wasConnected) {
+            // Popup was removed → clear cache only if it still holds *our* text
+            for (const key of keys) {
+              if (recentReaderSelectionCache.get(key) === selectedText) {
+                recentReaderSelectionCache.delete(key);
+              }
+            }
+          }
+        };
+        setTimeout(watchSentinel, 100);
+      } catch (_err) {
+        // If the sentinel couldn't be appended the cache won't auto-clear,
+        // but the plugin still works — just with the old stale-cache caveat.
+        ztoolkit.log("LLM: selection popup sentinel failed", _err);
+      }
+    } else {
+      // Event fired with empty text — clear any stale cache
+      for (const key of keys) {
+        recentReaderSelectionCache.delete(key);
       }
     }
   };
@@ -1746,6 +1792,7 @@ function getActiveReaderSelectionText(
     return normalizeSelectedText(selected);
   };
 
+  // 1. Check the reader's outer iframe document
   const readerDoc =
     (reader?._iframeWindow?.document as Document | undefined) ||
     (reader?._iframe?.contentDocument as Document | undefined) ||
@@ -1753,11 +1800,21 @@ function getActiveReaderSelectionText(
   const fromReaderDoc = selectionFrom(readerDoc);
   if (fromReaderDoc) return fromReaderDoc;
 
-  const fromSelectionPopup = normalizeSelectedText(
-    reader?._internalReader?._state?.selectionPopup?.annotation?.text || "",
-  );
-  if (fromSelectionPopup) return fromSelectionPopup;
+  // 2. Check the inner view iframe(s) (PDF text-layer, EPUB, snapshot)
+  const internalReader = reader?._internalReader;
+  const views = [internalReader?._primaryView, internalReader?._secondaryView];
+  for (const view of views) {
+    if (!view) continue;
+    const viewDoc =
+      (view._iframeWindow?.document as Document | undefined) ||
+      (view._iframe?.contentDocument as Document | undefined);
+    if (viewDoc) {
+      const fromView = selectionFrom(viewDoc);
+      if (fromView) return fromView;
+    }
+  }
 
+  // 3. Check the panel document and its iframes
   const fromPanelDoc = selectionFrom(panelDoc);
   if (fromPanelDoc) return fromPanelDoc;
 
@@ -1769,6 +1826,10 @@ function getActiveReaderSelectionText(
     if (fromFrame) return fromFrame;
   }
 
+  // 4. Cache fallback — populated by the renderTextSelectionPopup event
+  //    handler which also tracks popup lifecycle via a sentinel element.
+  //    When the popup is dismissed the sentinel becomes disconnected and
+  //    the cache entry is automatically cleared, preventing stale results.
   const itemId = reader?._item?.id || reader?.itemID;
   if (typeof itemId === "number") {
     const readerItem = Zotero.Items.get(itemId) || null;
@@ -1784,6 +1845,7 @@ function getActiveReaderSelectionText(
     const fromCache = recentReaderSelectionCache.get(key) || "";
     if (fromCache) return fromCache;
   }
+
   return "";
 }
 
