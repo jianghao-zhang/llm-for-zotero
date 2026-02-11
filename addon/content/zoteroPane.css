@@ -737,8 +737,10 @@
 .llm-actions {
   --llm-action-height: 36px;
   --llm-action-pill-padding: 0 14px;
-  --llm-action-icon-font-size: var(--llm-fs-11);
+  --llm-action-icon-font-size: var(--llm-fs-16);
   --llm-action-font-size: var(--llm-fs-11);
+  --llm-action-dropdown-slot-width: calc(1.2em + 12px);
+  --llm-action-dropdown-icon-right: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1001,8 +1003,8 @@
   padding-top: 6px;
   padding-bottom: 6px;
   padding-left: 12px;
-  /* Reserve chevron space proportionally as font scales up */
-  padding-right: calc(1.1em + 10px);
+  /* Reserve chevron space with a stable visual gap from label text */
+  padding-right: var(--llm-action-dropdown-slot-width);
 }
 
 .llm-model-btn.llm-model-btn-wrap-2line:not(.llm-model-btn-collapsed) {
@@ -1052,7 +1054,7 @@
   content: "▾";
   position: absolute;
   top: 50%;
-  right: 10px;
+  right: var(--llm-action-dropdown-icon-right);
   width: auto;
   height: auto;
   border-right: none;

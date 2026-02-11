@@ -3666,7 +3666,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const applyResponsiveActionButtonsLayout = () => {
     if (!modelBtn) return;
     const modelLabel = modelBtn.dataset.modelLabel || "default";
-    const modelShouldWrap =
+    const modelCanUseTwoLineWrap =
       [...(modelLabel || "").trim()].length >
       ACTION_LAYOUT_MODEL_WRAP_MIN_CHARS;
     const modelHint = modelBtn.dataset.modelHint || "";
@@ -3817,6 +3817,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const getModeRequiredWidth = (
       dropdownMode: DropdownMode,
       contextButtonMode: ContextButtonMode,
+      modelWrapMode: ModelWrapMode,
     ) => {
       const selectTextSlot = selectTextBtn?.parentElement as HTMLElement | null;
       const screenshotSlot = screenshotBtn?.parentElement as HTMLElement | null;
@@ -3844,7 +3845,9 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
               modelSlot,
               modelBtn,
               modelLabel,
-              modelShouldWrap ? ACTION_LAYOUT_MODEL_FULL_MAX_LINES : 1,
+              modelWrapMode === "wrap2"
+                ? ACTION_LAYOUT_MODEL_FULL_MAX_LINES
+                : 1,
             )
           : modelBtn
             ? ACTION_LAYOUT_DROPDOWN_ICON_WIDTH_PX
@@ -3878,10 +3881,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const doesModeFit = (
       dropdownMode: DropdownMode,
       contextButtonMode: ContextButtonMode,
+      modelWrapMode: ModelWrapMode,
     ) => {
       const modeRequiredWidth = getModeRequiredWidth(
         dropdownMode,
         contextButtonMode,
+        modelWrapMode,
       );
       const modeBuffer =
         dropdownMode === "full" && contextButtonMode === "full"
@@ -3894,10 +3899,12 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
     type DropdownMode = "icon" | "full";
     type ContextButtonMode = "icon" | "full";
+    type ModelWrapMode = "single" | "wrap2";
 
     const applyLayoutModes = (
       dropdownMode: DropdownMode,
       contextButtonMode: ContextButtonMode,
+      modelWrapMode: ModelWrapMode,
     ) => {
       setActionButtonLabel(
         selectTextBtn,
@@ -3918,7 +3925,7 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
       reasoningSlot?.classList.remove("llm-reasoning-dropdown-collapsed");
       modelBtn.classList.toggle(
         "llm-model-btn-wrap-2line",
-        modelShouldWrap && dropdownMode !== "icon",
+        dropdownMode !== "icon" && modelWrapMode === "wrap2",
       );
       modelBtn.textContent = modelLabel;
       modelBtn.title = modelHint;
@@ -3945,16 +3952,35 @@ function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const layoutHasIssues = (
       currentDropdownMode: DropdownMode,
       currentContextButtonMode: ContextButtonMode,
-    ) => !doesModeFit(currentDropdownMode, currentContextButtonMode);
+      currentModelWrapMode: ModelWrapMode,
+    ) =>
+      !doesModeFit(
+        currentDropdownMode,
+        currentContextButtonMode,
+        currentModelWrapMode,
+      );
 
-    const candidateModes: ReadonlyArray<[DropdownMode, ContextButtonMode]> = [
-      ["full", "full"],
-      ["full", "icon"],
-      ["icon", "icon"],
-    ];
-    for (const [dropdownMode, contextButtonMode] of candidateModes) {
-      applyLayoutModes(dropdownMode, contextButtonMode);
-      if (!layoutHasIssues(dropdownMode, contextButtonMode)) {
+    const candidateModes: ReadonlyArray<
+      [DropdownMode, ContextButtonMode, ModelWrapMode]
+    > = modelCanUseTwoLineWrap
+      ? [
+          ["full", "full", "single"],
+          ["full", "icon", "single"],
+          ["full", "icon", "wrap2"],
+          ["icon", "icon", "single"],
+        ]
+      : [
+          ["full", "full", "single"],
+          ["full", "icon", "single"],
+          ["icon", "icon", "single"],
+        ];
+    for (const [
+      dropdownMode,
+      contextButtonMode,
+      modelWrapMode,
+    ] of candidateModes) {
+      applyLayoutModes(dropdownMode, contextButtonMode, modelWrapMode);
+      if (!layoutHasIssues(dropdownMode, contextButtonMode, modelWrapMode)) {
         return;
       }
     }
