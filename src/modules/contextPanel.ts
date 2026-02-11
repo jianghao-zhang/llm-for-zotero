@@ -1910,16 +1910,55 @@ function getContextItemLabel(item: Zotero.Item): string {
   return `Attachment ${item.id}`;
 }
 
+function getFirstPdfChildAttachment(
+  item: Zotero.Item | null | undefined,
+): Zotero.Item | null {
+  if (!item || item.isAttachment()) return null;
+  const attachments = item.getAttachments();
+  for (const attachmentId of attachments) {
+    const attachment = Zotero.Items.get(attachmentId);
+    if (isSupportedContextAttachment(attachment)) {
+      return attachment;
+    }
+  }
+  return null;
+}
+
 function resolveContextSourceItem(
   panelItem: Zotero.Item,
 ): ResolvedContextSource {
-  void panelItem;
   const activeItem = getActiveContextAttachmentFromTabs();
   if (activeItem) {
     const label = getContextItemLabel(activeItem);
     return {
       contextItem: activeItem,
       statusText: `Using context: ${label} (active tab)`,
+    };
+  }
+
+  if (
+    panelItem.isAttachment() &&
+    panelItem.attachmentContentType === "application/pdf"
+  ) {
+    const label = getContextItemLabel(panelItem);
+    return {
+      contextItem: panelItem,
+      statusText: `using the selected ${label} as context`,
+    };
+  }
+
+  const parentItem =
+    panelItem.isAttachment() && panelItem.parentID
+      ? Zotero.Items.get(panelItem.parentID) || null
+      : panelItem;
+  const firstPdfChild = getFirstPdfChildAttachment(parentItem);
+  if (firstPdfChild && parentItem) {
+    const parentTitle =
+      sanitizeText(parentItem.getField("title") || "").trim() ||
+      `Item ${parentItem.id}`;
+    return {
+      contextItem: firstPdfChild,
+      statusText: `using first child item from ${parentTitle} as context`,
     };
   }
 
