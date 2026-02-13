@@ -62,4 +62,5 @@ export function setResponseMenuTarget(value: typeof responseMenuTarget) {
 // Screenshot selection state (per item)
 export const selectedImageCache = new Map<number, string[]>();
 export const selectedTextCache = new Map<number, string>();
+export const selectedTextPreviewExpandedCache = new Map<number, boolean>();
 export const recentReaderSelectionCache = new Map<number, string>();

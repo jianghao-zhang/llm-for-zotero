@@ -5,7 +5,11 @@ import {
   isLikelyCorruptedSelectedText,
   setStatus,
 } from "./textUtils";
-import { selectedTextCache, recentReaderSelectionCache } from "./state";
+import {
+  selectedTextCache,
+  selectedTextPreviewExpandedCache,
+  recentReaderSelectionCache,
+} from "./state";
 import type { ZoteroTabsState, ResolvedContextSource } from "./types";
 
 export function getActiveReaderForSelectedTab(): any | null {
@@ -393,15 +397,27 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
   const selectedText = selectedTextCache.get(itemId) || "";
   if (!selectedText) {
     previewBox.style.display = "none";
+    previewBox.classList.remove("expanded");
+    previewBox.setAttribute("aria-expanded", "false");
+    previewBox.title = "";
     previewText.textContent = "";
+    selectedTextPreviewExpandedCache.delete(itemId);
     if (previewWarning) previewWarning.style.display = "none";
     if (selectTextBtn) {
       selectTextBtn.classList.remove("llm-action-btn-active");
     }
     return;
   }
+  const expanded = selectedTextPreviewExpandedCache.get(itemId) === true;
   previewBox.style.display = "flex";
-  previewText.textContent = truncateSelectedText(selectedText);
+  previewBox.classList.toggle("expanded", expanded);
+  previewBox.setAttribute("aria-expanded", expanded ? "true" : "false");
+  previewBox.title = expanded
+    ? "Click to collapse selected context"
+    : "Click to expand selected context";
+  previewText.textContent = expanded
+    ? selectedText
+    : truncateSelectedText(selectedText);
   if (previewWarning) {
     previewWarning.style.display = isLikelyCorruptedSelectedText(selectedText)
       ? "block"
@@ -426,6 +442,7 @@ export function includeSelectedTextFromReader(
     return false;
   }
   selectedTextCache.set(item.id, selectedText);
+  selectedTextPreviewExpandedCache.set(item.id, false);
   applySelectedTextPreview(body, item.id);
   if (status) setStatus(status, "Selected text included", "ready");
   const inputEl = body.querySelector(

@@ -24,6 +24,7 @@ import {
   selectedReasoningCache,
   selectedImageCache,
   selectedTextCache,
+  selectedTextPreviewExpandedCache,
   setCancelledRequestId,
   currentAbortController,
   panelFontScalePercent,
@@ -135,6 +136,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const selectedContextClear = body.querySelector(
     "#llm-selected-context-clear",
   ) as HTMLButtonElement | null;
+  const selectedContextPanel = body.querySelector(
+    "#llm-selected-context",
+  ) as HTMLDivElement | null;
   const previewStrip = body.querySelector(
     "#llm-image-preview-strip",
   ) as HTMLDivElement | null;
@@ -1129,6 +1133,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     updateImagePreview();
     if (selectedText) {
       selectedTextCache.delete(item.id);
+      selectedTextPreviewExpandedCache.delete(item.id);
       updateSelectedTextPreview();
     }
     const selectedReasoning = getSelectedReasoning();
@@ -1598,8 +1603,47 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!item) return;
       selectedTextCache.delete(item.id);
+      selectedTextPreviewExpandedCache.delete(item.id);
       updateSelectedTextPreview();
       if (status) setStatus(status, "Selected text removed", "ready");
+    });
+  }
+
+  if (selectedContextPanel) {
+    selectedContextPanel.tabIndex = 0;
+    selectedContextPanel.setAttribute("role", "button");
+    const toggleSelectedContextExpanded = () => {
+      if (!item) return;
+      const selectedText = selectedTextCache.get(item.id) || "";
+      if (!selectedText) return;
+      const expanded = selectedTextPreviewExpandedCache.get(item.id) === true;
+      selectedTextPreviewExpandedCache.set(item.id, !expanded);
+      updateSelectedTextPreview();
+    };
+    selectedContextPanel.addEventListener("click", (e: Event) => {
+      const target = e.target as Node | null;
+      if (
+        selectedContextClear &&
+        target &&
+        selectedContextClear.contains(target)
+      )
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSelectedContextExpanded();
+    });
+    selectedContextPanel.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const target = e.target as Node | null;
+      if (
+        selectedContextClear &&
+        target &&
+        selectedContextClear.contains(target)
+      )
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      toggleSelectedContextExpanded();
     });
   }
 
@@ -1639,6 +1683,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         });
         selectedImageCache.delete(item.id);
         selectedTextCache.delete(item.id);
+        selectedTextPreviewExpandedCache.delete(item.id);
         updateImagePreview();
         updateSelectedTextPreview();
         refreshChat(body, item);

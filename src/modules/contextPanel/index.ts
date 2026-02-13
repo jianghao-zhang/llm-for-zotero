@@ -31,6 +31,7 @@ import {
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
   selectedTextCache,
+  selectedTextPreviewExpandedCache,
 } from "./state";
 import { clearConversation as clearStoredConversation } from "../../utils/chatStore";
 import { normalizeSelectedText, setStatus } from "./textUtils";
@@ -138,6 +139,7 @@ export function registerReaderSelectionTracking() {
       const addTextToPanel = () => {
         for (const key of keys) {
           selectedTextCache.set(key, selectedText);
+          selectedTextPreviewExpandedCache.set(key, false);
         }
         try {
           const mainWin = Zotero.getMainWindow();

@@ -854,6 +854,12 @@
   border: 1px solid var(--stroke-secondary);
   background: rgba(255, 255, 255, 0.06);
   color: var(--fill-primary);
+  cursor: pointer;
+}
+
+.llm-selected-context:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .llm-selected-context-top {
