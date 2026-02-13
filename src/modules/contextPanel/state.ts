@@ -63,4 +63,6 @@ export function setResponseMenuTarget(value: typeof responseMenuTarget) {
 export const selectedImageCache = new Map<number, string[]>();
 export const selectedTextCache = new Map<number, string>();
 export const selectedTextPreviewExpandedCache = new Map<number, boolean>();
+export const selectedImagePreviewExpandedCache = new Map<number, boolean>();
+export const selectedImagePreviewActiveIndexCache = new Map<number, number>();
 export const recentReaderSelectionCache = new Map<number, string>();

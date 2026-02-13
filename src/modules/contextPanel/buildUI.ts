@@ -238,21 +238,51 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   });
   imagePreview.style.display = "none";
 
-  const imagePreviewMeta = createElement(doc, "div", "llm-image-preview-meta", {
-    id: "llm-image-preview-meta",
-    textContent: "0 images selected",
-  });
+  const imagePreviewMeta = createElement(
+    doc,
+    "button",
+    "llm-image-preview-meta",
+    {
+      id: "llm-image-preview-meta",
+      type: "button",
+      textContent: "screenshots (0/5) embedded",
+      title: "Expand screenshots",
+    },
+  );
+  const imagePreviewExpanded = createElement(
+    doc,
+    "div",
+    "llm-image-preview-expanded",
+    {
+      id: "llm-image-preview-expanded",
+    },
+  );
   const previewStrip = createElement(doc, "div", "llm-image-preview-strip", {
     id: "llm-image-preview-strip",
   });
+  const previewLargeWrap = createElement(
+    doc,
+    "div",
+    "llm-image-preview-selected",
+    {
+      id: "llm-image-preview-selected",
+    },
+  );
+  const previewLargeImg = createElement(doc, "img", "llm-image-preview-selected-img", {
+    id: "llm-image-preview-selected-img",
+    alt: "Selected screenshot preview",
+  }) as HTMLImageElement;
+  previewLargeWrap.appendChild(previewLargeImg);
 
   const removeImgBtn = createElement(doc, "button", "llm-remove-img-btn", {
     id: "llm-remove-img",
+    type: "button",
     textContent: "Clear All",
     title: "Clear selected screenshots",
   });
 
-  imagePreview.append(imagePreviewMeta, previewStrip, removeImgBtn);
+  imagePreviewExpanded.append(previewStrip, previewLargeWrap, removeImgBtn);
+  imagePreview.append(imagePreviewMeta, imagePreviewExpanded);
   inputSection.appendChild(imagePreview);
 
   const inputBox = createElement(doc, "textarea", "llm-input", {

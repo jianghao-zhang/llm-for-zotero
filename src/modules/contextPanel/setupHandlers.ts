@@ -23,6 +23,8 @@ import {
   selectedModelCache,
   selectedReasoningCache,
   selectedImageCache,
+  selectedImagePreviewExpandedCache,
+  selectedImagePreviewActiveIndexCache,
   selectedTextCache,
   selectedTextPreviewExpandedCache,
   setCancelledRequestId,
@@ -142,9 +144,18 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const previewStrip = body.querySelector(
     "#llm-image-preview-strip",
   ) as HTMLDivElement | null;
+  const previewExpanded = body.querySelector(
+    "#llm-image-preview-expanded",
+  ) as HTMLDivElement | null;
+  const previewSelected = body.querySelector(
+    "#llm-image-preview-selected",
+  ) as HTMLDivElement | null;
+  const previewSelectedImg = body.querySelector(
+    "#llm-image-preview-selected-img",
+  ) as HTMLImageElement | null;
   const previewMeta = body.querySelector(
     "#llm-image-preview-meta",
-  ) as HTMLDivElement | null;
+  ) as HTMLButtonElement | null;
   const removeImgBtn = body.querySelector(
     "#llm-remove-img",
   ) as HTMLButtonElement | null;
@@ -366,6 +377,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       !item ||
       !imagePreview ||
       !previewStrip ||
+      !previewExpanded ||
+      !previewSelected ||
+      !previewSelectedImg ||
       !previewMeta ||
       !screenshotBtn
     )
@@ -378,16 +392,59 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     let selectedImages = selectedImageCache.get(item.id) || [];
     if (screenshotUnsupported && selectedImages.length) {
       selectedImageCache.delete(item.id);
+      selectedImagePreviewExpandedCache.delete(item.id);
+      selectedImagePreviewActiveIndexCache.delete(item.id);
       selectedImages = [];
     }
     if (selectedImages.length) {
+      const imageCount = selectedImages.length;
+      let expanded = selectedImagePreviewExpandedCache.get(item.id);
+      if (typeof expanded !== "boolean") {
+        expanded = true;
+        selectedImagePreviewExpandedCache.set(item.id, true);
+      }
+
+      let activeIndex = selectedImagePreviewActiveIndexCache.get(item.id);
+      if (typeof activeIndex !== "number" || !Number.isFinite(activeIndex)) {
+        activeIndex = imageCount - 1;
+      }
+      activeIndex = Math.max(0, Math.min(imageCount - 1, Math.floor(activeIndex)));
+      selectedImagePreviewActiveIndexCache.set(item.id, activeIndex);
+
+      previewMeta.textContent = `screenshots (${imageCount}/${MAX_SELECTED_IMAGES}) embedded`;
+      previewMeta.classList.toggle("expanded", expanded);
+      previewMeta.setAttribute("aria-expanded", expanded ? "true" : "false");
+      previewMeta.title = expanded ? "Collapse screenshots" : "Expand screenshots";
+
+      imagePreview.style.display = "flex";
+      previewExpanded.hidden = !expanded;
+      previewExpanded.style.display = expanded ? "flex" : "none";
+      previewSelected.style.display = expanded ? "block" : "none";
+
       previewStrip.innerHTML = "";
       for (const [index, imageUrl] of selectedImages.entries()) {
         const thumbItem = createElement(ownerDoc, "div", "llm-preview-item");
+        const thumbBtn = createElement(ownerDoc, "button", "llm-preview-thumb", {
+          type: "button",
+          title: `Screenshot ${index + 1}`,
+        }) as HTMLButtonElement;
+        thumbBtn.classList.toggle("active", index === activeIndex);
         const thumb = createElement(ownerDoc, "img", "llm-preview-img", {
           alt: "Selected screenshot",
         }) as HTMLImageElement;
         thumb.src = imageUrl;
+        thumbBtn.appendChild(thumb);
+        thumbBtn.addEventListener("click", (e: Event) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!item) return;
+          selectedImagePreviewActiveIndexCache.set(item.id, index);
+          if (selectedImagePreviewExpandedCache.get(item.id) !== true) {
+            selectedImagePreviewExpandedCache.set(item.id, true);
+          }
+          updateImagePreview();
+        });
+
         const removeOneBtn = createElement(
           ownerDoc,
           "button",
@@ -407,8 +464,19 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           const nextImages = currentImages.filter((_, i) => i !== index);
           if (nextImages.length) {
             selectedImageCache.set(item.id, nextImages);
+            let nextActive =
+              selectedImagePreviewActiveIndexCache.get(item.id) || 0;
+            if (index < nextActive) {
+              nextActive -= 1;
+            }
+            if (nextActive >= nextImages.length) {
+              nextActive = nextImages.length - 1;
+            }
+            selectedImagePreviewActiveIndexCache.set(item.id, nextActive);
           } else {
             selectedImageCache.delete(item.id);
+            selectedImagePreviewExpandedCache.delete(item.id);
+            selectedImagePreviewActiveIndexCache.delete(item.id);
           }
           updateImagePreview();
           if (status) {
@@ -419,22 +487,32 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             );
           }
         });
-        thumbItem.append(thumb, removeOneBtn);
+        thumbItem.append(thumbBtn, removeOneBtn);
         previewStrip.appendChild(thumbItem);
       }
-      previewMeta.textContent = `${selectedImages.length}/${MAX_SELECTED_IMAGES} screenshot${selectedImages.length > 1 ? "s" : ""}`;
-      imagePreview.style.display = "flex";
+      previewSelectedImg.src = selectedImages[activeIndex];
+      previewSelectedImg.alt = `Selected screenshot ${activeIndex + 1}`;
       screenshotBtn.disabled =
-        screenshotUnsupported || selectedImages.length >= MAX_SELECTED_IMAGES;
+        screenshotUnsupported || imageCount >= MAX_SELECTED_IMAGES;
       screenshotBtn.title = screenshotUnsupported
         ? screenshotDisabledHint
-        : selectedImages.length >= MAX_SELECTED_IMAGES
+        : imageCount >= MAX_SELECTED_IMAGES
           ? `Max ${MAX_SELECTED_IMAGES} screenshots`
-          : `Add screenshot (${selectedImages.length}/${MAX_SELECTED_IMAGES})`;
+          : `Add screenshot (${imageCount}/${MAX_SELECTED_IMAGES})`;
     } else {
       imagePreview.style.display = "none";
+      previewExpanded.hidden = true;
+      previewExpanded.style.display = "none";
       previewStrip.innerHTML = "";
-      previewMeta.textContent = "0 images selected";
+      previewSelected.style.display = "none";
+      previewSelectedImg.removeAttribute("src");
+      previewSelectedImg.alt = "Selected screenshot preview";
+      previewMeta.textContent = `screenshots (0/${MAX_SELECTED_IMAGES}) embedded`;
+      previewMeta.classList.remove("expanded");
+      previewMeta.setAttribute("aria-expanded", "false");
+      previewMeta.title = "Expand screenshots";
+      selectedImagePreviewExpandedCache.delete(item.id);
+      selectedImagePreviewActiveIndexCache.delete(item.id);
       screenshotBtn.disabled = screenshotUnsupported;
       screenshotBtn.title = screenshotUnsupported
         ? screenshotDisabledHint
@@ -1130,6 +1208,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       : selectedImages;
     // Clear selected images after sending
     selectedImageCache.delete(item.id);
+    selectedImagePreviewExpandedCache.delete(item.id);
+    selectedImagePreviewActiveIndexCache.delete(item.id);
     updateImagePreview();
     if (selectedText) {
       selectedTextCache.delete(item.id);
@@ -1371,6 +1451,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             MAX_SELECTED_IMAGES,
           );
           selectedImageCache.set(item.id, nextImages);
+          selectedImagePreviewExpandedCache.set(item.id, true);
+          selectedImagePreviewActiveIndexCache.set(
+            item.id,
+            nextImages.length - 1,
+          );
           updateImagePreview();
           if (status) {
             setStatus(
@@ -1585,12 +1670,27 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   }
 
   // Remove image button
+  if (previewMeta) {
+    previewMeta.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      const selectedImages = selectedImageCache.get(item.id) || [];
+      if (!selectedImages.length) return;
+      const expanded = selectedImagePreviewExpandedCache.get(item.id) === true;
+      selectedImagePreviewExpandedCache.set(item.id, !expanded);
+      updateImagePreview();
+    });
+  }
+
   if (removeImgBtn) {
     removeImgBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
       selectedImageCache.delete(item.id);
+      selectedImagePreviewExpandedCache.delete(item.id);
+      selectedImagePreviewActiveIndexCache.delete(item.id);
       updateImagePreview();
       const status = body.querySelector("#llm-status") as HTMLElement | null;
       if (status) setStatus(status, "Screenshots cleared", "ready");
@@ -1682,6 +1782,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           ztoolkit.log("LLM: Failed to clear persisted chat history", err);
         });
         selectedImageCache.delete(item.id);
+        selectedImagePreviewExpandedCache.delete(item.id);
+        selectedImagePreviewActiveIndexCache.delete(item.id);
         selectedTextCache.delete(item.id);
         selectedTextPreviewExpandedCache.delete(item.id);
         updateImagePreview();
