@@ -13,6 +13,7 @@ declare namespace _ZoteroTypes {
       "apiKey": string;
       "model": string;
       "systemPrompt": string;
+      "showPopupAddText": boolean;
       "temperaturePrimary": string;
       "maxTokensPrimary": string;
       "temperatureSecondary": string;

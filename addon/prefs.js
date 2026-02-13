@@ -4,6 +4,7 @@ pref("apiBase", "");
 pref("apiKey", "");
 pref("model", "gpt-4o-mini");
 pref("systemPrompt", "");
+pref("showPopupAddText", true);
 pref("temperaturePrimary", "0.3");
 pref("maxTokensPrimary", "4096");
 pref("temperatureSecondary", "0.3");

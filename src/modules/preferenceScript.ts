@@ -301,6 +301,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const systemPromptInput = doc.querySelector(
     `#${config.addonRef}-system-prompt`,
   ) as HTMLTextAreaElement | null;
+  const popupAddTextEnabledInput = doc.querySelector(
+    `#${config.addonRef}-popup-add-text-enabled`,
+  ) as HTMLInputElement | null;
   const profileInputs = new Map<ProfileKind, ProfileInputRefs>();
 
   for (const profile of PROFILE_CONFIGS) {
@@ -365,6 +368,22 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     systemPromptInput.value = getPref("systemPrompt") || "";
     systemPromptInput.addEventListener("input", () => {
       setPref("systemPrompt", systemPromptInput.value);
+    });
+  }
+
+  if (popupAddTextEnabledInput) {
+    const prefValue = Zotero.Prefs.get(
+      `${config.prefsPrefix}.showPopupAddText`,
+      true,
+    );
+    popupAddTextEnabledInput.checked =
+      prefValue !== false && `${prefValue || ""}`.toLowerCase() !== "false";
+    popupAddTextEnabledInput.addEventListener("change", () => {
+      Zotero.Prefs.set(
+        `${config.prefsPrefix}.showPopupAddText`,
+        popupAddTextEnabledInput.checked,
+        true,
+      );
     });
   }
 

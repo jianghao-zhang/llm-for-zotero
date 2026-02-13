@@ -30,9 +30,10 @@ import {
   readerContextPanelRegistered,
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
+  selectedTextCache,
 } from "./state";
 import { clearConversation as clearStoredConversation } from "../../utils/chatStore";
-import { normalizeSelectedText } from "./textUtils";
+import { normalizeSelectedText, setStatus } from "./textUtils";
 import { buildUI } from "./buildUI";
 import { setupHandlers } from "./setupHandlers";
 import { ensureConversationLoaded } from "./chat";
@@ -41,6 +42,7 @@ import { refreshChat } from "./chat";
 import {
   getActiveContextAttachmentFromTabs,
   getItemSelectionCacheKeys,
+  applySelectedTextPreview,
 } from "./contextResolution";
 import { ensurePDFTextCached } from "./pdfContext";
 
@@ -123,19 +125,132 @@ export function registerReaderSelectionTracking() {
     const item = Zotero.Items.get(itemId) || null;
     const cacheKeys = getItemSelectionCacheKeys(item);
     const keys = cacheKeys.length ? cacheKeys : [itemId];
+    const popupPrefValue = Zotero.Prefs.get(
+      `${config.prefsPrefix}.showPopupAddText`,
+      true,
+    );
+    const showAddTextInPopup =
+      popupPrefValue !== false &&
+      `${popupPrefValue || ""}`.toLowerCase() !== "false";
 
     if (selectedText) {
+      let popupSentinelEl: HTMLElement | null = null;
+      const addTextToPanel = () => {
+        for (const key of keys) {
+          selectedTextCache.set(key, selectedText);
+        }
+        try {
+          const mainWin = Zotero.getMainWindow();
+          const panelRoot = mainWin?.document.querySelector(
+            "#llm-main",
+          ) as HTMLDivElement | null;
+          if (!panelRoot) return;
+
+          const panelItemId = Number(panelRoot.dataset.itemId || 0);
+          if (!Number.isFinite(panelItemId) || panelItemId <= 0) return;
+          if (!keys.includes(panelItemId)) return;
+
+          const panelBody = panelRoot.parentElement || panelRoot;
+          applySelectedTextPreview(panelBody, panelItemId);
+
+          const status = panelBody.querySelector("#llm-status") as
+            | HTMLElement
+            | null;
+          if (status) setStatus(status, "Selected text included", "ready");
+
+          const inputEl = panelBody.querySelector("#llm-input") as
+            | HTMLTextAreaElement
+            | null;
+          inputEl?.focus();
+        } catch (err) {
+          ztoolkit.log("LLM: Add Text popup action failed", err);
+        }
+      };
+      const stripPopupRowChrome = (
+        row: HTMLElement | null,
+        hideRow: boolean = false,
+      ) => {
+        if (!row) return;
+        const HTMLElementCtor = event.doc.defaultView?.HTMLElement;
+        if (hideRow) {
+          row.style.display = "none";
+        } else {
+          row.style.width = "100%";
+          row.style.padding = "0 12px";
+          row.style.margin = "0";
+          row.style.borderTop = "none";
+          row.style.borderBottom = "none";
+          row.style.boxShadow = "none";
+          row.style.background = "transparent";
+        }
+        const isSeparator = (el: Element | null): el is HTMLElement => {
+          if (!el || !HTMLElementCtor || !(el instanceof HTMLElementCtor))
+            return false;
+          const tag = el.tagName.toLowerCase();
+          return tag === "hr" || el.getAttribute("role") === "separator";
+        };
+        const prev = row.previousElementSibling;
+        const next = row.nextElementSibling;
+        if (isSeparator(prev)) prev.style.display = "none";
+        if (isSeparator(next)) next.style.display = "none";
+      };
+
+      if (showAddTextInPopup) {
+        try {
+          const addTextBtn = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "button",
+          ) as HTMLButtonElement;
+          addTextBtn.type = "button";
+          addTextBtn.textContent = "Add Text";
+          addTextBtn.title = "Add selected text to LLM panel";
+          addTextBtn.style.cssText = [
+            "display:block",
+            "width:100%",
+            "margin:0",
+            "padding:6px 8px",
+            "box-sizing:border-box",
+            "border:1px solid rgba(130,130,130,0.38)",
+            "border-radius:6px",
+            "background:rgba(255,255,255,0.04)",
+            "color:#fff",
+            "font-size:12px",
+            "line-height:1.25",
+            "text-align:center",
+            "cursor:pointer",
+          ].join(";");
+          addTextBtn.addEventListener("click", (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+            addTextToPanel();
+          });
+          event.append(addTextBtn);
+          popupSentinelEl = addTextBtn;
+          stripPopupRowChrome(addTextBtn.parentElement as HTMLElement | null);
+        } catch (err) {
+          ztoolkit.log("LLM: failed to append Add Text popup button", err);
+        }
+      }
+
       for (const key of keys) {
         recentReaderSelectionCache.set(key, selectedText);
       }
 
       try {
-        const sentinel = event.doc.createElementNS(
-          "http://www.w3.org/1999/xhtml",
-          "span",
-        ) as HTMLSpanElement;
-        sentinel.style.display = "none";
-        event.append(sentinel);
+        let sentinel = popupSentinelEl;
+        if (!sentinel) {
+          const fallback = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "span",
+          ) as HTMLSpanElement;
+          fallback.style.display = "none";
+          event.append(fallback);
+          stripPopupRowChrome(
+            fallback.parentElement as HTMLElement | null,
+            true,
+          );
+          sentinel = fallback;
+        }
 
         let wasConnected = false;
         let checks = 0;

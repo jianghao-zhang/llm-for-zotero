@@ -32,6 +32,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
 
   // Main container
   const container = createElement(doc, "div", "llm-panel", { id: "llm-main" });
+  container.dataset.itemId = hasItem && item ? `${item.id}` : "";
 
   // Header section
   const header = createElement(doc, "div", "llm-header");
