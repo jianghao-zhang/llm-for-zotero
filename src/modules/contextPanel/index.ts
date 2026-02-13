@@ -80,11 +80,11 @@ export function registerReaderContextPanel() {
     pluginID: config.addonID,
     header: {
       l10nID: getLocaleID("llm-panel-head"),
-      icon: `chrome://${config.addonRef}/content/icons/neuron.jpg`,
+      icon: `chrome://${config.addonRef}/content/icons/icon-20.png`,
     },
     sidenav: {
       l10nID: getLocaleID("llm-panel-sidenav-tooltip"),
-      icon: `chrome://${config.addonRef}/content/icons/neuron.jpg`,
+      icon: `chrome://${config.addonRef}/content/icons/icon-20.png`,
     },
     onItemChange: ({ setEnabled, tabType }) => {
       setEnabled(tabType === "reader" || tabType === "library");

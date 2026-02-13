@@ -52,7 +52,7 @@ function registerPrefsPane() {
     pluginID: addon.data.config.addonID,
     src: `chrome://${addon.data.config.addonRef}/content/preferences.xhtml`,
     label: "zotero-llm",
-    image: `chrome://${addon.data.config.addonRef}/content/icons/neuron.jpg`,
+    image: `chrome://${addon.data.config.addonRef}/content/icons/icon-20.png`,
   });
 }
 

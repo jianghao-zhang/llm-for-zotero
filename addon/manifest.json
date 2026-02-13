@@ -6,8 +6,8 @@
   "homepage_url": "__homepage__",
   "author": "__author__",
   "icons": {
-    "48": "content/icons/neuron.jpg",
-    "96": "content/icons/neuron.jpg"
+    "48": "content/icons/icon-48.png",
+    "96": "content/icons/icon-96.png"
   },
   "applications": {
     "zotero": {
