@@ -93,6 +93,146 @@ export function getConversationKey(item: Zotero.Item): number {
   return item.id;
 }
 
+type ChatScrollMode = "followBottom" | "manual";
+
+interface ChatScrollSnapshot {
+  mode: ChatScrollMode;
+  scrollTop: number;
+  updatedAt: number;
+}
+
+const chatScrollSnapshots = new Map<number, ChatScrollSnapshot>();
+const followBottomStabilizers = new Map<
+  number,
+  { rafId: number | null; timeoutId: number | null }
+>();
+
+function getMaxScrollTop(chatBox: HTMLDivElement): number {
+  return Math.max(0, chatBox.scrollHeight - chatBox.clientHeight);
+}
+
+function clampScrollTop(chatBox: HTMLDivElement, scrollTop: number): number {
+  return Math.max(0, Math.min(getMaxScrollTop(chatBox), scrollTop));
+}
+
+function isNearBottom(chatBox: HTMLDivElement): boolean {
+  const distanceFromBottom =
+    chatBox.scrollHeight - chatBox.clientHeight - chatBox.scrollTop;
+  return distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
+}
+
+function buildChatScrollSnapshot(chatBox: HTMLDivElement): ChatScrollSnapshot {
+  const mode: ChatScrollMode = isNearBottom(chatBox)
+    ? "followBottom"
+    : "manual";
+  return {
+    mode,
+    scrollTop: clampScrollTop(chatBox, chatBox.scrollTop),
+    updatedAt: Date.now(),
+  };
+}
+
+function persistChatScrollSnapshotByKey(
+  conversationKey: number,
+  chatBox: HTMLDivElement,
+): void {
+  chatScrollSnapshots.set(conversationKey, buildChatScrollSnapshot(chatBox));
+}
+
+export function persistChatScrollSnapshot(
+  item: Zotero.Item,
+  chatBox: HTMLDivElement,
+): void {
+  persistChatScrollSnapshotByKey(getConversationKey(item), chatBox);
+}
+
+function applyChatScrollSnapshot(
+  chatBox: HTMLDivElement,
+  snapshot: ChatScrollSnapshot,
+): void {
+  if (snapshot.mode === "followBottom") {
+    chatBox.scrollTop = chatBox.scrollHeight;
+    return;
+  }
+  chatBox.scrollTop = clampScrollTop(chatBox, snapshot.scrollTop);
+}
+
+function scheduleFollowBottomStabilization(
+  body: Element,
+  conversationKey: number,
+  chatBox: HTMLDivElement,
+): void {
+  const win = body.ownerDocument?.defaultView;
+  if (!win) return;
+
+  const clearFollowBottomStabilization = () => {
+    const active = followBottomStabilizers.get(conversationKey);
+    if (!active) return;
+    if (typeof active.rafId === "number") {
+      win.cancelAnimationFrame(active.rafId);
+    }
+    if (typeof active.timeoutId === "number") {
+      win.clearTimeout(active.timeoutId);
+    }
+    followBottomStabilizers.delete(conversationKey);
+  };
+
+  clearFollowBottomStabilization();
+
+  const stickToBottomIfNeeded = () => {
+    const snapshot = chatScrollSnapshots.get(conversationKey);
+    if (!snapshot || snapshot.mode !== "followBottom") return;
+    if (!chatBox.isConnected) return;
+    chatBox.scrollTop = chatBox.scrollHeight;
+    persistChatScrollSnapshotByKey(conversationKey, chatBox);
+  };
+
+  const handle = {
+    rafId: null as number | null,
+    timeoutId: null as number | null,
+  };
+  handle.rafId = win.requestAnimationFrame(() => {
+    stickToBottomIfNeeded();
+    handle.rafId = null;
+  });
+  handle.timeoutId = win.setTimeout(() => {
+    stickToBottomIfNeeded();
+    clearFollowBottomStabilization();
+  }, 80);
+  followBottomStabilizers.set(conversationKey, handle);
+}
+
+export function applyChatScrollPolicy(
+  item: Zotero.Item,
+  chatBox: HTMLDivElement,
+): void {
+  const conversationKey = getConversationKey(item);
+  const snapshot =
+    chatScrollSnapshots.get(conversationKey) ||
+    buildChatScrollSnapshot(chatBox);
+  applyChatScrollSnapshot(chatBox, snapshot);
+  persistChatScrollSnapshotByKey(conversationKey, chatBox);
+}
+
+/**
+ * Persist scroll for the chat currently rendered in `body`, if available.
+ * Used before panel re-render to avoid scroll jumps when the chat box node
+ * gets recreated.
+ */
+export function persistChatScrollSnapshotFromBody(body: Element): void {
+  const panel = body.querySelector("#llm-main") as HTMLDivElement | null;
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
+  if (!panel || !chatBox) return;
+  if (!chatBox.childElementCount) return;
+
+  const panelItemId = Number(panel.dataset.itemId || 0);
+  if (!Number.isFinite(panelItemId) || panelItemId <= 0) return;
+  const panelItem = Zotero.Items.get(panelItemId) || null;
+  if (!panelItem) return;
+
+  persistChatScrollSnapshot(panelItem, chatBox);
+}
+
 export async function persistConversationMessage(
   conversationKey: number,
   message: StoredChatMessage,
@@ -409,6 +549,7 @@ export async function sendQuestion(
     timestamp: Date.now(),
     modelName: effectiveModel,
     streaming: true,
+    reasoningOpen: false,
   };
   history.push(assistantMessage);
   if (history.length > PERSISTED_HISTORY_LIMIT) {
@@ -493,9 +634,6 @@ export async function sendQuestion(
         queueRefresh();
       },
       (reasoning: ReasoningEvent) => {
-        if (typeof assistantMessage.reasoningOpen !== "boolean") {
-          assistantMessage.reasoningOpen = true;
-        }
         if (reasoning.summary) {
           assistantMessage.reasoningSummary = appendReasoningPart(
             assistantMessage.reasoningSummary,
@@ -567,11 +705,6 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
   const doc = body.ownerDocument!;
-  const prevScrollTop = chatBox.scrollTop;
-  const distanceFromBottom =
-    chatBox.scrollHeight - chatBox.clientHeight - chatBox.scrollTop;
-  const shouldStickToBottom =
-    distanceFromBottom <= AUTO_SCROLL_BOTTOM_THRESHOLD;
 
   if (!item) {
     chatBox.innerHTML = `
@@ -584,6 +717,12 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   }
 
   const conversationKey = getConversationKey(item);
+  const hasExistingRenderedContent = chatBox.childElementCount > 0;
+  const cachedSnapshot = chatScrollSnapshots.get(conversationKey);
+  const baselineSnapshot =
+    !hasExistingRenderedContent && cachedSnapshot
+      ? cachedSnapshot
+      : buildChatScrollSnapshot(chatBox);
   const history = chatHistory.get(conversationKey) || [];
 
   if (history.length === 0) {
@@ -825,10 +964,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       if (hasReasoningSummary || hasReasoningDetails) {
         const details = doc.createElement("details") as HTMLDetailsElement;
         details.className = "llm-reasoning";
-        details.open =
-          typeof msg.reasoningOpen === "boolean"
-            ? msg.reasoningOpen
-            : Boolean(msg.streaming);
+        details.open = Boolean(msg.reasoningOpen);
 
         const summary = doc.createElement("summary") as HTMLElement;
         summary.className = "llm-reasoning-summary";
@@ -924,9 +1060,21 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     chatBox.appendChild(wrapper);
   }
 
-  if (shouldStickToBottom) {
-    chatBox.scrollTop = chatBox.scrollHeight;
+  applyChatScrollSnapshot(chatBox, baselineSnapshot);
+  persistChatScrollSnapshotByKey(conversationKey, chatBox);
+  if (baselineSnapshot.mode === "followBottom") {
+    scheduleFollowBottomStabilization(body, conversationKey, chatBox);
   } else {
-    chatBox.scrollTop = prevScrollTop;
+    const win = body.ownerDocument?.defaultView;
+    const active = followBottomStabilizers.get(conversationKey);
+    if (active && win) {
+      if (typeof active.rafId === "number") {
+        win.cancelAnimationFrame(active.rafId);
+      }
+      if (typeof active.timeoutId === "number") {
+        win.clearTimeout(active.timeoutId);
+      }
+      followBottomStabilizers.delete(conversationKey);
+    }
   }
 }

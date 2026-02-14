@@ -37,7 +37,10 @@ import { clearConversation as clearStoredConversation } from "../../utils/chatSt
 import { normalizeSelectedText, setStatus } from "./textUtils";
 import { buildUI } from "./buildUI";
 import { setupHandlers } from "./setupHandlers";
-import { ensureConversationLoaded } from "./chat";
+import {
+  ensureConversationLoaded,
+  persistChatScrollSnapshotFromBody,
+} from "./chat";
 import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
 import {
@@ -91,6 +94,8 @@ export function registerReaderContextPanel() {
       return true;
     },
     onRender: ({ body, item }) => {
+      // Preserve existing chat scroll before the panel DOM is rebuilt.
+      persistChatScrollSnapshotFromBody(body);
       buildUI(body, item);
     },
     onAsyncRender: async ({ body, item }) => {

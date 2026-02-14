@@ -57,8 +57,10 @@ import {
 import {
   sendQuestion,
   refreshChat,
+  applyChatScrollPolicy,
   getConversationKey,
   ensureConversationLoaded,
+  persistChatScrollSnapshot,
   copyTextToClipboard,
   copyRenderedMarkdownToClipboard,
   detectReasoningProvider,
@@ -178,6 +180,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     "#llm-export-note",
   ) as HTMLButtonElement | null;
   const status = body.querySelector("#llm-status") as HTMLElement | null;
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
 
   if (!inputBox || !sendBtn) {
     ztoolkit.log("LLM: Could not find input or send button");
@@ -191,6 +194,25 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   }
   panelRoot.tabIndex = 0;
   applyPanelFontScale(panelRoot);
+
+  const persistCurrentChatScrollSnapshot = () => {
+    if (!item || !chatBox || !chatBox.childElementCount) return;
+    persistChatScrollSnapshot(item, chatBox);
+  };
+
+  if (item && chatBox) {
+    const persistScroll = () => {
+      if (!chatBox.childElementCount) return;
+      persistChatScrollSnapshot(item, chatBox);
+    };
+    chatBox.addEventListener("scroll", persistScroll, { passive: true });
+  }
+
+  // Capture scroll before click/focus interactions that may trigger a panel
+  // re-render, so restore uses the most recent user position.
+  body.addEventListener("pointerdown", persistCurrentChatScrollSnapshot, true);
+  body.addEventListener("focusin", persistCurrentChatScrollSnapshot, true);
+
   const MODEL_MENU_OPEN_CLASS = "llm-model-menu-open";
   const REASONING_MENU_OPEN_CLASS = "llm-reasoning-menu-open";
   const setFloatingMenuOpen = (
@@ -1169,6 +1191,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   if (ResizeObserverCtor && panelRoot && modelBtn) {
     const ro = new ResizeObserverCtor(() => {
       applyResponsiveActionButtonsLayout();
+      if (item && chatBox) {
+        applyChatScrollPolicy(item, chatBox);
+      }
     });
     ro.observe(panelRoot);
     if (actionsRow) ro.observe(actionsRow);
