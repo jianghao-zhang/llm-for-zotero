@@ -32,13 +32,6 @@ import {
   selectedImagePreviewExpandedCache,
   selectedImagePreviewActiveIndexCache,
   selectedTextCache,
-  selectedTextAutoSyncCache,
-  selectedTextSourceCache,
-  selectedTextReaderSelectionCache,
-  selectedTextPanelSelectionCache,
-  selectedTextReaderUpdatedAtCache,
-  selectedTextPanelUpdatedAtCache,
-  selectedTextSuppressedSelectionCache,
   selectedTextPreviewExpandedCache,
   setCancelledRequestId,
   currentAbortController,
@@ -84,6 +77,7 @@ import {
 import {
   getActiveReaderSelectionText,
   applySelectedTextPreview,
+  includeSelectedTextFromReader,
 } from "./contextResolution";
 import { captureScreenshotSelection, optimizeImageDataUrl } from "./screenshot";
 import {
@@ -163,9 +157,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const selectedContextClear = body.querySelector(
     "#llm-selected-context-clear",
   ) as HTMLButtonElement | null;
-  const selectedContextLabel = body.querySelector(
-    "#llm-selected-context-label",
-  ) as HTMLDivElement | null;
   const selectedContextPanel = body.querySelector(
     "#llm-selected-context",
   ) as HTMLDivElement | null;
@@ -447,30 +438,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedFilePinnedCache.delete(itemId);
   };
 
-  const isSelectedTextAutoSyncEnabled = (itemId: number) =>
-    selectedTextAutoSyncCache.get(itemId) !== false;
-  const setSelectedTextAutoSyncEnabled = (itemId: number, enabled: boolean) => {
-    selectedTextAutoSyncCache.set(itemId, enabled);
-  };
-  const updateSelectedTextSyncToggle = () => {
-    if (!item) return;
-    const autoSyncEnabled = isSelectedTextAutoSyncEnabled(item.id);
-    if (selectTextBtn) {
-      selectTextBtn.classList.toggle("llm-action-btn-active", autoSyncEnabled);
-      selectTextBtn.title = autoSyncEnabled
-        ? "Disable selection tracking"
-        : "Enable selection tracking";
-    }
-  };
-
   const clearSelectedTextState = (itemId: number) => {
     selectedTextCache.delete(itemId);
     selectedTextPreviewExpandedCache.delete(itemId);
-    selectedTextSourceCache.delete(itemId);
-    selectedTextReaderSelectionCache.delete(itemId);
-    selectedTextPanelSelectionCache.delete(itemId);
-    selectedTextReaderUpdatedAtCache.delete(itemId);
-    selectedTextPanelUpdatedAtCache.delete(itemId);
   };
 
   // Helper to update image preview UI
@@ -780,127 +750,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   const updateSelectedTextPreview = () => {
     if (!item) return;
-    if (selectedContextLabel) {
-      const selectedText = selectedTextCache.get(item.id) || "";
-      const source = selectedTextSourceCache.get(item.id);
-      const sourceLabel =
-        source === "reader" ? "Reader" : source === "panel" ? "Panel" : "Manual";
-      selectedContextLabel.textContent = selectedText
-        ? `Selected Context · ${sourceLabel}`
-        : "Selected Context";
-    }
     applySelectedTextPreview(body, item.id);
-    updateSelectedTextSyncToggle();
-  };
-
-  const syncSelectedTextFromReader = () => {
-    if (!item) return;
-    if (!isSelectedTextAutoSyncEnabled(item.id)) return;
-    const liveReaderSelectedText = getActiveReaderSelectionText(
-      body.ownerDocument as Document,
-      item,
-      { allowCacheFallback: false, readerOnly: true },
-    );
-    const livePanelSelectedText = getActiveReaderSelectionText(
-      body.ownerDocument as Document,
-      item,
-      { allowCacheFallback: false, panelOnly: true },
-    );
-    const now = Date.now();
-    const prevReaderSelectedText = selectedTextReaderSelectionCache.get(item.id) || "";
-    const prevPanelSelectedText = selectedTextPanelSelectionCache.get(item.id) || "";
-    if (liveReaderSelectedText !== prevReaderSelectedText) {
-      selectedTextReaderSelectionCache.set(item.id, liveReaderSelectedText);
-      if (liveReaderSelectedText) {
-        selectedTextReaderUpdatedAtCache.set(item.id, now);
-      }
-    }
-    if (livePanelSelectedText !== prevPanelSelectedText) {
-      selectedTextPanelSelectionCache.set(item.id, livePanelSelectedText);
-      if (livePanelSelectedText) {
-        selectedTextPanelUpdatedAtCache.set(item.id, now);
-      }
-    }
-
-    const activeElement = (body.ownerDocument as Document)
-      .activeElement as Element | null;
-    const isFocusInsidePanel = activeElement ? body.contains(activeElement) : false;
-    const readerUpdatedAt = selectedTextReaderUpdatedAtCache.get(item.id) || 0;
-    const panelUpdatedAt = selectedTextPanelUpdatedAtCache.get(item.id) || 0;
-    let liveSelectionSource: "reader" | "panel" | null = null;
-    let liveSelectedText = "";
-    if (liveReaderSelectedText && livePanelSelectedText) {
-      if (readerUpdatedAt > panelUpdatedAt) {
-        liveSelectionSource = "reader";
-        liveSelectedText = liveReaderSelectedText;
-      } else if (panelUpdatedAt > readerUpdatedAt) {
-        liveSelectionSource = "panel";
-        liveSelectedText = livePanelSelectedText;
-      } else {
-        liveSelectionSource = isFocusInsidePanel ? "panel" : "reader";
-        liveSelectedText =
-          liveSelectionSource === "panel"
-            ? livePanelSelectedText
-            : liveReaderSelectedText;
-      }
-    } else if (liveReaderSelectedText) {
-      liveSelectionSource = "reader";
-      liveSelectedText = liveReaderSelectedText;
-    } else if (livePanelSelectedText) {
-      liveSelectionSource = "panel";
-      liveSelectedText = livePanelSelectedText;
-    }
-
-    const selectedTextSource = selectedTextSourceCache.get(item.id);
-    // Keep panel selection when user is still interacting inside LLM panel
-    // (e.g. clicking input). If focus moves outside (e.g. paper area), allow
-    // it to clear once the live selection disappears.
-    const keepPanelSelection = selectedTextSource === "panel" && isFocusInsidePanel;
-    // Keep manual text until explicit clear, and keep unknown source for
-    // backward compatibility with older cache entries.
-    const shouldKeepWithoutLiveSelection =
-      keepPanelSelection || selectedTextSource === "manual" || !selectedTextSource;
-    const suppressedSelection =
-      selectedTextSuppressedSelectionCache.get(item.id) || "";
-    const cachedSelectedText = selectedTextCache.get(item.id) || "";
-    if (liveSelectedText) {
-      if (suppressedSelection && liveSelectedText === suppressedSelection) {
-        return;
-      }
-      if (suppressedSelection && liveSelectedText !== suppressedSelection) {
-        selectedTextSuppressedSelectionCache.delete(item.id);
-      }
-      if (
-        liveSelectedText === cachedSelectedText &&
-        liveSelectionSource === selectedTextSource
-      )
-        return;
-      selectedTextCache.set(item.id, liveSelectedText);
-      if (liveSelectionSource) {
-        selectedTextSourceCache.set(item.id, liveSelectionSource);
-      }
-      selectedTextPreviewExpandedCache.set(item.id, false);
-      updateSelectedTextPreview();
-      return;
-    }
-    if (suppressedSelection) {
-      selectedTextSuppressedSelectionCache.delete(item.id);
-    }
-    if (!cachedSelectedText) return;
-    if (shouldKeepWithoutLiveSelection) return;
-    clearSelectedTextState(item.id);
-    updateSelectedTextPreview();
-  };
-
-  const clearAutoSelectedTextOnEscape = () => {
-    if (!item) return;
-    if (!isSelectedTextAutoSyncEnabled(item.id)) return;
-    const currentText = (selectedTextCache.get(item.id) || "").trim();
-    if (!currentText) return;
-    selectedTextSuppressedSelectionCache.set(item.id, currentText);
-    clearSelectedTextState(item.id);
-    updateSelectedTextPreview();
-    if (status) setStatus(status, "Selection cleared", "ready");
   };
 
   const getModelChoices = () => {
@@ -1540,39 +1390,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   // Initialize image preview state
   updateImagePreview();
   updateSelectedTextPreview();
-  syncSelectedTextFromReader();
   syncModelFromPrefs();
-
-  // Keep selected-text preview synchronized with current reader selection:
-  // - selection exists: auto-fill selected text
-  // - selection cleared: auto-clear selected text
-  // Preserve existing manual Add Text flow; this only mirrors live selection.
-  const selectionSyncTickMs = 220;
-  const selectionSyncTimer = setInterval(() => {
-    if (!body.isConnected) {
-      clearInterval(selectionSyncTimer);
-      return;
-    }
-    syncSelectedTextFromReader();
-  }, selectionSyncTickMs);
-
-  const selectionSyncDoc = body.ownerDocument;
-  selectionSyncDoc?.addEventListener(
-    "pointerup",
-    () => {
-      if (!body.isConnected) return;
-      syncSelectedTextFromReader();
-    },
-    true,
-  );
-  selectionSyncDoc?.addEventListener(
-    "keyup",
-    () => {
-      if (!body.isConnected) return;
-      syncSelectedTextFromReader();
-    },
-    true,
-  );
 
   // Preferences can change outside this panel (e.g., settings window).
   // Re-sync model label when the user comes back (pointerenter).
@@ -1838,9 +1656,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   const doSend = async () => {
     if (!item) return;
-    if (isSelectedTextAutoSyncEnabled(item.id)) {
-      syncSelectedTextFromReader();
-    }
     const text = inputBox.value.trim();
     const selectedText = selectedTextCache.get(item.id) || "";
     const selectedImages = selectedImageCache.get(item.id) || [];
@@ -1962,11 +1777,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       doSend();
     }
   });
-  inputBox.addEventListener("keydown", (e: Event) => {
-    const ke = e as KeyboardEvent;
-    if (ke.key !== "Escape") return;
-    clearAutoSelectedTextOnEscape();
-  });
 
   let inputDragDepth = 0;
   const setInputDragActive = (active: boolean) => {
@@ -2031,15 +1841,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   });
 
   const panelDoc = body.ownerDocument;
-  panelDoc?.addEventListener(
-    "keydown",
-    (e: Event) => {
-      const ke = e as KeyboardEvent;
-      if (ke.key !== "Escape") return;
-      clearAutoSelectedTextOnEscape();
-    },
-    true,
-  );
   if (
     panelDoc &&
     !(panelDoc as unknown as { __llmFontScaleShortcut?: boolean })
@@ -2143,25 +1944,26 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   }
 
   if (selectTextBtn) {
+    let pendingSelectedText = "";
+    const cacheSelectionBeforeFocusShift = () => {
+      if (!item) return;
+      pendingSelectedText = getActiveReaderSelectionText(
+        body.ownerDocument as Document,
+        item,
+      );
+    };
+    selectTextBtn.addEventListener(
+      "pointerdown",
+      cacheSelectionBeforeFocusShift,
+    );
+    selectTextBtn.addEventListener("mousedown", cacheSelectionBeforeFocusShift);
     selectTextBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
-      const nextEnabled = !isSelectedTextAutoSyncEnabled(item.id);
-      setSelectedTextAutoSyncEnabled(item.id, nextEnabled);
-      if (nextEnabled) {
-        syncSelectedTextFromReader();
-      }
-      updateSelectedTextPreview();
-      if (status) {
-        setStatus(
-          status,
-          nextEnabled
-            ? "Selection tracking enabled"
-            : "Selection tracking disabled",
-          "ready",
-        );
-      }
+      const selectedText = pendingSelectedText;
+      pendingSelectedText = "";
+      includeSelectedTextFromReader(body, item, selectedText);
     });
   }
 
@@ -2494,21 +2296,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
-      const liveSelectedText = getActiveReaderSelectionText(
-        body.ownerDocument as Document,
-        item,
-        { allowCacheFallback: false },
-      ).trim();
-      if (liveSelectedText) {
-        selectedTextSuppressedSelectionCache.set(item.id, liveSelectedText);
-      } else {
-        selectedTextSuppressedSelectionCache.delete(item.id);
-      }
       clearSelectedTextState(item.id);
       updateSelectedTextPreview();
-      if (status) {
-        setStatus(status, "Selected text cleared", "ready");
-      }
+      if (status) setStatus(status, "Selected text removed", "ready");
     });
   }
 

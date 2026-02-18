@@ -67,16 +67,6 @@ export const selectedImagePinnedCache = new Map<number, boolean[]>();
 export const selectedFileAttachmentCache = new Map<number, ChatAttachment[]>();
 export const selectedFilePinnedCache = new Map<number, boolean[]>();
 export const selectedTextCache = new Map<number, string>();
-export const selectedTextAutoSyncCache = new Map<number, boolean>();
-export const selectedTextSourceCache = new Map<
-  number,
-  "reader" | "panel" | "manual"
->();
-export const selectedTextReaderSelectionCache = new Map<number, string>();
-export const selectedTextPanelSelectionCache = new Map<number, string>();
-export const selectedTextReaderUpdatedAtCache = new Map<number, number>();
-export const selectedTextPanelUpdatedAtCache = new Map<number, number>();
-export const selectedTextSuppressedSelectionCache = new Map<number, string>();
 export const selectedTextPreviewExpandedCache = new Map<number, boolean>();
 export const selectedImagePreviewExpandedCache = new Map<number, boolean>();
 export const selectedImagePreviewActiveIndexCache = new Map<number, number>();

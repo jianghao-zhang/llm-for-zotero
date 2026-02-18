@@ -340,7 +340,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-select-text",
       textContent: SELECT_TEXT_EXPANDED_LABEL,
-      title: "Toggle selection tracking",
+      title: "Include selected reader text",
       disabled: !hasItem,
     },
   );
