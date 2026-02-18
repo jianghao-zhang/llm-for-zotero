@@ -185,6 +185,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
 
   // Input section
   const inputSection = createElement(doc, "div", "llm-input-section");
+  const contextPreviews = createElement(doc, "div", "llm-context-previews", {
+    id: "llm-context-previews",
+  });
   const selectedContext = createElement(doc, "div", "llm-selected-context", {
     id: "llm-selected-context",
   });
@@ -250,7 +253,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   selectedContextWarning.style.display = "none";
   selectedContextExpanded.append(selectedContextText, selectedContextWarning);
   selectedContext.append(selectedContextHeader, selectedContextExpanded);
-  inputSection.appendChild(selectedContext);
+  contextPreviews.appendChild(selectedContext);
 
   // Image preview area (shows selected screenshot)
   const imagePreview = createElement(doc, "div", "llm-image-preview", {
@@ -318,7 +321,8 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
 
   imagePreviewExpanded.append(previewStrip, previewLargeWrap);
   imagePreview.append(imagePreviewHeader, imagePreviewExpanded);
-  inputSection.appendChild(imagePreview);
+  contextPreviews.appendChild(imagePreview);
+  inputSection.appendChild(contextPreviews);
 
   const inputBox = createElement(doc, "textarea", "llm-input", {
     id: "llm-input",
