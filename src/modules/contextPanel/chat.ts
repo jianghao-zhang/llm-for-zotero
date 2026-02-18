@@ -19,6 +19,7 @@ import {
   MAX_HISTORY_MESSAGES,
   AUTO_SCROLL_BOTTOM_THRESHOLD,
   MAX_SELECTED_IMAGES,
+  formatFigureCountLabel,
   MODEL_PROFILE_ORDER,
   type ModelProfileKey,
 } from "./constants";
@@ -826,7 +827,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
         const screenshotLabel = doc.createElement("span") as HTMLSpanElement;
         screenshotLabel.className = "llm-user-screenshots-label";
-        screenshotLabel.textContent = `Figures (${screenshotImages.length}/${MAX_SELECTED_IMAGES})`;
+        screenshotLabel.textContent = formatFigureCountLabel(
+          screenshotImages.length,
+        );
 
         screenshotBar.append(screenshotIcon, screenshotLabel);
 

@@ -1,6 +1,7 @@
 import { createElement } from "../../utils/domHelpers";
 import {
   MAX_SELECTED_IMAGES,
+  formatFigureCountLabel,
   FONT_SCALE_MIN_PERCENT,
   FONT_SCALE_MAX_PERCENT,
   FONT_SCALE_STEP_PERCENT,
@@ -461,7 +462,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       );
       selectedImagePreviewActiveIndexCache.set(item.id, activeIndex);
 
-      previewMeta.textContent = `Figures (${imageCount}/${MAX_SELECTED_IMAGES})`;
+      previewMeta.textContent = formatFigureCountLabel(imageCount);
       previewMeta.classList.toggle("expanded", expanded);
       previewMeta.setAttribute("aria-expanded", expanded ? "true" : "false");
       previewMeta.title = expanded ? "Unpin figures panel" : "Pin figures panel";
@@ -563,7 +564,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       previewSelected.style.display = "none";
       previewSelectedImg.removeAttribute("src");
       previewSelectedImg.alt = "Selected screenshot preview";
-      previewMeta.textContent = `Figures (0/${MAX_SELECTED_IMAGES})`;
+      previewMeta.textContent = formatFigureCountLabel(0);
       previewMeta.classList.remove("expanded");
       previewMeta.setAttribute("aria-expanded", "false");
       previewMeta.title = "Pin figures panel";

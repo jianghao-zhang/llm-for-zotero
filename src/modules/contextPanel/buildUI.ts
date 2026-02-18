@@ -2,6 +2,7 @@ import { createElement } from "../../utils/domHelpers";
 import {
   SELECT_TEXT_EXPANDED_LABEL,
   SCREENSHOT_EXPANDED_LABEL,
+  formatFigureCountLabel,
 } from "./constants";
 import type { ActionDropdownSpec } from "./types";
 
@@ -268,7 +269,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     {
       id: "llm-image-preview-meta",
       type: "button",
-      textContent: "Figures (0/5)",
+      textContent: formatFigureCountLabel(0),
       title: "Expand figures",
     },
   );
