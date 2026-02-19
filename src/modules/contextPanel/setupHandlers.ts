@@ -1888,6 +1888,29 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     return types.includes("Files");
   };
 
+  const extractFilesFromClipboard = (event: ClipboardEvent): File[] => {
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return [];
+    const files: File[] = [];
+    if (clipboardData.files && clipboardData.files.length > 0) {
+      files.push(...Array.from(clipboardData.files));
+    }
+    const items = Array.from(clipboardData.items || []);
+    for (const item of items) {
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      const duplicated = files.some(
+        (existing) =>
+          existing.name === file.name &&
+          existing.size === file.size &&
+          existing.type === file.type,
+      );
+      if (!duplicated) files.push(file);
+    }
+    return files;
+  };
+
   const setInputDropActive = (active: boolean) => {
     if (inputSection) {
       inputSection.classList.toggle("llm-input-drop-active", active);
@@ -1944,6 +1967,17 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         ? Array.from(dragEvent.dataTransfer.files)
         : [];
       if (!files.length) return;
+      void processIncomingFiles(files);
+      inputBox.focus({ preventScroll: true });
+    });
+
+    inputBox.addEventListener("paste", (e: Event) => {
+      if (!item) return;
+      const clipboardEvent = e as ClipboardEvent;
+      const files = extractFilesFromClipboard(clipboardEvent);
+      if (!files.length) return;
+      clipboardEvent.preventDefault();
+      clipboardEvent.stopPropagation();
       void processIncomingFiles(files);
       inputBox.focus({ preventScroll: true });
     });
