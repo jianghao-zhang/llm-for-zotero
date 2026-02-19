@@ -431,7 +431,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
     selectedTextCache.set(item.id, selected);
     selectedTextPreviewExpandedCache.set(item.id, false);
-    applySelectedTextPreview(body, item.id);
+    runWithChatScrollGuard(() => {
+      applySelectedTextPreview(body, item.id);
+    });
     hideSelectionPopup();
     if (status) setStatus(status, "Selected response text included", "ready");
     inputBox.focus({ preventScroll: true });
@@ -659,6 +661,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedTextCache.delete(itemId);
     selectedTextPreviewExpandedCache.delete(itemId);
   };
+  const runWithChatScrollGuard = (fn: () => void) => {
+    withScrollGuard(chatBox, conversationKey, fn);
+  };
 
   // Helper to update image preview UI
   const updateImagePreview = () => {
@@ -739,7 +744,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           if (selectedImagePreviewExpandedCache.get(item.id) !== true) {
             selectedImagePreviewExpandedCache.set(item.id, true);
           }
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
         });
 
         const removeOneBtn = createElement(
@@ -773,7 +778,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           } else {
             clearSelectedImageState(item.id);
           }
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
           if (status) {
             setStatus(
               status,
@@ -819,6 +824,21 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const updateSelectedTextPreview = () => {
     if (!item) return;
     applySelectedTextPreview(body, item.id);
+  };
+  const updateImagePreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updateImagePreview();
+    });
+  };
+  const updateSelectedTextPreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updateSelectedTextPreview();
+    });
+  };
+  const refreshChatPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      refreshChat(body, item);
+    });
   };
 
   const getModelChoices = () => {
@@ -1440,8 +1460,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
 
   // Initialize image preview state
-  updateImagePreview();
-  updateSelectedTextPreview();
+  updateImagePreviewPreservingScroll();
+  updateSelectedTextPreviewPreservingScroll();
   syncModelFromPrefs();
 
   // Preferences can change outside this panel (e.g., settings window).
@@ -1517,10 +1537,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       : selectedImages;
     // Clear selected images after sending
     clearSelectedImageState(item.id);
-    updateImagePreview();
+    updateImagePreviewPreservingScroll();
     if (selectedText) {
       clearSelectedTextState(item.id);
-      updateSelectedTextPreview();
+      updateSelectedTextPreviewPreservingScroll();
     }
     const selectedReasoning = getSelectedReasoning();
     const advancedParams = getAdvancedModelParams(selectedProfile?.key);
@@ -1693,7 +1713,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         if (status) {
           setStatus(status, getScreenshotDisabledHint(currentModel), "error");
         }
-        updateImagePreview();
+        updateImagePreviewPreservingScroll();
         return;
       }
 
@@ -1735,7 +1755,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             "error",
           );
         }
-        updateImagePreview();
+        updateImagePreviewPreservingScroll();
         return;
       }
       if (status) setStatus(status, "Select a region...", "sending");
@@ -1768,7 +1788,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             item.id,
             nextImages.length - 1,
           );
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
           if (status) {
             setStatus(
               status,
@@ -1998,8 +2018,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         selectedImagePreviewActiveIndexCache.set(item.id, 0);
         selectedTextPreviewExpandedCache.set(item.id, false);
       }
-      updateSelectedTextPreview();
-      updateImagePreview();
+      updateSelectedTextPreviewPreservingScroll();
+      updateImagePreviewPreservingScroll();
     });
   }
 
@@ -2009,7 +2029,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!item) return;
       clearSelectedImageState(item.id);
-      updateImagePreview();
+      updateImagePreviewPreservingScroll();
       if (status) setStatus(status, "Figures cleared", "ready");
     });
   }
@@ -2020,7 +2040,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!item) return;
       clearSelectedTextState(item.id);
-      updateSelectedTextPreview();
+      updateSelectedTextPreviewPreservingScroll();
       if (status) setStatus(status, "Selected text removed", "ready");
     });
   }
@@ -2038,8 +2058,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (nextExpanded) {
         selectedImagePreviewExpandedCache.set(item.id, false);
       }
-      updateImagePreview();
-      updateSelectedTextPreview();
+      updateImagePreviewPreservingScroll();
+      updateSelectedTextPreviewPreservingScroll();
     });
   }
 
@@ -2071,8 +2091,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
     selectedTextPreviewExpandedCache.set(item.id, false);
     selectedImagePreviewExpandedCache.set(item.id, false);
-    updateSelectedTextPreview();
-    updateImagePreview();
+    updateSelectedTextPreviewPreservingScroll();
+    updateImagePreviewPreservingScroll();
   };
   body.addEventListener("mousedown", dismissPinnedContextPanels, true);
   bodyWithPinnedDismiss.__llmPinnedContextDismissHandler =
@@ -2113,9 +2133,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         });
         clearSelectedImageState(item.id);
         clearSelectedTextState(item.id);
-        updateImagePreview();
-        updateSelectedTextPreview();
-        refreshChat(body, item);
+        updateImagePreviewPreservingScroll();
+        updateSelectedTextPreviewPreservingScroll();
+        refreshChatPreservingScroll();
         if (status) setStatus(status, "Cleared", "ready");
       }
     });
