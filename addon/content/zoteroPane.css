@@ -511,6 +511,14 @@
   background: rgba(255, 255, 255, 0.06);
 }
 
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-selected-text,
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-screenshots-bar,
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-selected-text-expanded,
+.llm-message-wrapper.user.llm-user-context-aligned .llm-user-screenshots-expanded {
+  width: var(--llm-user-bubble-width);
+  max-width: var(--llm-user-bubble-width);
+}
+
 .llm-user-screenshots-thumbs {
   display: flex;
   flex-wrap: wrap;

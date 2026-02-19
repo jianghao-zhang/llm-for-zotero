@@ -827,6 +827,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   for (const msg of history) {
     const isUser = msg.role === "user";
+    let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
     wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
 
@@ -837,7 +838,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       const screenshotImages = Array.isArray(msg.screenshotImages)
         ? msg.screenshotImages.filter((entry) => Boolean(entry))
         : [];
-      if (screenshotImages.length) {
+      const selectedText = sanitizeText(msg.selectedText || "").trim();
+      const hasScreenshotContext = screenshotImages.length > 0;
+      const hasSelectedTextContext = Boolean(selectedText);
+      hasUserContext = hasScreenshotContext || hasSelectedTextContext;
+      if (hasScreenshotContext) {
         const screenshotBar = doc.createElement("button") as HTMLButtonElement;
         screenshotBar.type = "button";
         screenshotBar.className = "llm-user-screenshots-bar";
@@ -963,8 +968,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         wrapper.appendChild(screenshotExpanded);
       }
 
-      const selectedText = sanitizeText(msg.selectedText || "").trim();
-      if (selectedText) {
+      if (hasSelectedTextContext) {
         const selectedBar = doc.createElement("button") as HTMLButtonElement;
         selectedBar.type = "button";
         selectedBar.className = "llm-user-selected-text";
@@ -1167,6 +1171,13 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     wrapper.appendChild(bubble);
     wrapper.appendChild(meta);
     chatBox.appendChild(wrapper);
+    if (isUser && hasUserContext) {
+      const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+      if (bubbleWidth > 0) {
+        wrapper.classList.add("llm-user-context-aligned");
+        wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
+      }
+    }
   }
 
   applyChatScrollSnapshot(chatBox, baselineSnapshot);
