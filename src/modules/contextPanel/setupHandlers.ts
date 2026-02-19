@@ -468,7 +468,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
     selectedTextCache.set(item.id, selected);
     selectedTextPreviewExpandedCache.set(item.id, false);
-    applySelectedTextPreview(body, item.id);
+    runWithChatScrollGuard(() => {
+      applySelectedTextPreview(body, item.id);
+    });
     hideSelectionPopup();
     if (status) setStatus(status, "Selected response text included", "ready");
     inputBox.focus({ preventScroll: true });
@@ -701,6 +703,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedTextCache.delete(itemId);
     selectedTextPreviewExpandedCache.delete(itemId);
   };
+  const runWithChatScrollGuard = (fn: () => void) => {
+    withScrollGuard(chatBox, conversationKey, fn);
+  };
 
   const updateFilePreview = () => {
     if (
@@ -871,7 +876,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           if (selectedImagePreviewExpandedCache.get(item.id) !== true) {
             selectedImagePreviewExpandedCache.set(item.id, true);
           }
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
         });
 
         const removeOneBtn = createElement(
@@ -905,7 +910,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
           } else {
             clearSelectedImageState(item.id);
           }
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
           if (status) {
             setStatus(
               status,
@@ -951,6 +956,26 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const updateSelectedTextPreview = () => {
     if (!item) return;
     applySelectedTextPreview(body, item.id);
+  };
+  const updateFilePreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updateFilePreview();
+    });
+  };
+  const updateImagePreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updateImagePreview();
+    });
+  };
+  const updateSelectedTextPreviewPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      updateSelectedTextPreview();
+    });
+  };
+  const refreshChatPreservingScroll = () => {
+    runWithChatScrollGuard(() => {
+      refreshChat(body, item);
+    });
   };
 
   const getModelChoices = () => {
@@ -1597,10 +1622,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
   };
 
-  // Initialize image preview state
-  updateImagePreview();
-  updateFilePreview();
-  updateSelectedTextPreview();
+  // Initialize preview state
+  updateFilePreviewPreservingScroll();
+  updateImagePreviewPreservingScroll();
+  updateSelectedTextPreviewPreservingScroll();
   syncModelFromPrefs();
 
   // Preferences can change outside this panel (e.g., settings window).
@@ -2051,14 +2076,14 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       : selectedImages;
     // Clear selected images after sending
     clearSelectedImageState(item.id);
-    updateImagePreview();
     if (selectedFiles.length) {
       clearSelectedFileState(item.id);
-      updateFilePreview();
+      updateFilePreviewPreservingScroll();
     }
+    updateImagePreviewPreservingScroll();
     if (selectedText) {
       clearSelectedTextState(item.id);
-      updateSelectedTextPreview();
+      updateSelectedTextPreviewPreservingScroll();
     }
     const selectedReasoning = getSelectedReasoning();
     const advancedParams = getAdvancedModelParams(selectedProfile?.key);
@@ -2232,7 +2257,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         if (status) {
           setStatus(status, getScreenshotDisabledHint(currentModel), "error");
         }
-        updateImagePreview();
+        updateImagePreviewPreservingScroll();
         return;
       }
 
@@ -2274,7 +2299,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             "error",
           );
         }
-        updateImagePreview();
+        updateImagePreviewPreservingScroll();
         return;
       }
       if (status) setStatus(status, "Select a region...", "sending");
@@ -2307,7 +2332,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
             item.id,
             nextImages.length - 1,
           );
-          updateImagePreview();
+          updateImagePreviewPreservingScroll();
           if (status) {
             setStatus(
               status,
@@ -2484,15 +2509,12 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       const reasoningButtonEl = doc.querySelector(
         "#llm-reasoning-toggle",
       ) as HTMLButtonElement | null;
-      const responseMenuEl = doc.querySelector(
-        "#llm-response-menu",
-      ) as HTMLDivElement | null;
-      const exportMenuEl = doc.querySelector(
-        "#llm-export-menu",
-      ) as HTMLDivElement | null;
-      const exportButtonEl = doc.querySelector(
-        "#llm-export",
-      ) as HTMLButtonElement | null;
+      const responseMenus = Array.from(
+        doc.querySelectorAll("#llm-response-menu"),
+      ) as HTMLDivElement[];
+      const exportMenus = Array.from(
+        doc.querySelectorAll("#llm-export-menu"),
+      ) as HTMLDivElement[];
       const target = e.target as Node | null;
       if (
         modelMenuEl &&
@@ -2511,23 +2533,28 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       ) {
         setFloatingMenuOpen(reasoningMenuEl, REASONING_MENU_OPEN_CLASS, false);
       }
-      if (
-        responseMenuEl &&
-        responseMenuEl.style.display !== "none" &&
-        me.button === 0 &&
-        (!target || !responseMenuEl.contains(target))
-      ) {
-        responseMenuEl.style.display = "none";
-        setResponseMenuTarget(null);
-      }
-      if (
-        exportMenuEl &&
-        exportMenuEl.style.display !== "none" &&
-        me.button === 0 &&
-        (!target ||
-          (!exportMenuEl.contains(target) && !exportButtonEl?.contains(target)))
-      ) {
-        exportMenuEl.style.display = "none";
+      if (me.button === 0) {
+        let responseMenuClosed = false;
+        for (const responseMenuEl of responseMenus) {
+          if (responseMenuEl.style.display === "none") continue;
+          if (target && responseMenuEl.contains(target)) continue;
+          responseMenuEl.style.display = "none";
+          responseMenuClosed = true;
+        }
+        if (responseMenuClosed) {
+          setResponseMenuTarget(null);
+        }
+
+        for (const exportMenuEl of exportMenus) {
+          if (exportMenuEl.style.display === "none") continue;
+          if (target && exportMenuEl.contains(target)) continue;
+          const panelRoot = exportMenuEl.closest("#llm-main");
+          const exportButtonEl = panelRoot?.querySelector(
+            "#llm-export",
+          ) as HTMLButtonElement | null;
+          if (target && exportButtonEl?.contains(target)) continue;
+          exportMenuEl.style.display = "none";
+        }
       }
     });
     (
@@ -2551,9 +2578,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         selectedTextPreviewExpandedCache.set(item.id, false);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
-      updateSelectedTextPreview();
-      updateFilePreview();
-      updateImagePreview();
+      updateFilePreviewPreservingScroll();
+      updateSelectedTextPreviewPreservingScroll();
+      updateImagePreviewPreservingScroll();
     });
   }
 
@@ -2563,7 +2590,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!item) return;
       clearSelectedImageState(item.id);
-      updateImagePreview();
+      updateImagePreviewPreservingScroll();
       if (status) setStatus(status, "Figures cleared", "ready");
     });
   }
@@ -2612,7 +2639,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.stopPropagation();
       if (!item) return;
       clearSelectedTextState(item.id);
-      updateSelectedTextPreview();
+      updateSelectedTextPreviewPreservingScroll();
       if (status) setStatus(status, "Selected text removed", "ready");
     });
   }
@@ -2631,9 +2658,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         selectedImagePreviewExpandedCache.set(item.id, false);
         selectedFilePreviewExpandedCache.set(item.id, false);
       }
-      updateImagePreview();
-      updateFilePreview();
-      updateSelectedTextPreview();
+      updateFilePreviewPreservingScroll();
+      updateImagePreviewPreservingScroll();
+      updateSelectedTextPreviewPreservingScroll();
     });
   }
 
@@ -2671,9 +2698,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     selectedTextPreviewExpandedCache.set(item.id, false);
     selectedImagePreviewExpandedCache.set(item.id, false);
     selectedFilePreviewExpandedCache.set(item.id, false);
-    updateSelectedTextPreview();
-    updateImagePreview();
-    updateFilePreview();
+    updateFilePreviewPreservingScroll();
+    updateSelectedTextPreviewPreservingScroll();
+    updateImagePreviewPreservingScroll();
   };
   body.addEventListener("mousedown", dismissPinnedContextPanels, true);
   bodyWithPinnedDismiss.__llmPinnedContextDismissHandler =
@@ -2718,10 +2745,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         clearSelectedImageState(item.id);
         clearSelectedFileState(item.id);
         clearSelectedTextState(item.id);
-        updateImagePreview();
-        updateFilePreview();
-        updateSelectedTextPreview();
-        refreshChat(body, item);
+        updateFilePreviewPreservingScroll();
+        updateImagePreviewPreservingScroll();
+        updateSelectedTextPreviewPreservingScroll();
+        refreshChatPreservingScroll();
         if (status) setStatus(status, "Cleared", "ready");
       }
     });

@@ -555,6 +555,7 @@ export async function sendQuestion(
   const inputBox = body.querySelector(
     "#llm-input",
   ) as HTMLTextAreaElement | null;
+  const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   const sendBtn = body.querySelector("#llm-send") as HTMLButtonElement | null;
   const cancelBtn = body.querySelector(
     "#llm-cancel",
@@ -563,15 +564,32 @@ export async function sendQuestion(
 
   // Track this request
   const thisRequestId = nextRequestId();
+  const initialConversationKey = getConversationKey(item);
 
   // Show cancel, hide send
-  if (sendBtn) sendBtn.style.display = "none";
-  if (cancelBtn) cancelBtn.style.display = "";
-  if (inputBox) inputBox.disabled = true;
-  if (status) setStatus(status, "Preparing request...", "sending");
+  withScrollGuard(chatBox, initialConversationKey, () => {
+    if (sendBtn) sendBtn.style.display = "none";
+    if (cancelBtn) cancelBtn.style.display = "";
+    if (inputBox) inputBox.disabled = true;
+    if (status) setStatus(status, "Preparing request...", "sending");
+  });
 
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
+  const refreshChatSafely = () => {
+    withScrollGuard(chatBox, conversationKey, () => {
+      refreshChat(body, item);
+    });
+  };
+  const setStatusSafely = (
+    text: string,
+    kind: Parameters<typeof setStatus>[2],
+  ) => {
+    if (!status) return;
+    withScrollGuard(chatBox, conversationKey, () => {
+      setStatus(status, text, kind);
+    });
+  };
 
   // Add user message with attached selected text / screenshots metadata
   if (!chatHistory.has(conversationKey)) {
@@ -640,7 +658,7 @@ export async function sendQuestion(
   if (history.length > PERSISTED_HISTORY_LIMIT) {
     history.splice(0, history.length - PERSISTED_HISTORY_LIMIT);
   }
-  refreshChat(body, item);
+  refreshChatSafely();
 
   let assistantPersisted = false;
   const persistAssistantOnce = async () => {
@@ -661,14 +679,14 @@ export async function sendQuestion(
     assistantMessage.reasoningSummary = undefined;
     assistantMessage.reasoningDetails = undefined;
     assistantMessage.reasoningOpen = false;
-    refreshChat(body, item);
+    refreshChatSafely();
     await persistAssistantOnce();
-    if (status) setStatus(status, "Cancelled", "ready");
+    setStatusSafely("Cancelled", "ready");
   };
 
   try {
     const contextSource = resolveContextSourceItem(item);
-    if (status) setStatus(status, contextSource.statusText, "sending");
+    setStatusSafely(contextSource.statusText, "sending");
 
     let pdfContext = "";
     if (contextSource.contextItem) {
@@ -696,7 +714,7 @@ export async function sendQuestion(
       refreshQueued = true;
       setTimeout(() => {
         refreshQueued = false;
-        refreshChat(body, item);
+        refreshChatSafely();
       }, 50);
     };
 
@@ -746,10 +764,10 @@ export async function sendQuestion(
     assistantMessage.text =
       sanitizeText(answer) || assistantMessage.text || "No response.";
     assistantMessage.streaming = false;
-    refreshChat(body, item);
+    refreshChatSafely();
     await persistAssistantOnce();
 
-    if (status) setStatus(status, "Ready", "ready");
+    setStatusSafely("Ready", "ready");
   } catch (err) {
     const isCancelled =
       cancelledRequestId >= thisRequestId ||
@@ -763,24 +781,24 @@ export async function sendQuestion(
     const errMsg = (err as Error).message || "Error";
     assistantMessage.text = `Error: ${errMsg}`;
     assistantMessage.streaming = false;
-    refreshChat(body, item);
+    refreshChatSafely();
     await persistAssistantOnce();
 
-    if (status) {
-      setStatus(status, `Error: ${errMsg.slice(0, 40)}`, "error");
-    }
+    setStatusSafely(`Error: ${errMsg.slice(0, 40)}`, "error");
   } finally {
     // Only restore UI if this is still the current request
     if (cancelledRequestId < thisRequestId) {
-      if (inputBox) {
-        inputBox.disabled = false;
-        inputBox.focus({ preventScroll: true });
-      }
-      if (sendBtn) {
-        sendBtn.style.display = "";
-        sendBtn.disabled = false;
-      }
-      if (cancelBtn) cancelBtn.style.display = "none";
+      withScrollGuard(chatBox, conversationKey, () => {
+        if (inputBox) {
+          inputBox.disabled = false;
+          inputBox.focus({ preventScroll: true });
+        }
+        if (sendBtn) {
+          sendBtn.style.display = "";
+          sendBtn.disabled = false;
+        }
+        if (cancelBtn) cancelBtn.style.display = "none";
+      });
     }
     setCurrentAbortController(null);
   }
@@ -802,6 +820,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   }
 
   const conversationKey = getConversationKey(item);
+  const mutateChatWithScrollGuard = (fn: () => void) => {
+    withScrollGuard(chatBox, conversationKey, fn);
+  };
   const hasExistingRenderedContent = chatBox.childElementCount > 0;
   const cachedSnapshot = chatScrollSnapshots.get(conversationKey);
   const baselineSnapshot =
@@ -824,6 +845,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   for (const msg of history) {
     const isUser = msg.role === "user";
+    let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
     wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
 
@@ -840,7 +862,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         : [];
       let screenshotExpanded: HTMLDivElement | null = null;
       let filesExpanded: HTMLDivElement | null = null;
-      if (screenshotImages.length) {
+      const selectedText = sanitizeText(msg.selectedText || "").trim();
+      const hasScreenshotContext = screenshotImages.length > 0;
+      const hasSelectedTextContext = Boolean(selectedText);
+      hasUserContext = hasScreenshotContext || hasSelectedTextContext;
+      if (hasScreenshotContext) {
         const screenshotBar = doc.createElement("button") as HTMLButtonElement;
         screenshotBar.type = "button";
         screenshotBar.className = "llm-user-screenshots-bar";
@@ -886,14 +912,27 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           thumbImg.alt = `Screenshot ${index + 1}`;
           thumbBtn.appendChild(thumbImg);
 
+          const activateScreenshotThumb = (e: Event) => {
+            const mouse = e as MouseEvent;
+            if (typeof mouse.button === "number" && mouse.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            mutateChatWithScrollGuard(() => {
+              msg.screenshotActiveIndex = index;
+              if (!msg.screenshotExpanded) {
+                msg.screenshotExpanded = true;
+              }
+              applyScreenshotState();
+            });
+          };
+          thumbBtn.addEventListener("mousedown", activateScreenshotThumb);
           thumbBtn.addEventListener("click", (e: Event) => {
             e.preventDefault();
             e.stopPropagation();
-            msg.screenshotActiveIndex = index;
-            if (!msg.screenshotExpanded) {
-              msg.screenshotExpanded = true;
-            }
-            applyScreenshotState();
+          });
+          thumbBtn.addEventListener("keydown", (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            activateScreenshotThumb(e);
           });
           thumbButtons.push(thumbBtn);
           thumbStrip.appendChild(thumbBtn);
@@ -928,8 +967,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         };
 
         const toggleScreenshotsExpanded = () => {
-          msg.screenshotExpanded = !msg.screenshotExpanded;
-          applyScreenshotState();
+          mutateChatWithScrollGuard(() => {
+            msg.screenshotExpanded = !msg.screenshotExpanded;
+            applyScreenshotState();
+          });
         };
         applyScreenshotState();
         screenshotBar.addEventListener("mousedown", (e: Event) => {
@@ -1057,8 +1098,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         wrapper.appendChild(filesExpanded);
       }
 
-      const selectedText = sanitizeText(msg.selectedText || "").trim();
-      if (selectedText) {
+      if (hasSelectedTextContext) {
         const selectedBar = doc.createElement("button") as HTMLButtonElement;
         selectedBar.type = "button";
         selectedBar.className = "llm-user-selected-text";
@@ -1090,8 +1130,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             : "Expand selected text";
         };
         const toggleSelectedTextExpanded = () => {
-          msg.selectedTextExpanded = !msg.selectedTextExpanded;
-          applySelectedTextState();
+          mutateChatWithScrollGuard(() => {
+            msg.selectedTextExpanded = !msg.selectedTextExpanded;
+            applySelectedTextState();
+          });
         };
         applySelectedTextState();
         selectedBar.addEventListener("mousedown", (e: Event) => {
@@ -1134,10 +1176,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           if (typeof me.stopImmediatePropagation === "function") {
             me.stopImmediatePropagation();
           }
-          const responseMenu = doc.querySelector(
+          const responseMenu = body.querySelector(
             "#llm-response-menu",
           ) as HTMLDivElement | null;
-          const exportMenu = doc.querySelector(
+          const exportMenu = body.querySelector(
             "#llm-export-menu",
           ) as HTMLDivElement | null;
           if (!responseMenu || !item) return;
@@ -1171,9 +1213,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const toggleReasoning = (e: Event) => {
           e.preventDefault();
           e.stopPropagation();
-          const next = !msg.reasoningOpen;
-          msg.reasoningOpen = next;
-          details.open = next;
+          mutateChatWithScrollGuard(() => {
+            const next = !msg.reasoningOpen;
+            msg.reasoningOpen = next;
+            details.open = next;
+          });
         };
         summary.addEventListener("mousedown", toggleReasoning);
         summary.addEventListener("click", (e: Event) => {
@@ -1257,6 +1301,13 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     wrapper.appendChild(bubble);
     wrapper.appendChild(meta);
     chatBox.appendChild(wrapper);
+    if (isUser && hasUserContext) {
+      const bubbleWidth = Math.round(bubble.getBoundingClientRect().width);
+      if (bubbleWidth > 0) {
+        wrapper.classList.add("llm-user-context-aligned");
+        wrapper.style.setProperty("--llm-user-bubble-width", `${bubbleWidth}px`);
+      }
+    }
   }
 
   applyChatScrollSnapshot(chatBox, baselineSnapshot);
