@@ -298,11 +298,32 @@ export function registerReaderSelectionTracking() {
             "text-align:center",
             "cursor:pointer",
           ].join(";");
-          addTextBtn.addEventListener("click", (e: Event) => {
+          let addTextHandled = false;
+          const handleAddTextAction = (e: Event) => {
+            if (addTextHandled) return;
+            addTextHandled = true;
             e.preventDefault();
             e.stopPropagation();
             addTextToPanel();
+          };
+          const isPrimaryButton = (e: Event): boolean => {
+            const maybeMouse = e as MouseEvent;
+            return (
+              typeof maybeMouse.button !== "number" || maybeMouse.button === 0
+            );
+          };
+          // Reader popup items may be removed before "click" fires.
+          // Handle early pointer/mouse down as the primary trigger.
+          addTextBtn.addEventListener("pointerdown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleAddTextAction(e);
           });
+          addTextBtn.addEventListener("mousedown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleAddTextAction(e);
+          });
+          addTextBtn.addEventListener("click", handleAddTextAction);
+          addTextBtn.addEventListener("command", handleAddTextAction);
           event.append(addTextBtn);
           popupSentinelEl = addTextBtn;
           stripPopupRowChrome(addTextBtn.parentElement as HTMLElement | null);
