@@ -21,6 +21,7 @@ import {
   API_ENDPOINT,
   RESPONSES_ENDPOINT,
   EMBEDDINGS_ENDPOINT,
+  FILES_ENDPOINT,
   resolveEndpoint,
   buildHeaders,
   usesMaxCompletionTokens,
@@ -116,6 +117,12 @@ export type RuntimeReasoningOption = {
   label: string;
   enabled: boolean;
 };
+export type ChatFileAttachment = {
+  name: string;
+  mimeType?: string;
+  storedPath?: string;
+  contentHash?: string;
+};
 
 export type ChatParams = {
   prompt: string;
@@ -138,6 +145,8 @@ export type ChatParams = {
   temperature?: number;
   /** Optional custom token budget for completion/output */
   maxTokens?: number;
+  /** Local files to upload and attach when using Responses API */
+  attachments?: ChatFileAttachment[];
 };
 
 export type ReasoningEvent = {
@@ -228,6 +237,434 @@ function getApiConfig(overrides?: {
     embeddingModel,
     systemPrompt: customSystemPrompt || DEFAULT_SYSTEM_PROMPT,
   };
+}
+
+type IOUtilsLike = {
+  read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+};
+
+type OSFileLike = {
+  read?: (path: string) => Promise<Uint8Array | ArrayBuffer>;
+};
+
+type ZoteroFileLike = {
+  getContentsAsync?: (
+    source: string | nsIFile,
+    charset?: string,
+    maxLength?: number,
+  ) => Promise<unknown> | unknown;
+  getBinaryContentsAsync?: (
+    source: string | nsIFile,
+    maxLength?: number,
+  ) => Promise<string> | string;
+};
+
+const uploadedResponseFileIdCache = new Map<string, string>();
+
+function getIOUtils(): IOUtilsLike | undefined {
+  const fromGlobal = (globalThis as unknown as { IOUtils?: IOUtilsLike })
+    .IOUtils;
+  if (fromGlobal?.read) return fromGlobal;
+  const fromToolkit = ztoolkit.getGlobal("IOUtils") as IOUtilsLike | undefined;
+  return fromToolkit?.read ? fromToolkit : undefined;
+}
+
+function getOSFile(): OSFileLike | undefined {
+  const fromGlobal = (globalThis as { OS?: { File?: OSFileLike } }).OS?.File;
+  if (fromGlobal?.read) return fromGlobal;
+  const toolkitOS = ztoolkit.getGlobal("OS") as
+    | { File?: OSFileLike }
+    | undefined;
+  const fromToolkit = toolkitOS?.File;
+  return fromToolkit?.read ? fromToolkit : undefined;
+}
+
+function getZoteroFile(): ZoteroFileLike | undefined {
+  const fromGlobal = (globalThis as { Zotero?: { File?: ZoteroFileLike } })
+    .Zotero?.File;
+  if (fromGlobal?.getContentsAsync || fromGlobal?.getBinaryContentsAsync) {
+    return fromGlobal;
+  }
+  const toolkitZotero = ztoolkit.getGlobal("Zotero") as
+    | { File?: ZoteroFileLike }
+    | undefined;
+  const fromToolkit = toolkitZotero?.File;
+  if (fromToolkit?.getContentsAsync || fromToolkit?.getBinaryContentsAsync) {
+    return fromToolkit;
+  }
+  return undefined;
+}
+
+function pathToFileUrl(path: string): string | undefined {
+  const raw = (path || "").trim();
+  if (!raw) return undefined;
+  if (/^file:\/\//i.test(raw)) return raw;
+  const normalized = raw.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return `file:///${encodeURI(normalized)}`;
+  }
+  if (normalized.startsWith("/")) {
+    return `file://${encodeURI(normalized)}`;
+  }
+  return undefined;
+}
+
+function binaryStringToBytes(data: string): Uint8Array {
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    out[i] = data.charCodeAt(i) & 0xff;
+  }
+  return out;
+}
+
+function coerceToBytes(data: unknown): Uint8Array | null {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  if (typeof data === "string") {
+    // Many Zotero/Gecko APIs return binary content as a byte-string.
+    return binaryStringToBytes(data);
+  }
+  return null;
+}
+
+async function readLocalFileBytes(path: string): Promise<Uint8Array> {
+  const normalizedPath = (path || "").trim();
+  if (!normalizedPath) {
+    throw new Error("Attachment file path is empty");
+  }
+  const attempted: string[] = [];
+
+  const io = getIOUtils();
+  if (io?.read) {
+    attempted.push("IOUtils.read");
+    const data = await io.read(normalizedPath);
+    const bytes = coerceToBytes(data);
+    if (bytes) return bytes;
+  }
+
+  const osFile = getOSFile();
+  if (osFile?.read) {
+    attempted.push("OS.File.read");
+    const data = await osFile.read(normalizedPath);
+    const bytes = coerceToBytes(data);
+    if (bytes) return bytes;
+  }
+
+  const zoteroFile = getZoteroFile();
+  if (zoteroFile?.getContentsAsync) {
+    attempted.push("Zotero.File.getContentsAsync");
+    try {
+      const data = await zoteroFile.getContentsAsync(normalizedPath);
+      const bytes = coerceToBytes(data);
+      if (bytes) return bytes;
+    } catch (err) {
+      ztoolkit.log("LLM: Zotero.File.getContentsAsync failed", err);
+    }
+  }
+  if (zoteroFile?.getBinaryContentsAsync) {
+    attempted.push("Zotero.File.getBinaryContentsAsync");
+    try {
+      const data = await zoteroFile.getBinaryContentsAsync(normalizedPath);
+      const bytes = coerceToBytes(data);
+      if (bytes) return bytes;
+    } catch (err) {
+      ztoolkit.log("LLM: Zotero.File.getBinaryContentsAsync failed", err);
+    }
+  }
+
+  const fileUrl = pathToFileUrl(normalizedPath);
+  if (fileUrl) {
+    attempted.push("fetch(file://)");
+    try {
+      const res = await getFetch()(fileUrl);
+      if (res.ok) {
+        return new Uint8Array(await res.arrayBuffer());
+      }
+      ztoolkit.log(
+        "LLM: fetch(file://) returned non-OK status",
+        res.status,
+        res.statusText,
+      );
+    } catch (err) {
+      ztoolkit.log("LLM: fetch(file://) failed", err);
+    }
+  }
+
+  throw new Error(
+    `No binary file read API available (tried: ${attempted.join(", ") || "none"})`,
+  );
+}
+
+function createAbortError(): Error {
+  const err = new Error("Aborted");
+  (err as { name?: string }).name = "AbortError";
+  return err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+}
+
+function normalizeUploadableAttachments(
+  attachments: ChatFileAttachment[] | undefined,
+): ChatFileAttachment[] {
+  if (!Array.isArray(attachments) || !attachments.length) return [];
+  const out: ChatFileAttachment[] = [];
+  const seen = new Set<string>();
+  for (const attachment of attachments) {
+    if (!attachment || typeof attachment !== "object") continue;
+    const storedPath =
+      typeof attachment.storedPath === "string"
+        ? attachment.storedPath.trim()
+        : "";
+    if (!storedPath) continue;
+    const name =
+      typeof attachment.name === "string" && attachment.name.trim()
+        ? attachment.name.trim()
+        : "attachment";
+    const mimeType =
+      typeof attachment.mimeType === "string" && attachment.mimeType.trim()
+        ? attachment.mimeType.trim()
+        : "application/octet-stream";
+    const contentHash =
+      typeof attachment.contentHash === "string" &&
+      /^[a-f0-9]{64}$/i.test(attachment.contentHash.trim())
+        ? attachment.contentHash.trim().toLowerCase()
+        : undefined;
+    const key = contentHash || storedPath;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      name,
+      mimeType,
+      storedPath,
+      contentHash,
+    });
+  }
+  return out;
+}
+
+function extractUploadedFileId(data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const typed = data as { id?: unknown; file_id?: unknown };
+  if (typeof typed.id === "string" && typed.id.trim()) {
+    return typed.id.trim();
+  }
+  if (typeof typed.file_id === "string" && typed.file_id.trim()) {
+    return typed.file_id.trim();
+  }
+  return "";
+}
+
+function isPurposeValidationError(status: number, bodyText: string): boolean {
+  if (status !== 400 && status !== 422) return false;
+  return /purpose/i.test(bodyText);
+}
+
+function getFormDataCtor(): typeof FormData | undefined {
+  const fromGlobal = (globalThis as { FormData?: typeof FormData }).FormData;
+  if (typeof fromGlobal === "function") return fromGlobal;
+  const fromToolkit = ztoolkit.getGlobal("FormData") as
+    | typeof FormData
+    | undefined;
+  return typeof fromToolkit === "function" ? fromToolkit : undefined;
+}
+
+function getBlobCtor(): typeof Blob | undefined {
+  const fromGlobal = (globalThis as { Blob?: typeof Blob }).Blob;
+  if (typeof fromGlobal === "function") return fromGlobal;
+  const fromToolkit = ztoolkit.getGlobal("Blob") as typeof Blob | undefined;
+  return typeof fromToolkit === "function" ? fromToolkit : undefined;
+}
+
+function toSafeMultipartToken(value: string): string {
+  return (value || "").replace(/[\r\n"]/g, "_").trim() || "attachment";
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const totalLength = parts.reduce((sum, part) => sum + part.byteLength, 0);
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.byteLength;
+  }
+  return out;
+}
+
+function buildManualMultipartBody(params: {
+  purpose: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Uint8Array;
+}): { body: Uint8Array; contentType: string } {
+  const encoder = new TextEncoder();
+  const boundary = `----llmforzotero-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+  const safePurpose = toSafeMultipartToken(params.purpose);
+  const safeFileName = toSafeMultipartToken(params.fileName);
+  const safeMimeType = toSafeMultipartToken(params.mimeType);
+
+  const prefix = encoder.encode(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="purpose"\r\n\r\n` +
+      `${safePurpose}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="file"; filename="${safeFileName}"\r\n` +
+      `Content-Type: ${safeMimeType}\r\n\r\n`,
+  );
+  const suffix = encoder.encode(`\r\n--${boundary}--\r\n`);
+  return {
+    body: concatBytes([prefix, params.bytes, suffix]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+function buildUploadRequest(params: {
+  purpose: string;
+  fileName: string;
+  mimeType: string;
+  bytes: Uint8Array;
+}): { body: BodyInit; contentType?: string; mode: "formdata" | "manual" } {
+  const FormDataCtor = getFormDataCtor();
+  const BlobCtor = getBlobCtor();
+  if (FormDataCtor && BlobCtor) {
+    const body = new FormDataCtor();
+    const blob = new BlobCtor([params.bytes], {
+      type: params.mimeType || "application/octet-stream",
+    });
+    body.append("purpose", params.purpose || "assistants");
+    body.append("file", blob, params.fileName || "attachment");
+    return { body, mode: "formdata" };
+  }
+
+  const manual = buildManualMultipartBody({
+    purpose: params.purpose,
+    fileName: params.fileName,
+    mimeType: params.mimeType,
+    bytes: params.bytes,
+  });
+  return {
+    body: manual.body,
+    contentType: manual.contentType,
+    mode: "manual",
+  };
+}
+
+async function uploadAttachmentForResponses(params: {
+  apiBase: string;
+  apiKey: string;
+  attachment: ChatFileAttachment;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const filesUrl = resolveEndpoint(params.apiBase, FILES_ENDPOINT);
+  const storedPath = (params.attachment.storedPath || "").trim();
+  if (!storedPath) {
+    throw new Error("Attachment stored path is missing");
+  }
+  const cacheKey = [
+    filesUrl,
+    params.apiKey,
+    params.attachment.contentHash || storedPath,
+  ].join("::");
+  const cached = uploadedResponseFileIdCache.get(cacheKey);
+  if (cached) return cached;
+
+  throwIfAborted(params.signal);
+  const bytes = await readLocalFileBytes(storedPath);
+  throwIfAborted(params.signal);
+
+  const headers: Record<string, string> = {};
+  if (params.apiKey) {
+    headers.Authorization = `Bearer ${params.apiKey}`;
+  }
+  const uploadPurposes = ["assistants", "user_data"];
+  let lastError = "Unknown file upload error";
+  for (let index = 0; index < uploadPurposes.length; index++) {
+    const purpose = uploadPurposes[index];
+    const uploadRequest = buildUploadRequest({
+      purpose,
+      fileName: params.attachment.name || "attachment",
+      mimeType: params.attachment.mimeType || "application/octet-stream",
+      bytes,
+    });
+    const requestHeaders = uploadRequest.contentType
+      ? {
+          ...headers,
+          "Content-Type": uploadRequest.contentType,
+        }
+      : headers;
+    if (uploadRequest.mode === "manual") {
+      ztoolkit.log(
+        "LLM: Uploading attachment via manual multipart fallback",
+        params.attachment.name,
+      );
+    }
+
+    const res = await getFetch()(filesUrl, {
+      method: "POST",
+      headers: requestHeaders,
+      body: uploadRequest.body,
+      signal: params.signal,
+    });
+    if (res.ok) {
+      const data = (await res.json()) as unknown;
+      const fileId = extractUploadedFileId(data);
+      if (!fileId) {
+        throw new Error("File upload succeeded but no file ID was returned");
+      }
+      uploadedResponseFileIdCache.set(cacheKey, fileId);
+      return fileId;
+    }
+
+    const errText = await res.text();
+    lastError = `${res.status} ${res.statusText} - ${errText}`;
+    if (
+      index === uploadPurposes.length - 1 ||
+      !isPurposeValidationError(res.status, errText)
+    ) {
+      break;
+    }
+  }
+
+  throw new Error(lastError);
+}
+
+async function uploadFilesForResponses(params: {
+  apiBase: string;
+  apiKey: string;
+  attachments: ChatFileAttachment[] | undefined;
+  signal?: AbortSignal;
+}): Promise<string[]> {
+  const uploadable = normalizeUploadableAttachments(params.attachments);
+  if (!uploadable.length) return [];
+  const fileIds: string[] = [];
+  const seen = new Set<string>();
+  for (const attachment of uploadable) {
+    throwIfAborted(params.signal);
+    try {
+      const fileId = await uploadAttachmentForResponses({
+        apiBase: params.apiBase,
+        apiKey: params.apiKey,
+        attachment,
+        signal: params.signal,
+      });
+      if (!fileId || seen.has(fileId)) continue;
+      seen.add(fileId);
+      fileIds.push(fileId);
+    } catch (err) {
+      ztoolkit.log(
+        "LLM: Failed to upload attachment to Responses API",
+        attachment.name,
+        err,
+      );
+    }
+  }
+  return fileIds;
 }
 
 /** Build messages array from params */
@@ -570,7 +1007,10 @@ function stringifyContent(content: MessageContent): string {
     .join("\n");
 }
 
-function buildResponsesInput(messages: ChatMessage[]) {
+function buildResponsesInput(
+  messages: ChatMessage[],
+  responseFileIds?: string[],
+) {
   const instructionsParts: string[] = [];
   const input: Array<{
     type: "message";
@@ -580,17 +1020,47 @@ function buildResponsesInput(messages: ChatMessage[]) {
       | Array<
           | { type: "input_text"; text: string }
           | { type: "input_image"; image_url: string; detail?: string }
+          | { type: "input_file"; file_id: string }
         >;
   }> = [];
+  const normalizedFileIds = Array.isArray(responseFileIds)
+    ? responseFileIds
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : [];
 
-  for (const message of messages) {
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
     if (message.role === "system") {
       const text = stringifyContent(message.content);
       if (text) instructionsParts.push(text);
       continue;
     }
+    const appendFilesToMessage =
+      message.role === "user" &&
+      index === messages.length - 1 &&
+      normalizedFileIds.length > 0;
 
     if (typeof message.content === "string") {
+      if (appendFilesToMessage) {
+        const contentParts: Array<
+          | { type: "input_text"; text: string }
+          | { type: "input_file"; file_id: string }
+        > = [{ type: "input_text", text: message.content }];
+        for (const fileId of normalizedFileIds) {
+          contentParts.push({
+            type: "input_file",
+            file_id: fileId,
+          });
+        }
+        input.push({
+          type: "message",
+          role: message.role,
+          content: contentParts,
+        });
+        continue;
+      }
       input.push({
         type: "message",
         role: message.role,
@@ -599,7 +1069,11 @@ function buildResponsesInput(messages: ChatMessage[]) {
       continue;
     }
 
-    const contentParts = message.content.map((part) => {
+    const contentParts: Array<
+      | { type: "input_text"; text: string }
+      | { type: "input_image"; image_url: string; detail?: string }
+      | { type: "input_file"; file_id: string }
+    > = message.content.map((part) => {
       if (part.type === "text") {
         return { type: "input_text" as const, text: part.text };
       }
@@ -609,6 +1083,14 @@ function buildResponsesInput(messages: ChatMessage[]) {
         detail: part.image_url.detail,
       };
     });
+    if (appendFilesToMessage) {
+      for (const fileId of normalizedFileIds) {
+        contentParts.push({
+          type: "input_file",
+          file_id: fileId,
+        });
+      }
+    }
 
     input.push({
       type: "message",
@@ -774,6 +1256,7 @@ function createChatPayloadBuilder(params: {
   model: string;
   messages: ChatMessage[];
   useResponses: boolean;
+  responseFileIds?: string[];
   apiBase: string;
   effectiveTemperature: number;
   effectiveMaxTokens: number;
@@ -783,6 +1266,7 @@ function createChatPayloadBuilder(params: {
     model,
     messages,
     useResponses,
+    responseFileIds,
     apiBase,
     effectiveTemperature,
     effectiveMaxTokens,
@@ -802,7 +1286,7 @@ function createChatPayloadBuilder(params: {
     const payload = useResponses
       ? {
           model,
-          ...buildResponsesInput(messages),
+          ...buildResponsesInput(messages, responseFileIds),
           ...reasoningPayload.extra,
           ...temperatureParam,
           ...buildResponsesTokenParam(effectiveMaxTokens),
@@ -1087,6 +1571,14 @@ export async function callLLM(params: ChatParams): Promise<string> {
   });
   const messages = buildMessages(params, systemPrompt);
   const useResponses = isResponsesBase(apiBase);
+  const responseFileIds = useResponses
+    ? await uploadFilesForResponses({
+        apiBase,
+        apiKey,
+        attachments: params.attachments,
+        signal: params.signal,
+      })
+    : [];
   const effectiveTemperature = normalizeTemperature(params.temperature);
   const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
 
@@ -1098,6 +1590,7 @@ export async function callLLM(params: ChatParams): Promise<string> {
     model,
     messages,
     useResponses,
+    responseFileIds,
     apiBase,
     effectiveTemperature,
     effectiveMaxTokens,
@@ -1141,6 +1634,14 @@ export async function callLLMStream(
   });
   const messages = buildMessages(params, systemPrompt);
   const useResponses = isResponsesBase(apiBase);
+  const responseFileIds = useResponses
+    ? await uploadFilesForResponses({
+        apiBase,
+        apiKey,
+        attachments: params.attachments,
+        signal: params.signal,
+      })
+    : [];
   const effectiveTemperature = normalizeTemperature(params.temperature);
   const effectiveMaxTokens = normalizeMaxTokens(params.maxTokens);
 
@@ -1152,6 +1653,7 @@ export async function callLLMStream(
     model,
     messages,
     useResponses,
+    responseFileIds,
     apiBase,
     effectiveTemperature,
     effectiveMaxTokens,

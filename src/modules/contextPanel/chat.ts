@@ -10,6 +10,7 @@ import {
 } from "../../utils/chatStore";
 import {
   callLLMStream,
+  ChatFileAttachment,
   ChatMessage,
   getRuntimeReasoningOptions,
   ReasoningConfig as LLMReasoningConfig,
@@ -781,6 +782,7 @@ function restoreAssistantSnapshot(
 function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
+  fileAttachments: ChatFileAttachment[];
 } {
   const selectedTexts = getMessageSelectedTexts(userMessage);
   const selectedTextSources = normalizeSelectedTextSources(
@@ -824,7 +826,75 @@ function reconstructRetryPayload(userMessage: Message): {
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
-  return { question, screenshotImages };
+  const fileAttachmentsForModel: ChatFileAttachment[] = [];
+  for (const attachment of fileAttachments) {
+    if (
+      !attachment.name ||
+      typeof attachment.storedPath !== "string" ||
+      !attachment.storedPath.trim()
+    ) {
+      continue;
+    }
+    fileAttachmentsForModel.push({
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      storedPath: attachment.storedPath.trim(),
+      contentHash: attachment.contentHash,
+    });
+  }
+  return {
+    question,
+    screenshotImages,
+    fileAttachments: fileAttachmentsForModel,
+  };
+}
+
+function buildHistoryMessageForLLM(message: Message): ChatMessage {
+  if (message.role === "assistant") {
+    return {
+      role: "assistant",
+      content: sanitizeText(message.text || ""),
+    };
+  }
+  const { question } = reconstructRetryPayload(message);
+  return {
+    role: "user",
+    content: question.trim() ? question : sanitizeText(message.text || ""),
+  };
+}
+
+function buildLLMHistoryMessages(history: Message[]): ChatMessage[] {
+  return history.map((message) => buildHistoryMessageForLLM(message));
+}
+
+function normalizeModelFileAttachments(
+  attachments?: ChatAttachment[],
+): ChatFileAttachment[] {
+  if (!Array.isArray(attachments) || !attachments.length) return [];
+  return attachments
+    .filter(
+      (attachment) =>
+        Boolean(attachment) &&
+        typeof attachment === "object" &&
+        attachment.category !== "image" &&
+        typeof attachment.name === "string" &&
+        attachment.name.trim() &&
+        typeof attachment.storedPath === "string" &&
+        attachment.storedPath.trim(),
+    )
+    .map((attachment) => ({
+      name: attachment.name.trim(),
+      mimeType:
+        typeof attachment.mimeType === "string" && attachment.mimeType.trim()
+          ? attachment.mimeType.trim()
+          : "application/octet-stream",
+      storedPath: attachment.storedPath?.trim(),
+      contentHash:
+        typeof attachment.contentHash === "string" &&
+        /^[a-f0-9]{64}$/i.test(attachment.contentHash.trim())
+          ? attachment.contentHash.trim().toLowerCase()
+          : undefined,
+    }));
 }
 
 export type EditLatestTurnMarker = {
@@ -1047,7 +1117,7 @@ export async function retryLatestAssistantResponse(
   const historyForLLM = history
     .slice(0, retryPair.userIndex)
     .slice(-MAX_HISTORY_MESSAGES);
-  const { question, screenshotImages } = reconstructRetryPayload(
+  const { question, screenshotImages, fileAttachments } = reconstructRetryPayload(
     retryPair.userMessage,
   );
   if (!question.trim()) {
@@ -1081,11 +1151,14 @@ export async function retryLatestAssistantResponse(
 
   const assistantMessage = retryPair.assistantMessage;
   const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
+  assistantMessage.text = "";
+  assistantMessage.timestamp = Date.now();
+  assistantMessage.modelName = effectiveModel;
+  assistantMessage.reasoningSummary = undefined;
+  assistantMessage.reasoningDetails = undefined;
+  assistantMessage.reasoningOpen = false;
   assistantMessage.streaming = true;
   refreshChatSafely();
-  let nextAssistantText = "";
-  let nextReasoningSummary = "";
-  let nextReasoningDetails = "";
 
   const restoreOriginalAssistant = () => {
     restoreAssistantSnapshot(assistantMessage, assistantSnapshot);
@@ -1107,15 +1180,21 @@ export async function retryLatestAssistantResponse(
       );
     }
 
-    const llmHistory: ChatMessage[] = historyForLLM.map((msg) => ({
-      role: msg.role,
-      content: msg.text,
-    }));
+    const llmHistory = buildLLMHistoryMessages(historyForLLM);
 
     const AbortControllerCtor = getAbortController();
     setCurrentAbortController(
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
+    let refreshQueued = false;
+    const queueRefresh = () => {
+      if (refreshQueued) return;
+      refreshQueued = true;
+      setTimeout(() => {
+        refreshQueued = false;
+        refreshChatSafely();
+      }, 50);
+    };
 
     const answer = await callLLMStream(
       {
@@ -1124,6 +1203,7 @@ export async function retryLatestAssistantResponse(
         history: llmHistory,
         signal: currentAbortController?.signal,
         images: screenshotImages,
+        attachments: fileAttachments,
         model: effectiveModel,
         apiBase: effectiveApiBase,
         apiKey: effectiveApiKey,
@@ -1132,21 +1212,23 @@ export async function retryLatestAssistantResponse(
         maxTokens: effectiveAdvanced?.maxTokens,
       },
       (delta) => {
-        nextAssistantText += sanitizeText(delta);
+        assistantMessage.text += sanitizeText(delta);
+        queueRefresh();
       },
       (reasoningEvent: ReasoningEvent) => {
         if (reasoningEvent.summary) {
-          nextReasoningSummary = appendReasoningPart(
-            nextReasoningSummary,
+          assistantMessage.reasoningSummary = appendReasoningPart(
+            assistantMessage.reasoningSummary,
             reasoningEvent.summary,
           );
         }
         if (reasoningEvent.details) {
-          nextReasoningDetails = appendReasoningPart(
-            nextReasoningDetails,
+          assistantMessage.reasoningDetails = appendReasoningPart(
+            assistantMessage.reasoningDetails,
             reasoningEvent.details,
           );
         }
+        queueRefresh();
       },
     );
 
@@ -1160,11 +1242,9 @@ export async function retryLatestAssistantResponse(
     }
 
     assistantMessage.text =
-      sanitizeText(answer) || nextAssistantText || "No response.";
+      sanitizeText(answer) || assistantMessage.text || "No response.";
     assistantMessage.timestamp = Date.now();
     assistantMessage.modelName = effectiveModel;
-    assistantMessage.reasoningSummary = nextReasoningSummary || undefined;
-    assistantMessage.reasoningDetails = nextReasoningDetails || undefined;
     assistantMessage.reasoningOpen = false;
     assistantMessage.streaming = false;
     refreshChatSafely();
@@ -1277,6 +1357,7 @@ export async function sendQuestion(
   }
   const history = chatHistory.get(conversationKey)!;
   const historyForLLM = history.slice(-MAX_HISTORY_MESSAGES);
+  const requestFileAttachments = normalizeModelFileAttachments(attachments);
   const fallbackProfile = getSelectedProfileForItem(item.id);
   const effectiveModel = (
     model ||
@@ -1393,10 +1474,7 @@ export async function sendQuestion(
       );
     }
 
-    const llmHistory: ChatMessage[] = historyForLLM.map((msg) => ({
-      role: msg.role,
-      content: msg.text,
-    }));
+    const llmHistory = buildLLMHistoryMessages(historyForLLM);
 
     const AbortControllerCtor = getAbortController();
     setCurrentAbortController(
@@ -1419,6 +1497,7 @@ export async function sendQuestion(
         history: llmHistory,
         signal: currentAbortController?.signal,
         images: images,
+        attachments: requestFileAttachments,
         model: effectiveModel,
         apiBase: effectiveApiBase,
         apiKey: effectiveApiKey,

@@ -30,7 +30,9 @@ It is always the first question that comes to mind when you open a new paper. Wi
 
 ![image](./assets/text.gif)
 
-If you come across a complex paragraph or a technical term that you don't understand, simply select the text and ask the model to explain it.
+If you come across a complex paragraph or a technical term that you don't understand, simply select the text and ask the model to explain it. 
+
+You can select up to 5 contexts from both model's answer and the paper content to provide more context for the model to generate a more accurate and detailed explanation.
 
 In the plugin, you can enable the pop-up option to conveniently add text to the chat.
 
