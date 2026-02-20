@@ -366,9 +366,13 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
 
   // Show floating "Quote" action when selecting assistant response text.
+  // Keep one quote instance per panel and proactively clean stale DOM buttons.
   const popupHost = panelRoot as HTMLDivElement & {
     __llmSelectionPopupCleanup?: () => void;
   };
+  panelRoot
+    .querySelectorAll(".llm-assistant-selection-action")
+    .forEach((node: Element) => node.remove());
   if (popupHost.__llmSelectionPopupCleanup) {
     popupHost.__llmSelectionPopupCleanup();
     delete popupHost.__llmSelectionPopupCleanup;
@@ -418,7 +422,12 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
 
   const updateSelectionPopup = (bubble?: HTMLElement | null) => {
-    if (!panelWin || !chatBox) {
+    if (
+      !panelWin ||
+      !chatBox ||
+      !panelRoot.isConnected ||
+      panelRoot.getClientRects().length === 0
+    ) {
       hideSelectionPopup();
       return;
     }
@@ -546,6 +555,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
 
   const onPanelMouseUp = (e: Event) => {
     if (!panelWin) return;
+    if (!panelRoot.isConnected) {
+      disposeSelectionPopup();
+      return;
+    }
     const me = e as MouseEvent;
     if (typeof me.button === "number" && me.button !== 0) {
       selectionDragStartBubble = null;
@@ -553,6 +566,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       return;
     }
     const target = e.target as Element | null;
+    const targetInsidePanel = Boolean(target && panelRoot.contains(target));
+    if (!targetInsidePanel && !selectionDragStartBubble) {
+      hideSelectionPopup();
+      return;
+    }
     const bubble = target?.closest(
       ".llm-bubble.assistant",
     ) as HTMLElement | null;
@@ -561,6 +579,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     panelWin.setTimeout(() => updateSelectionPopup(fallbackBubble), 0);
   };
   const onDocKeyUp = () => {
+    if (!panelRoot.isConnected) {
+      disposeSelectionPopup();
+      return;
+    }
     panelWin?.setTimeout(() => updateSelectionPopup(), 0);
   };
   const onPanelPointerDown = (e: Event) => {
@@ -595,7 +617,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   chatBox?.addEventListener("contextmenu", onChatContextMenu, true);
   panelWin?.addEventListener("resize", onChatScrollHide, { passive: true });
 
-  popupHost.__llmSelectionPopupCleanup = () => {
+  const disposeSelectionPopup = () => {
     panelDoc.removeEventListener("mouseup", onPanelMouseUp, true);
     panelDoc.removeEventListener("keyup", onDocKeyUp, true);
     panelRoot.removeEventListener("pointerdown", onPanelPointerDown, true);
@@ -603,7 +625,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     chatBox?.removeEventListener("contextmenu", onChatContextMenu, true);
     panelWin?.removeEventListener("resize", onChatScrollHide);
     selectionPopup.remove();
+    if (popupHost.__llmSelectionPopupCleanup === disposeSelectionPopup) {
+      delete popupHost.__llmSelectionPopupCleanup;
+    }
   };
+  popupHost.__llmSelectionPopupCleanup = disposeSelectionPopup;
 
   if (responseMenu && responseMenuCopyBtn && responseMenuNoteBtn) {
     if (!responseMenu.dataset.listenerAttached) {
