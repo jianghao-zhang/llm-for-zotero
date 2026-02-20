@@ -36,7 +36,15 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   // Disable CSS scroll anchoring on the Zotero-provided panel body so that
   // Gecko doesn't fight with our programmatic scroll management.
   if (body instanceof (doc.defaultView?.HTMLElement || HTMLElement)) {
-    (body as HTMLElement).style.overflowAnchor = "none";
+    const hostBody = body as HTMLElement;
+    hostBody.style.overflowAnchor = "none";
+    // Keep panel host width-bound: descendants (e.g., long KaTeX blocks)
+    // must never raise the side panel's minimum width.
+    hostBody.style.minWidth = "0";
+    hostBody.style.width = "100%";
+    hostBody.style.maxWidth = "100%";
+    hostBody.style.overflowX = "hidden";
+    hostBody.style.boxSizing = "border-box";
   }
 
   // Main container

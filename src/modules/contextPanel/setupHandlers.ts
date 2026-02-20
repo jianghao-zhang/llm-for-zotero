@@ -1068,6 +1068,14 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
     button.classList.toggle("llm-action-icon-only", mode === "icon");
   };
+  const setSendButtonLabel = (mode: "icon" | "full") => {
+    const nextLabel = mode === "icon" ? "↑" : "Send";
+    if (sendBtn.textContent !== nextLabel) {
+      sendBtn.textContent = nextLabel;
+    }
+    sendBtn.classList.toggle("llm-action-icon-only", mode === "icon");
+    sendBtn.title = "Send";
+  };
 
   let layoutRetryScheduled = false;
   const applyResponsiveActionButtonsLayout = () => {
@@ -1317,11 +1325,16 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       return leftRequiredWidth + rightRequiredWidth + rowGap;
     };
     const getAvailableRowWidth = () => {
+      const hostWidth = Math.ceil(
+        (body as HTMLElement | null)?.getBoundingClientRect?.().width || 0,
+      );
       const rowWidth = actionsRow?.clientWidth || 0;
-      if (rowWidth > 0) return rowWidth;
+      if (rowWidth > 0) return hostWidth > 0 ? Math.min(rowWidth, hostWidth) : rowWidth;
       const panelWidth = panelRoot?.clientWidth || 0;
-      if (panelWidth > 0) return panelWidth;
-      return actionsLeft.clientWidth || 0;
+      if (panelWidth > 0) return hostWidth > 0 ? Math.min(panelWidth, hostWidth) : panelWidth;
+      const leftWidth = actionsLeft.clientWidth || 0;
+      if (leftWidth > 0) return hostWidth > 0 ? Math.min(leftWidth, hostWidth) : leftWidth;
+      return hostWidth;
     };
     const doesModeFit = (
       dropdownMode: DropdownMode,
@@ -1368,6 +1381,11 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         UPLOAD_FILE_EXPANDED_LABEL,
         UPLOAD_FILE_COMPACT_LABEL,
         contextButtonMode,
+      );
+      setSendButtonLabel(
+        dropdownMode === "icon" && contextButtonMode === "icon"
+          ? "icon"
+          : "full",
       );
 
       modelBtn.classList.remove("llm-model-btn-collapsed");

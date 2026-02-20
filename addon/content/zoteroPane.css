@@ -14,6 +14,10 @@
   flex-direction: column;
   gap: 10px;
   font-size: var(--llm-fs-12);
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  contain: inline-size;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -140,6 +144,10 @@
 
 .llm-messages {
   flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  contain: inline-size;
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
@@ -355,6 +363,7 @@
   flex-direction: column;
   gap: 4px;
   max-width: 100%;
+  min-width: 0;
 }
 
 .llm-message-wrapper.user {
@@ -362,7 +371,10 @@
 }
 
 .llm-message-wrapper.assistant {
-  align-items: flex-start;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* Message Bubbles */
@@ -370,6 +382,7 @@
   padding: 10px 14px;
   border-radius: 12px;
   max-width: 95%;
+  min-width: 0;
   word-break: break-word;
   line-height: 1.5;
   font-size: var(--llm-fs-12);
@@ -716,6 +729,10 @@
   color: var(--fill-primary);
   border-radius: 0;
   padding: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .llm-model-name {
@@ -952,13 +969,18 @@
 /* Display math block */
 .llm-bubble.assistant .math-display {
   display: block;
-  text-align: center;
-  margin: 16px 4px;
+  text-align: left;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  margin: 16px 0;
   padding: 12px 16px;
   background: rgba(0, 0, 0, 0.04);
   border-radius: 8px;
   overflow-x: auto;
   overflow-y: hidden;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Inline math */
@@ -978,8 +1000,23 @@
 
 .llm-bubble.assistant .katex-display {
   margin: 0 !important;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.llm-bubble.assistant .math-display > .katex-display {
+  min-width: 0;
+}
+
+.llm-bubble.assistant .math-display > .katex-display > .katex {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  text-align: left;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Math error styling */
@@ -1008,6 +1045,20 @@
 .llm-bubble.assistant .math-display-inline {
   display: inline-block;
   vertical-align: middle;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.llm-bubble.assistant .math-display-inline > .katex-display > .katex {
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .llm-bubble.assistant table {
@@ -1355,6 +1406,27 @@
   box-shadow: none;
 }
 
+.llm-upload-file-btn,
+.llm-upload-file-btn.llm-action-icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  min-width: 36px;
+  height: var(--llm-action-height);
+  min-height: var(--llm-action-height);
+  padding: 0;
+  margin: 0;
+  font-family: inherit;
+  font-size: var(--llm-action-icon-font-size);
+  font-weight: 600;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+
 .llm-select-text-btn.llm-action-icon-only,
 .llm-screenshot-btn.llm-action-icon-only {
   width: 36px;
@@ -1367,8 +1439,10 @@
 
 .llm-select-text-btn:hover:not(:disabled),
 .llm-screenshot-btn:hover:not(:disabled),
+.llm-upload-file-btn:hover:not(:disabled),
 .llm-select-text-btn:focus-visible,
-.llm-screenshot-btn:focus-visible {
+.llm-screenshot-btn:focus-visible,
+.llm-upload-file-btn:focus-visible {
   background: transparent;
   border-color: transparent;
 }
@@ -1383,6 +1457,15 @@
   font-size: var(--llm-action-font-size);
   font-weight: 600;
   line-height: 1;
+}
+
+.llm-send-btn.llm-action-icon-only {
+  width: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: var(--llm-action-icon-font-size);
+  font-weight: 700;
 }
 
 .llm-cancel-btn {
@@ -2024,29 +2107,4 @@
 .llm-remove-img-btn:focus-visible {
   outline: 1px solid var(--color-accent);
   outline-offset: 1px;
-}
-
-.llm-upload-file-btn {
-  min-width: 20px;
-  width: 20px;
-  height: var(--llm-action-height);
-  min-height: var(--llm-action-height);
-  padding: 0;
-  border: none;
-  background: transparent;
-  font-size: 30px;
-  line-height: 0.9;
-  font-weight: 400;
-  border-radius: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  transform: translateY(-1px);
-}
-
-.llm-upload-file-btn:hover:not(:disabled) {
-  background: transparent;
-  border-color: transparent;
-  color: var(--fill-primary);
 }
