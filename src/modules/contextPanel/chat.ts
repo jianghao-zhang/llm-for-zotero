@@ -4,6 +4,7 @@ import {
   clearConversation as clearStoredConversation,
   loadConversation,
   pruneConversation,
+  updateLatestUserMessage as updateStoredLatestUserMessage,
   updateLatestAssistantMessage as updateStoredLatestAssistantMessage,
   StoredChatMessage,
 } from "../../utils/chatStore";
@@ -42,6 +43,7 @@ import {
   setCurrentAbortController,
   nextRequestId,
   setResponseMenuTarget,
+  setPromptMenuTarget,
   pdfTextCache,
 } from "./state";
 import {
@@ -698,7 +700,7 @@ export function getSelectedReasoningForItem(
   return { provider, level: selectedLevel as LLMReasoningLevel };
 }
 
-type LatestRetryPair = {
+export type LatestRetryPair = {
   userIndex: number;
   userMessage: Message;
   assistantMessage: Message;
@@ -714,7 +716,9 @@ type AssistantMessageSnapshot = Pick<
   | "reasoningOpen"
 >;
 
-function findLatestRetryPair(history: Message[]): LatestRetryPair | null {
+export function findLatestRetryPair(
+  history: Message[],
+): LatestRetryPair | null {
   for (let i = history.length - 1; i >= 1; i--) {
     if (history[i]?.role !== "assistant") continue;
     if (history[i - 1]?.role !== "user") return null;
@@ -798,6 +802,172 @@ function reconstructRetryPayload(userMessage: Message): {
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
   return { question, screenshotImages };
+}
+
+export type EditLatestTurnMarker = {
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+};
+
+export type EditLatestTurnResult =
+  | "ok"
+  | "missing"
+  | "stale"
+  | "persist-failed";
+
+function normalizeEditableAttachments(
+  attachments?: ChatAttachment[],
+): ChatAttachment[] {
+  const normalized = (
+    Array.isArray(attachments)
+      ? attachments.filter(
+          (attachment) =>
+            Boolean(attachment) &&
+            typeof attachment === "object" &&
+            typeof attachment.id === "string" &&
+            attachment.id.trim() &&
+            typeof attachment.name === "string" &&
+            attachment.name.trim() &&
+            attachment.category !== "image",
+        )
+      : []
+  ) as ChatAttachment[];
+  return normalized.map((attachment) => ({
+    ...attachment,
+    id: attachment.id.trim(),
+    name: attachment.name.trim(),
+    mimeType:
+      typeof attachment.mimeType === "string" && attachment.mimeType.trim()
+        ? attachment.mimeType.trim()
+        : "application/octet-stream",
+    sizeBytes: Number.isFinite(attachment.sizeBytes)
+      ? Math.max(0, attachment.sizeBytes)
+      : 0,
+    textContent:
+      typeof attachment.textContent === "string"
+        ? attachment.textContent
+        : undefined,
+    storedPath:
+      typeof attachment.storedPath === "string" && attachment.storedPath.trim()
+        ? attachment.storedPath.trim()
+        : undefined,
+    contentHash:
+      typeof attachment.contentHash === "string" &&
+      /^[a-f0-9]{64}$/i.test(attachment.contentHash.trim())
+        ? attachment.contentHash.trim().toLowerCase()
+        : undefined,
+  }));
+}
+
+export async function editLatestUserMessageAndRetry(
+  body: Element,
+  item: Zotero.Item,
+  displayQuestion: string,
+  selectedTexts?: string[],
+  selectedTextSources?: SelectedTextSource[],
+  screenshotImages?: string[],
+  attachments?: ChatAttachment[],
+  expected?: EditLatestTurnMarker,
+  model?: string,
+  apiBase?: string,
+  apiKey?: string,
+  reasoning?: LLMReasoningConfig,
+  advanced?: AdvancedModelParams,
+): Promise<EditLatestTurnResult> {
+  await ensureConversationLoaded(item);
+  const conversationKey = getConversationKey(item);
+  const history = chatHistory.get(conversationKey) || [];
+  const retryPair = findLatestRetryPair(history);
+  if (!retryPair) return "missing";
+  if (retryPair.assistantMessage.streaming) return "stale";
+  if (
+    expected &&
+    (expected.conversationKey !== conversationKey ||
+      retryPair.userMessage.timestamp !== expected.userTimestamp ||
+      retryPair.assistantMessage.timestamp !== expected.assistantTimestamp)
+  ) {
+    return "stale";
+  }
+
+  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
+  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
+    selectedTextSources,
+    selectedTextsForMessage.length,
+  );
+  const selectedTextForMessage = selectedTextsForMessage[0] || "";
+  const screenshotImagesForMessage = Array.isArray(screenshotImages)
+    ? screenshotImages
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, MAX_SELECTED_IMAGES)
+    : [];
+  const attachmentsForMessage = normalizeEditableAttachments(attachments);
+  const updatedTimestamp = Date.now();
+  const nextDisplayQuestion = sanitizeText(displayQuestion || "");
+
+  retryPair.userMessage.text = nextDisplayQuestion;
+  retryPair.userMessage.timestamp = updatedTimestamp;
+  retryPair.userMessage.selectedText = selectedTextForMessage || undefined;
+  retryPair.userMessage.selectedTextExpanded = false;
+  retryPair.userMessage.selectedTexts = selectedTextsForMessage.length
+    ? selectedTextsForMessage
+    : undefined;
+  retryPair.userMessage.selectedTextSources =
+    selectedTextSourcesForMessage.length
+      ? selectedTextSourcesForMessage
+      : undefined;
+  retryPair.userMessage.selectedTextExpandedIndex = -1;
+  retryPair.userMessage.screenshotImages = screenshotImagesForMessage.length
+    ? screenshotImagesForMessage
+    : undefined;
+  retryPair.userMessage.screenshotExpanded = false;
+  retryPair.userMessage.screenshotActiveIndex =
+    screenshotImagesForMessage.length ? 0 : undefined;
+  retryPair.userMessage.attachments = attachmentsForMessage.length
+    ? attachmentsForMessage
+    : undefined;
+  retryPair.userMessage.attachmentsExpanded = false;
+  retryPair.userMessage.attachmentActiveIndex = undefined;
+
+  try {
+    await updateStoredLatestUserMessage(conversationKey, {
+      text: retryPair.userMessage.text,
+      timestamp: retryPair.userMessage.timestamp,
+      selectedText: retryPair.userMessage.selectedText,
+      selectedTexts: retryPair.userMessage.selectedTexts,
+      selectedTextSources: retryPair.userMessage.selectedTextSources,
+      screenshotImages: retryPair.userMessage.screenshotImages,
+      attachments: retryPair.userMessage.attachments,
+    });
+
+    const storedMessages = await loadConversation(
+      conversationKey,
+      PERSISTED_HISTORY_LIMIT,
+    );
+    const attachmentHashes =
+      collectAttachmentHashesFromStoredMessages(storedMessages);
+    await replaceOwnerAttachmentRefs(
+      "conversation",
+      conversationKey,
+      attachmentHashes,
+    );
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to persist edited latest user message", err);
+    return "persist-failed";
+  }
+
+  await retryLatestAssistantResponse(
+    body,
+    item,
+    model,
+    apiBase,
+    apiKey,
+    reasoning,
+    advanced,
+  );
+  return "ok";
 }
 
 export async function retryLatestAssistantResponse(
@@ -1312,6 +1482,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
   const doc = body.ownerDocument!;
+  setPromptMenuTarget(null);
 
   if (!item) {
     chatBox.innerHTML = `
@@ -1347,13 +1518,17 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
   chatBox.innerHTML = "";
 
-  let latestAssistantIndex = -1;
-  for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i]?.role === "assistant") {
-      latestAssistantIndex = i;
-      break;
-    }
-  }
+  const latestRetryPair = findLatestRetryPair(history);
+  const latestAssistantIndex = latestRetryPair
+    ? latestRetryPair.userIndex + 1
+    : -1;
+  const latestEditableUserIndex = latestRetryPair?.userIndex ?? -1;
+  const latestEditableUserTimestamp = latestRetryPair?.userMessage.timestamp;
+  const latestEditableAssistantTimestamp =
+    latestRetryPair?.assistantMessage.timestamp;
+  const latestEditableIsIdle = Boolean(
+    latestRetryPair && !latestRetryPair.assistantMessage.streaming,
+  );
 
   for (const [index, msg] of history.entries()) {
     const isUser = msg.role === "user";
@@ -1720,6 +1895,49 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         renderSelectedTextStates();
       }
       bubble.textContent = sanitizeText(msg.text || "");
+      if (
+        item &&
+        latestEditableIsIdle &&
+        index === latestEditableUserIndex &&
+        Number.isFinite(latestEditableUserTimestamp) &&
+        Number.isFinite(latestEditableAssistantTimestamp)
+      ) {
+        bubble.addEventListener("contextmenu", (e: Event) => {
+          const me = e as MouseEvent;
+          me.preventDefault();
+          me.stopPropagation();
+          if (typeof me.stopImmediatePropagation === "function") {
+            me.stopImmediatePropagation();
+          }
+          const promptMenu = body.querySelector(
+            "#llm-prompt-menu",
+          ) as HTMLDivElement | null;
+          const responseMenu = body.querySelector(
+            "#llm-response-menu",
+          ) as HTMLDivElement | null;
+          const exportMenu = body.querySelector(
+            "#llm-export-menu",
+          ) as HTMLDivElement | null;
+          const retryModelMenu = body.querySelector(
+            "#llm-retry-model-menu",
+          ) as HTMLDivElement | null;
+          if (!promptMenu) return;
+          if (responseMenu) responseMenu.style.display = "none";
+          if (exportMenu) exportMenu.style.display = "none";
+          if (retryModelMenu) {
+            retryModelMenu.classList.remove("llm-model-menu-open");
+            retryModelMenu.style.display = "none";
+          }
+          setResponseMenuTarget(null);
+          setPromptMenuTarget({
+            item,
+            conversationKey,
+            userTimestamp: latestEditableUserTimestamp as number,
+            assistantTimestamp: latestEditableAssistantTimestamp as number,
+          });
+          positionMenuAtPointer(body, promptMenu, me.clientX, me.clientY);
+        });
+      }
     } else {
       const hasModelName = Boolean(msg.modelName?.trim());
       const hasAnswerText = Boolean(msg.text);
@@ -1745,8 +1963,20 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           const exportMenu = body.querySelector(
             "#llm-export-menu",
           ) as HTMLDivElement | null;
+          const promptMenu = body.querySelector(
+            "#llm-prompt-menu",
+          ) as HTMLDivElement | null;
+          const retryModelMenu = body.querySelector(
+            "#llm-retry-model-menu",
+          ) as HTMLDivElement | null;
           if (!responseMenu || !item) return;
           if (exportMenu) exportMenu.style.display = "none";
+          if (promptMenu) promptMenu.style.display = "none";
+          if (retryModelMenu) {
+            retryModelMenu.classList.remove("llm-model-menu-open");
+            retryModelMenu.style.display = "none";
+          }
+          setPromptMenuTarget(null);
           // If the user has text selected within this bubble, extract
           // just that portion (with KaTeX math properly handled).
           // Otherwise fall back to the full raw markdown source.

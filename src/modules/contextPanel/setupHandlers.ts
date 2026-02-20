@@ -38,6 +38,8 @@ import {
   setPanelFontScalePercent,
   responseMenuTarget,
   setResponseMenuTarget,
+  promptMenuTarget,
+  setPromptMenuTarget,
   chatHistory,
   loadedConversationKeys,
   currentRequestId,
@@ -51,6 +53,7 @@ import {
   resolvePromptText,
   getSelectedTextWithinBubble,
   getAttachmentTypeLabel,
+  normalizeSelectedTextSource,
 } from "./textUtils";
 import {
   positionMenuBelowButton,
@@ -77,6 +80,9 @@ import {
   getReasoningOptions,
   getSelectedReasoningForItem,
   retryLatestAssistantResponse,
+  editLatestUserMessageAndRetry,
+  findLatestRetryPair,
+  type EditLatestTurnMarker,
 } from "./chat";
 import {
   getActiveReaderSelectionText,
@@ -221,6 +227,12 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   const responseMenuNoteBtn = body.querySelector(
     "#llm-response-menu-note",
   ) as HTMLButtonElement | null;
+  const promptMenu = body.querySelector(
+    "#llm-prompt-menu",
+  ) as HTMLDivElement | null;
+  const promptMenuEditBtn = body.querySelector(
+    "#llm-prompt-menu-edit",
+  ) as HTMLButtonElement | null;
   const exportMenu = body.querySelector(
     "#llm-export-menu",
   ) as HTMLDivElement | null;
@@ -252,11 +264,15 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     return;
   }
   const panelWin = panelDoc?.defaultView || null;
+  const ElementCtor = panelDoc.defaultView?.Element;
+  const isElementNode = (value: unknown): value is Element =>
+    Boolean(ElementCtor && value instanceof ElementCtor);
   panelRoot.tabIndex = 0;
   applyPanelFontScale(panelRoot);
 
   // Compute conversation key early so all closures can reference it.
   const conversationKey = item ? getConversationKey(item) : null;
+  let activeEditSession: EditLatestTurnMarker | null = null;
   let attachmentGcTimer: number | null = null;
   const scheduleAttachmentGc = (delayMs = 5_000) => {
     const win = body.ownerDocument?.defaultView;
@@ -337,6 +353,10 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (responseMenu) responseMenu.style.display = "none";
     setResponseMenuTarget(null);
   };
+  const closePromptMenu = () => {
+    if (promptMenu) promptMenu.style.display = "none";
+    setPromptMenuTarget(null);
+  };
   const closeExportMenu = () => {
     if (exportMenu) exportMenu.style.display = "none";
   };
@@ -383,14 +403,12 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
       return null;
     }
-    const anchorEl =
-      selection.anchorNode instanceof Element
-        ? selection.anchorNode
-        : selection.anchorNode?.parentElement || null;
-    const focusEl =
-      selection.focusNode instanceof Element
-        ? selection.focusNode
-        : selection.focusNode?.parentElement || null;
+    const anchorEl = isElementNode(selection.anchorNode)
+      ? selection.anchorNode
+      : selection.anchorNode?.parentElement || null;
+    const focusEl = isElementNode(selection.focusNode)
+      ? selection.focusNode
+      : selection.focusNode?.parentElement || null;
     if (!anchorEl || !focusEl) return null;
     const bubbleA = anchorEl.closest(".llm-bubble.assistant");
     const bubbleB = focusEl.closest(".llm-bubble.assistant");
@@ -654,6 +672,155 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     }
   }
 
+  if (promptMenu && promptMenuEditBtn) {
+    if (!promptMenu.dataset.listenerAttached) {
+      promptMenu.dataset.listenerAttached = "true";
+      promptMenu.addEventListener("pointerdown", (e: Event) => {
+        e.stopPropagation();
+      });
+      promptMenu.addEventListener("mousedown", (e: Event) => {
+        e.stopPropagation();
+      });
+      promptMenu.addEventListener("contextmenu", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      promptMenuEditBtn.addEventListener("click", async (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const target = promptMenuTarget;
+        closePromptMenu();
+        if (!item || !target) return;
+        if (
+          target.item.id !== item.id ||
+          target.conversationKey !== getConversationKey(item)
+        ) {
+          activeEditSession = null;
+          if (status) setStatus(status, EDIT_STALE_STATUS_TEXT, "error");
+          return;
+        }
+        const latest = await getLatestEditablePair();
+        if (!latest) {
+          activeEditSession = null;
+          if (status) setStatus(status, "No editable latest prompt", "error");
+          return;
+        }
+        const { conversationKey: latestKey, pair } = latest;
+        if (
+          pair.assistantMessage.streaming ||
+          pair.userMessage.timestamp !== target.userTimestamp ||
+          pair.assistantMessage.timestamp !== target.assistantTimestamp
+        ) {
+          activeEditSession = null;
+          if (status) setStatus(status, EDIT_STALE_STATUS_TEXT, "error");
+          return;
+        }
+
+        inputBox.value = sanitizeText(pair.userMessage.text || "");
+
+        const restoredSelectedTexts = Array.isArray(
+          pair.userMessage.selectedTexts,
+        )
+          ? pair.userMessage.selectedTexts
+              .map((value) =>
+                typeof value === "string" ? sanitizeText(value).trim() : "",
+              )
+              .filter(Boolean)
+          : typeof pair.userMessage.selectedText === "string" &&
+              sanitizeText(pair.userMessage.selectedText).trim()
+            ? [sanitizeText(pair.userMessage.selectedText).trim()]
+            : [];
+        const restoredSelectedEntries = restoredSelectedTexts.map(
+          (text, index) => ({
+            text,
+            source: normalizeSelectedTextSource(
+              pair.userMessage.selectedTextSources?.[index],
+            ),
+          }),
+        );
+        if (restoredSelectedEntries.length) {
+          setSelectedTextContextEntries(item.id, restoredSelectedEntries);
+        } else {
+          clearSelectedTextState(item.id);
+        }
+        setSelectedTextExpandedIndex(item.id, null);
+
+        const restoredFiles = (
+          Array.isArray(pair.userMessage.attachments)
+            ? pair.userMessage.attachments.filter(
+                (attachment) =>
+                  Boolean(attachment) &&
+                  typeof attachment === "object" &&
+                  attachment.category !== "image" &&
+                  typeof attachment.id === "string" &&
+                  attachment.id.trim() &&
+                  typeof attachment.name === "string" &&
+                  attachment.name.trim(),
+              )
+            : []
+        ).map((attachment) => ({
+          ...attachment,
+          id: attachment.id.trim(),
+          name: attachment.name.trim(),
+          mimeType:
+            typeof attachment.mimeType === "string" &&
+            attachment.mimeType.trim()
+              ? attachment.mimeType.trim()
+              : "application/octet-stream",
+          sizeBytes: Number.isFinite(attachment.sizeBytes)
+            ? Math.max(0, attachment.sizeBytes)
+            : 0,
+          textContent:
+            typeof attachment.textContent === "string"
+              ? attachment.textContent
+              : undefined,
+          storedPath:
+            typeof attachment.storedPath === "string" &&
+            attachment.storedPath.trim()
+              ? attachment.storedPath.trim()
+              : undefined,
+          contentHash:
+            typeof attachment.contentHash === "string" &&
+            /^[a-f0-9]{64}$/i.test(attachment.contentHash.trim())
+              ? attachment.contentHash.trim().toLowerCase()
+              : undefined,
+        }));
+        if (restoredFiles.length) {
+          selectedFileAttachmentCache.set(item.id, restoredFiles);
+          selectedFilePreviewExpandedCache.set(item.id, false);
+        } else {
+          clearSelectedFileState(item.id);
+        }
+
+        const restoredImages = Array.isArray(pair.userMessage.screenshotImages)
+          ? pair.userMessage.screenshotImages
+              .filter((entry): entry is string => typeof entry === "string")
+              .map((entry) => entry.trim())
+              .filter(Boolean)
+              .slice(0, MAX_SELECTED_IMAGES)
+          : [];
+        if (restoredImages.length) {
+          selectedImageCache.set(item.id, restoredImages);
+          selectedImagePreviewExpandedCache.set(item.id, false);
+          selectedImagePreviewActiveIndexCache.set(item.id, 0);
+        } else {
+          clearSelectedImageState(item.id);
+        }
+
+        updateFilePreviewPreservingScroll();
+        updateImagePreviewPreservingScroll();
+        updateSelectedTextPreviewPreservingScroll();
+        activeEditSession = {
+          conversationKey: latestKey,
+          userTimestamp: pair.userMessage.timestamp,
+          assistantTimestamp: pair.assistantMessage.timestamp,
+        };
+        inputBox.focus({ preventScroll: true });
+        if (status) setStatus(status, "Editing latest prompt", "ready");
+      });
+    }
+  }
+
   if (exportMenu && exportMenuCopyBtn && exportMenuNoteBtn) {
     if (!exportMenu.dataset.listenerAttached) {
       exportMenu.dataset.listenerAttached = "true";
@@ -718,6 +885,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (exportBtn.disabled || !exportMenu || !item) return;
       closeRetryModelMenu();
       closeResponseMenu();
+      closePromptMenu();
       if (exportMenu.style.display !== "none") {
         closeExportMenu();
         return;
@@ -759,6 +927,17 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   };
   const runWithChatScrollGuard = (fn: () => void) => {
     withScrollGuard(chatBox, conversationKey, fn);
+  };
+  const EDIT_STALE_STATUS_TEXT =
+    "Edit target changed. Please edit latest prompt again.";
+  const getLatestEditablePair = async () => {
+    if (!item) return null;
+    await ensureConversationLoaded(item);
+    const key = getConversationKey(item);
+    const history = chatHistory.get(key) || [];
+    const pair = findLatestRetryPair(history);
+    if (!pair) return null;
+    return { conversationKey: key, pair };
   };
 
   const updateFilePreview = () => {
@@ -2240,7 +2419,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const displayQuestion = primarySelectedText
       ? promptText
       : text || promptText;
-    inputBox.value = "";
     const selectedProfile = getSelectedProfile();
     const activeModelName = (
       selectedProfile?.model ||
@@ -2254,6 +2432,76 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     const images = isScreenshotUnsupportedModel(activeModelName)
       ? []
       : selectedImages;
+    const selectedReasoning = getSelectedReasoning();
+    const advancedParams = getAdvancedModelParams(selectedProfile?.key);
+    if (activeEditSession) {
+      const latest = await getLatestEditablePair();
+      if (!latest) {
+        activeEditSession = null;
+        if (status) setStatus(status, "No editable latest prompt", "error");
+        return;
+      }
+      const { conversationKey: latestKey, pair } = latest;
+      if (
+        pair.assistantMessage.streaming ||
+        activeEditSession.conversationKey !== latestKey ||
+        activeEditSession.userTimestamp !== pair.userMessage.timestamp ||
+        activeEditSession.assistantTimestamp !== pair.assistantMessage.timestamp
+      ) {
+        activeEditSession = null;
+        if (status) setStatus(status, EDIT_STALE_STATUS_TEXT, "error");
+        return;
+      }
+
+      const editResult = await editLatestUserMessageAndRetry(
+        body,
+        item,
+        displayQuestion,
+        selectedTexts.length ? selectedTexts : undefined,
+        selectedTexts.length ? selectedTextSources : undefined,
+        images,
+        selectedFiles.length ? selectedFiles : undefined,
+        activeEditSession,
+        selectedProfile?.model,
+        selectedProfile?.apiBase,
+        selectedProfile?.apiKey,
+        selectedReasoning,
+        advancedParams,
+      );
+      if (editResult !== "ok") {
+        if (editResult === "stale") {
+          activeEditSession = null;
+          if (status) setStatus(status, EDIT_STALE_STATUS_TEXT, "error");
+          return;
+        }
+        if (editResult === "missing") {
+          activeEditSession = null;
+          if (status) setStatus(status, "No editable latest prompt", "error");
+          return;
+        }
+        if (status) {
+          setStatus(status, "Failed to save edited prompt", "error");
+        }
+        return;
+      }
+
+      inputBox.value = "";
+      clearSelectedImageState(item.id);
+      if (selectedFiles.length) {
+        clearSelectedFileState(item.id);
+        updateFilePreviewPreservingScroll();
+      }
+      updateImagePreviewPreservingScroll();
+      if (primarySelectedText) {
+        clearSelectedTextState(item.id);
+        updateSelectedTextPreviewPreservingScroll();
+      }
+      activeEditSession = null;
+      scheduleAttachmentGc();
+      return;
+    }
+
+    inputBox.value = "";
     // Clear selected images after sending
     clearSelectedImageState(item.id);
     if (selectedFiles.length) {
@@ -2265,8 +2513,6 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       clearSelectedTextState(item.id);
       updateSelectedTextPreviewPreservingScroll();
     }
-    const selectedReasoning = getSelectedReasoning();
-    const advancedParams = getAdvancedModelParams(selectedProfile?.key);
     await sendQuestion(
       body,
       item,
@@ -2596,6 +2842,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (!modelMenu || !modelBtn) return;
     closeRetryModelMenu();
     closeReasoningMenu();
+    closePromptMenu();
     updateModelButton();
     rebuildModelMenu();
     if (!modelMenu.childElementCount) {
@@ -2614,6 +2861,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (!reasoningMenu || !reasoningBtn) return;
     closeRetryModelMenu();
     closeModelMenu();
+    closePromptMenu();
     updateReasoningButton();
     rebuildReasoningMenu();
     if (!reasoningMenu.childElementCount) {
@@ -2632,6 +2880,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     if (!item || !retryModelMenu) return;
     closeResponseMenu();
     closeExportMenu();
+    closePromptMenu();
     closeModelMenu();
     closeReasoningMenu();
     rebuildRetryModelMenu();
@@ -2696,6 +2945,30 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
   bodyWithRetryMenuDismiss.__llmRetryMenuDismissHandler =
     dismissRetryMenuOnOutsidePointerDown;
 
+  const bodyWithPromptMenuDismiss = body as Element & {
+    __llmPromptMenuDismissHandler?: (event: PointerEvent) => void;
+  };
+  if (bodyWithPromptMenuDismiss.__llmPromptMenuDismissHandler) {
+    panelDoc.removeEventListener(
+      "pointerdown",
+      bodyWithPromptMenuDismiss.__llmPromptMenuDismissHandler,
+      true,
+    );
+  }
+  const dismissPromptMenuOnOutsidePointerDown = (e: PointerEvent) => {
+    if (!promptMenu || promptMenu.style.display === "none") return;
+    const target = e.target as Node | null;
+    if (target && promptMenu.contains(target)) return;
+    closePromptMenu();
+  };
+  panelDoc.addEventListener(
+    "pointerdown",
+    dismissPromptMenuOnOutsidePointerDown,
+    true,
+  );
+  bodyWithPromptMenuDismiss.__llmPromptMenuDismissHandler =
+    dismissPromptMenuOnOutsidePointerDown;
+
   if (chatBox) {
     chatBox.addEventListener("click", (e: Event) => {
       const target = (e.target as Element | null)?.closest(
@@ -2704,6 +2977,7 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       if (!target) return;
       e.preventDefault();
       e.stopPropagation();
+      closePromptMenu();
       if (!item || !retryModelMenu) return;
       if (isFloatingMenuOpen(retryModelMenu)) {
         closeRetryModelMenu();
@@ -2760,15 +3034,17 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         "#llm-reasoning-toggle",
       ) as HTMLButtonElement | null;
       const target = e.target as Node | null;
-      const retryButtonTarget =
-        target && target instanceof Element
-          ? (target.closest(".llm-retry-latest") as HTMLButtonElement | null)
-          : null;
+      const retryButtonTarget = isElementNode(target)
+        ? (target.closest(".llm-retry-latest") as HTMLButtonElement | null)
+        : null;
       const retryModelMenus = Array.from(
         doc.querySelectorAll("#llm-retry-model-menu"),
       ) as HTMLDivElement[];
       const responseMenus = Array.from(
         doc.querySelectorAll("#llm-response-menu"),
+      ) as HTMLDivElement[];
+      const promptMenus = Array.from(
+        doc.querySelectorAll("#llm-prompt-menu"),
       ) as HTMLDivElement[];
       const exportMenus = Array.from(
         doc.querySelectorAll("#llm-export-menu"),
@@ -2794,7 +3070,9 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         if (!isFloatingMenuOpen(retryModelMenuEl)) continue;
         const panelRoot = retryModelMenuEl.closest("#llm-main");
         const clickedRetryButtonInSamePanel = Boolean(
-          retryButtonTarget && panelRoot && panelRoot.contains(retryButtonTarget),
+          retryButtonTarget &&
+          panelRoot &&
+          panelRoot.contains(retryButtonTarget),
         );
         if (
           !target ||
@@ -2818,6 +3096,16 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
         }
         if (responseMenuClosed) {
           setResponseMenuTarget(null);
+        }
+        let promptMenuClosed = false;
+        for (const promptMenuEl of promptMenus) {
+          if (promptMenuEl.style.display === "none") continue;
+          if (target && promptMenuEl.contains(target)) continue;
+          promptMenuEl.style.display = "none";
+          promptMenuClosed = true;
+        }
+        if (promptMenuClosed) {
+          setPromptMenuTarget(null);
         }
 
         for (const exportMenuEl of exportMenus) {
@@ -3046,6 +3334,8 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       closeExportMenu();
+      closePromptMenu();
+      activeEditSession = null;
       if (item) {
         const conversationKey = getConversationKey(item);
         chatHistory.delete(conversationKey);

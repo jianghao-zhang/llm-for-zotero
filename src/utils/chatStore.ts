@@ -469,6 +469,85 @@ export async function appendMessage(
   );
 }
 
+export async function updateLatestUserMessage(
+  conversationKey: number,
+  message: Pick<
+    StoredChatMessage,
+    | "text"
+    | "timestamp"
+    | "selectedText"
+    | "selectedTexts"
+    | "selectedTextSources"
+    | "screenshotImages"
+    | "attachments"
+  >,
+): Promise<void> {
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  if (!normalizedKey) return;
+
+  const timestamp = Number(message.timestamp);
+  const selectedTexts = Array.isArray(message.selectedTexts)
+    ? message.selectedTexts
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : typeof message.selectedText === "string" && message.selectedText.trim()
+      ? [message.selectedText.trim()]
+      : [];
+  const selectedTextSources = selectedTexts.map((_, index) =>
+    normalizeSelectedTextSource(message.selectedTextSources?.[index]),
+  );
+  const screenshotImages = Array.isArray(message.screenshotImages)
+    ? message.screenshotImages.filter((entry) => Boolean(entry))
+    : [];
+  const attachments = Array.isArray(message.attachments)
+    ? message.attachments
+        .filter(
+          (entry) => entry && typeof entry.id === "string" && entry.id.trim(),
+        )
+        .map((entry) => ({
+          ...entry,
+          storedPath:
+            typeof entry.storedPath === "string" && entry.storedPath.trim()
+              ? entry.storedPath.trim()
+              : undefined,
+          contentHash:
+            typeof entry.contentHash === "string" &&
+            /^[a-f0-9]{64}$/i.test(entry.contentHash.trim())
+              ? entry.contentHash.trim().toLowerCase()
+              : undefined,
+        }))
+    : [];
+
+  await Zotero.DB.queryAsync(
+    `UPDATE ${CHAT_MESSAGES_TABLE}
+     SET text = ?,
+         timestamp = ?,
+         selected_text = ?,
+         selected_texts_json = ?,
+         selected_text_sources_json = ?,
+         screenshot_images = ?,
+         attachments_json = ?
+     WHERE id = (
+       SELECT id
+       FROM ${CHAT_MESSAGES_TABLE}
+       WHERE conversation_key = ? AND role = 'user'
+       ORDER BY timestamp DESC, id DESC
+       LIMIT 1
+     )`,
+    [
+      message.text || "",
+      Number.isFinite(timestamp) ? Math.floor(timestamp) : Date.now(),
+      selectedTexts[0] || message.selectedText || null,
+      selectedTexts.length ? JSON.stringify(selectedTexts) : null,
+      selectedTextSources.length ? JSON.stringify(selectedTextSources) : null,
+      screenshotImages.length ? JSON.stringify(screenshotImages) : null,
+      attachments.length ? JSON.stringify(attachments) : null,
+      normalizedKey,
+    ],
+  );
+}
+
 export async function updateLatestAssistantMessage(
   conversationKey: number,
   message: Pick<

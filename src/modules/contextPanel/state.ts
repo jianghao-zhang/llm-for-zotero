@@ -61,6 +61,16 @@ export function setResponseMenuTarget(value: typeof responseMenuTarget) {
   responseMenuTarget = value;
 }
 
+export let promptMenuTarget: {
+  item: Zotero.Item;
+  conversationKey: number;
+  userTimestamp: number;
+  assistantTimestamp: number;
+} | null = null;
+export function setPromptMenuTarget(value: typeof promptMenuTarget) {
+  promptMenuTarget = value;
+}
+
 // Screenshot selection state (per item)
 export const selectedImageCache = new Map<number, string[]>();
 export const selectedImageNameCache = new Map<number, string[]>();

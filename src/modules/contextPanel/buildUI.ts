@@ -166,6 +166,24 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   responseMenu.append(responseMenuCopyBtn, responseMenuNoteBtn);
   container.appendChild(responseMenu);
 
+  // Prompt context menu
+  const promptMenu = createElement(doc, "div", "llm-response-menu", {
+    id: "llm-prompt-menu",
+  });
+  promptMenu.style.display = "none";
+  const promptMenuEditBtn = createElement(
+    doc,
+    "button",
+    "llm-response-menu-item",
+    {
+      id: "llm-prompt-menu-edit",
+      type: "button",
+      textContent: "Edit",
+    },
+  );
+  promptMenu.append(promptMenuEditBtn);
+  container.appendChild(promptMenu);
+
   // Export menu
   const exportMenu = createElement(doc, "div", "llm-response-menu", {
     id: "llm-export-menu",
