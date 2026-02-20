@@ -1126,12 +1126,12 @@ export function setupHandlers(body: Element, item?: Zotero.Item | null) {
     button.classList.toggle("llm-action-icon-only", mode === "icon");
   };
   const setSendButtonLabel = (mode: "icon" | "full") => {
-    const nextLabel = mode === "icon" ? "↑" : "Send";
-    if (sendBtn.textContent !== nextLabel) {
-      sendBtn.textContent = nextLabel;
-    }
-    sendBtn.classList.toggle("llm-action-icon-only", mode === "icon");
+    setActionButtonLabel(sendBtn, "Send", "↑", mode);
     sendBtn.title = "Send";
+    setActionButtonLabel(cancelBtn, "Cancel", "X", mode);
+    if (cancelBtn) {
+      cancelBtn.title = "Cancel";
+    }
   };
 
   let layoutRetryScheduled = false;
