@@ -92,7 +92,7 @@ function buildContextHint(ctx: AgentStepContext): string {
     if (isLibraryOverviewQuery(question)) {
       hints.push("Hint: this question asks about the whole library — consider calling list_papers.");
     } else if (isLibraryScopedSearchQuery(question, ctx.conversationMode)) {
-      hints.push("Hint: this looks like a library-search question — consider calling list_papers with a relevant query.");
+      hints.push("Hint: this looks like a paper discovery question — use search_internet to search Semantic Scholar, or list_papers if the user explicitly wants to search their own Zotero library.");
     }
   }
   return hints.join("\n");
@@ -140,6 +140,8 @@ function buildStepPrompt(ctx: AgentStepContext): string {
     "- Use write_note when the user explicitly asks to write, create, or save a note for a paper. Always populate the query field with the note content instruction extracted from the user's request, stripping agent-directive phrases like 'into the note' or 'save to Zotero'. Example: user says 'write one sentence key point into the note' → query: \"write one sentence key point\". If no specific format is requested, omit query.",
     "- Use search_paper_content when the user asks to find or locate a specific term, phrase, or passage within a paper.",
     "- Use get_paper_sections to inspect a paper's structure before targeted retrieval.",
+    "- Use search_internet when the user wants to discover or find academic papers (e.g. 'find papers on X', 'search for papers about X', 'what papers exist on X'). This searches Semantic Scholar on the internet. Prefer this over list_papers for open-ended paper discovery questions.",
+    "- Use list_papers only when the user explicitly refers to their own Zotero library or collection (e.g. 'in my library', 'do I have papers on', 'search my Zotero'). Also use it to load retrieved-paper#N targets.",
     "- Call list_papers before using retrieved-paper#N targets (they don't exist yet otherwise).",
     "- traceLines: exactly 1 short action line (\u2264 80 chars). State what you are doing or why you are stopping. No multi-sentence reasoning.",
     "",
@@ -276,6 +278,17 @@ function normalizeToolCall(value: unknown): AgentToolCall | null {
     const query = sanitizeText(String(typed.query || "")).trim();
     if (!query) return null;
     return { name: "search_paper_content", target, query };
+  }
+
+  if (name === "search_internet") {
+    const query = sanitizeText(String(typed.query || "")).trim();
+    if (!query) return null;
+    const rawLimit = Number(typed.limit || 0);
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0
+        ? Math.max(1, Math.min(10, Math.floor(rawLimit)))
+        : 6;
+    return { name: "search_internet", query, limit };
   }
 
   return null;

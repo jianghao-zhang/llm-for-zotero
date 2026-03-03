@@ -18,6 +18,7 @@ import {
   validateReadReferencesCall,
 } from "./tools/readReferences";
 import { validateListPapersCall } from "./tools/listPapers";
+import { validateSearchInternetCall } from "./tools/searchInternet";
 import {
   executeGetPaperSectionsCall,
   validateGetPaperSectionsCall,
@@ -95,6 +96,13 @@ const AGENT_TOOL_DEFINITIONS: AgentToolDefinition[] = [
     callExample: '{"name":"search_paper_content","target":{"scope":"active-paper"},"query":"keyword or phrase"}',
     validate: validateSearchPaperContentCall,
     execute: executeSearchPaperContentCall,
+  },
+  {
+    name: "search_internet",
+    plannerDescription:
+      "search Semantic Scholar for academic papers on the internet; use when the user asks about papers not in their Zotero library or wants to find related work",
+    callExample: '{"name":"search_internet","query":"neural plasticity memory","limit":6}',
+    validate: validateSearchInternetCall,
   },
   {
     name: "write_note",

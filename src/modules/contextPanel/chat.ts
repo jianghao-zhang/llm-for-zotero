@@ -174,9 +174,14 @@ function buildAgentTraceHtml(
     get_paper_sections: "Paper Sections",
     search_paper_content: "Search Content",
     write_note: "Write Note",
+    search_internet: "Internet Search",
   };
 
   function prettyTarget(raw: string): string {
+    // Strip surrounding double-quotes from query-style labels like "some query"
+    if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
+      return raw.slice(1, -1);
+    }
     const m = raw.match(/^(active|selected|pinned|recent|retrieved)-paper(?:#(\d+))?$/);
     if (!m) return raw;
     const kindMap: Record<string, string> = {
@@ -484,6 +489,32 @@ function buildAgentTraceHtml(
         r.appendChild(el("span", "llm-at-ok-text", "Note saved"));
         r.appendChild(el("span", "llm-at-sep", "\u00B7"));
         r.appendChild(el("span", "llm-at-paper-label", trunc(m[1]!)));
+        container.appendChild(r);
+        continue;
+      }
+    }
+
+    // ── Internet search results ───────────────────────────────────────────────
+    {
+      const m = t.match(/^Found (\d+) results? for "(.+?)" on Semantic Scholar\.?$/);
+      if (m) {
+        const r = row("ok");
+        r.appendChild(el("span", "llm-at-icon", "\uD83C\uDF10"));
+        r.appendChild(el("span", "llm-at-ok-text", `${m[1]} result${Number(m[1]) !== 1 ? "s" : ""}`));
+        r.appendChild(el("span", "llm-at-sep", "\u00B7"));
+        r.appendChild(el("span", "llm-at-paper-label", `\u201C${trunc(m[2]!, 40)}\u201D`));
+        container.appendChild(r);
+        continue;
+      }
+    }
+
+    // ── Internet search — no results ──────────────────────────────────────────
+    {
+      const m = t.match(/^No results found for "(.+?)" on Semantic Scholar\.?$/);
+      if (m) {
+        const r = row("skip");
+        r.appendChild(el("span", "llm-at-icon", "\u2715"));
+        r.appendChild(el("span", "llm-at-skip-text", `No results \u00B7 \u201C${trunc(m[1]!, 40)}\u201D`));
         container.appendChild(r);
         continue;
       }

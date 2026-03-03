@@ -1,6 +1,7 @@
 import { getAgentToolDefinition } from "./registry";
 import { resolveAgentToolTarget } from "./resolveTarget";
 import { executeListPapersCall } from "./tools/listPapers";
+import { executeSearchInternetCall } from "./tools/searchInternet";
 import { sanitizeText } from "../textUtils";
 import type {
   AgentToolCall,
@@ -45,6 +46,21 @@ export async function executeAgentToolCall(params: {
   state: AgentToolExecutorState;
 }): Promise<AgentToolExecutionResult | null> {
   if (!params.call) return null;
+
+  // ── search_internet: no paper-target resolution needed ─────────────────────
+  if (params.call.name === "search_internet") {
+    const callKey = `search_internet:${sanitizeText(params.call.query || "").trim()}:${params.call.limit ?? 6}`;
+    if (params.state.executedCallKeys.has(callKey)) {
+      return buildSkipResult(params.call, `internet: "${params.call.query}"`, "Duplicate search_internet call was ignored.");
+    }
+    const result = await executeSearchInternetCall(params.call, params.ctx);
+    if (result.ok) {
+      params.state.executedCallKeys.add(callKey);
+      params.state.totalEstimatedTokens += result.estimatedTokens;
+      params.state.executedCallCount += 1;
+    }
+    return result;
+  }
 
   // ── list_papers: library tool — no paper-target resolution needed ──────────
   if (params.call.name === "list_papers") {

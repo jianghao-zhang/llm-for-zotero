@@ -7,7 +7,8 @@ export type AgentToolName =
   | "list_papers"
   | "get_paper_sections"
   | "search_paper_content"
-  | "write_note";
+  | "write_note"
+  | "search_internet";
 
 export type AgentToolTarget =
   | { scope: "active-paper" }

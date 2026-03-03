@@ -100,9 +100,9 @@ function dedupePaperContexts(
 }
 
 function formatToolCallLabel(call: AgentToolCall): string {
-  if (call.name === "list_papers") {
+  if (call.name === "list_papers" || call.name === "search_internet") {
     const query = sanitizeText(call.query || "").trim();
-    return query ? `list_papers("${query}")` : "list_papers()";
+    return query ? `${call.name}("${query}")` : `${call.name}()`;
   }
   if (call.target) {
     const target =
