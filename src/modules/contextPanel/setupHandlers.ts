@@ -50,6 +50,7 @@ import {
   chatHistory,
   loadedConversationKeys,
   currentRequestId,
+  pendingRequestId,
   activeGlobalConversationByLibrary,
   activeConversationModeByLibrary,
   activePaperConversationByPaper,
@@ -371,6 +372,42 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return;
   }
   activeContextPanels.set(body, () => item);
+
+  // buildUI() wipes body.textContent whenever onAsyncRender fires (item
+  // navigation), which destroys the cancel/send button DOM mid-stream.
+  // Re-apply the generating state immediately so the user never sees a stale
+  // idle UI while a request is still running in the background.
+  // pendingRequestId is set at the very start of doSend/retry (before the
+  // agent loop), so it covers the full request lifecycle — not just streaming.
+  if (pendingRequestId > 0) {
+    if (sendBtn) sendBtn.style.display = "none";
+    if (cancelBtn) cancelBtn.style.display = "";
+    if (inputBox) inputBox.disabled = true;
+    if (historyToggleBtn) {
+      historyToggleBtn.disabled = true;
+      historyToggleBtn.setAttribute("aria-disabled", "true");
+    }
+    if (historyNewBtn) {
+      historyNewBtn.disabled = true;
+      historyNewBtn.setAttribute("aria-disabled", "true");
+    }
+    const contextAgentToggleBtn = body.querySelector(
+      "#llm-context-agent-toggle",
+    ) as HTMLButtonElement | null;
+    if (contextAgentToggleBtn) {
+      contextAgentToggleBtn.disabled = true;
+      contextAgentToggleBtn.setAttribute("aria-disabled", "true");
+    }
+    const historyMenuEl = body.querySelector(
+      "#llm-history-menu",
+    ) as HTMLDivElement | null;
+    if (historyMenuEl) historyMenuEl.style.display = "none";
+    const historyNewMenuEl = body.querySelector(
+      "#llm-history-new-menu",
+    ) as HTMLDivElement | null;
+    if (historyNewMenuEl) historyNewMenuEl.style.display = "none";
+  }
+
   const panelDoc = body.ownerDocument;
   if (!panelDoc) {
     ztoolkit.log("LLM: Could not find panel document");

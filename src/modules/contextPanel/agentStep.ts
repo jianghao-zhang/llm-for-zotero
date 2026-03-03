@@ -347,7 +347,11 @@ export async function runAgentStep(ctx: AgentStepContext): Promise<AgentStepDeci
       model: ctx.model,
       apiBase: ctx.apiBase,
       apiKey: ctx.apiKey,
-      reasoning: ctx.reasoning,
+      // reasoning is intentionally omitted: the agent step emits a tiny JSON
+      // decision (~100 tokens) and does not benefit from extended thinking.
+      // Passing a reasoning config here causes API errors with thinking models
+      // because the required budget_tokens (≥1024) exceeds maxTokens (500),
+      // and Anthropic thinking requires temperature=1 rather than 0.
       temperature: 0,
       maxTokens: 500,
     });

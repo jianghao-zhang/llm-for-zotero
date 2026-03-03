@@ -42,6 +42,16 @@ export let currentRequestId = 0;
 export function nextRequestId(): number {
   return ++currentRequestId;
 }
+/**
+ * Set to the current request ID when a request starts (before the agent loop /
+ * any async work) and cleared back to 0 in the finally block.  Unlike
+ * currentAbortController, this is non-null for the ENTIRE lifecycle of a
+ * request — including the agent-planning phase that precedes streaming.
+ */
+export let pendingRequestId = 0;
+export function setPendingRequestId(id: number): void {
+  pendingRequestId = id;
+}
 export let cancelledRequestId = -1;
 export function setCancelledRequestId(value: number) {
   cancelledRequestId = value;

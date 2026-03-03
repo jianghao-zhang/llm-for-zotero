@@ -50,6 +50,8 @@ import {
   currentAbortController,
   setCurrentAbortController,
   nextRequestId,
+  pendingRequestId,
+  setPendingRequestId,
   setResponseMenuTarget,
   setPromptMenuTarget,
   pendingMetadataProposals,
@@ -1632,21 +1634,26 @@ function setRequestUIBusy(
 }
 
 function restoreRequestUIIdle(
-  ui: PanelRequestUI,
+  body: Element,
   conversationKey: number,
   requestId: number,
 ): void {
   if (cancelledRequestId >= requestId) return;
-  withScrollGuard(ui.chatBox, conversationKey, () => {
-    if (ui.inputBox) {
-      ui.inputBox.disabled = false;
-      ui.inputBox.focus({ preventScroll: true });
+  // Re-query the DOM at restore time: buildUI() wipes body.textContent when the
+  // user navigates to a new item while streaming, making any previously-captured
+  // ui references point to detached (removed) elements.  Querying from the
+  // stable `body` container always returns the current live elements.
+  const freshUi = getPanelRequestUI(body);
+  withScrollGuard(freshUi.chatBox, conversationKey, () => {
+    if (freshUi.inputBox) {
+      freshUi.inputBox.disabled = false;
+      freshUi.inputBox.focus({ preventScroll: true });
     }
-    if (ui.sendBtn) {
-      ui.sendBtn.style.display = "";
-      ui.sendBtn.disabled = false;
+    if (freshUi.sendBtn) {
+      freshUi.sendBtn.style.display = "";
+      freshUi.sendBtn.disabled = false;
     }
-    if (ui.cancelBtn) ui.cancelBtn.style.display = "none";
+    if (freshUi.cancelBtn) freshUi.cancelBtn.style.display = "none";
   });
 }
 
@@ -2306,6 +2313,7 @@ export async function retryLatestAssistantResponse(
   }
 
   const thisRequestId = nextRequestId();
+  setPendingRequestId(thisRequestId);
   setRequestUIBusy(body, ui, conversationKey, "Preparing retry...");
   const assistantMessage = retryPair.assistantMessage;
   const assistantSnapshot = takeAssistantSnapshot(assistantMessage);
@@ -2339,7 +2347,7 @@ export async function retryLatestAssistantResponse(
   } = reconstructRetryPayload(retryPair.userMessage);
   if (!question.trim()) {
     setStatusSafely("Nothing to retry for latest turn", "error");
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setHistoryControlsDisabled(body, false);
     return;
   }
@@ -2517,8 +2525,9 @@ export async function retryLatestAssistantResponse(
     );
   } finally {
     setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setCurrentAbortController(null);
+    setPendingRequestId(0);
   }
 }
 
@@ -2642,6 +2651,7 @@ export async function sendQuestion(
 
   // Track this request
   const thisRequestId = nextRequestId();
+  setPendingRequestId(thisRequestId);
   const initialConversationKey = getConversationKey(item);
 
   // Show cancel, hide send
@@ -2903,8 +2913,9 @@ export async function sendQuestion(
     setStatusSafely(`Error: ${`${errMsg}${retryHint}`.slice(0, 40)}`, "error");
   } finally {
     setHistoryControlsDisabled(body, false);
-    restoreRequestUIIdle(ui, conversationKey, thisRequestId);
+    restoreRequestUIIdle(body, conversationKey, thisRequestId);
     setCurrentAbortController(null);
+    setPendingRequestId(0);
   }
 }
 
