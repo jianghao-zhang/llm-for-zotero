@@ -6513,8 +6513,41 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // If the inline edit widget is active, route through editUserTurnAndRetry
     // instead of the normal send flow.
     if (inlineEditTarget && item) {
+      const currentItem = item;
       const editTarget = inlineEditTarget;
       const newText = inputBox?.value.trim() ?? "";
+      const textContextKey = getTextContextConversationKey();
+      const selectedContexts = textContextKey
+        ? getSelectedTextContextEntries(textContextKey)
+        : [];
+      const selectedTexts = selectedContexts.map((entry) => entry.text);
+      const selectedTextSources = selectedContexts.map((entry) => entry.source);
+      const selectedTextPaperContexts = selectedContexts.map(
+        (entry) => entry.paperContext,
+      );
+      const selectedPaperContexts = normalizePaperContextEntries(
+        selectedPaperContextCache.get(currentItem.id) || [],
+      );
+      const pinnedPaperContexts = selectedPaperContexts.filter((paperContext) =>
+        isPinnedPaper(pinnedPaperKeys, currentItem.id, paperContext),
+      );
+      const selectedFiles =
+        selectedFileAttachmentCache.get(currentItem.id) || [];
+      const selectedProfile = getSelectedProfile();
+      const activeModelName = (
+        selectedProfile?.model ||
+        getSelectedModelInfo().currentModel ||
+        ""
+      ).trim();
+      const selectedImages = (selectedImageCache.get(currentItem.id) || []).slice(
+        0,
+        MAX_SELECTED_IMAGES,
+      );
+      const images = isScreenshotUnsupportedModel(activeModelName)
+        ? []
+        : selectedImages;
+      const selectedReasoning = getSelectedReasoning();
+      const advancedParams = getAdvancedModelParams(selectedProfile?.entryId);
       inlineEditCleanup?.();
       setInlineEditCleanup(null);
       setInlineEditInputSection(null, null, null);
@@ -6523,10 +6556,22 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       if (newText) {
         void editUserTurnAndRetry(
           body,
-          item,
+          currentItem,
           editTarget.userTimestamp,
           editTarget.assistantTimestamp,
           newText,
+          selectedTexts,
+          selectedTextSources,
+          selectedTextPaperContexts,
+          images,
+          selectedPaperContexts,
+          pinnedPaperContexts,
+          selectedFiles,
+          selectedProfile?.model,
+          selectedProfile?.apiBase,
+          selectedProfile?.apiKey,
+          selectedReasoning,
+          advancedParams,
         );
       }
       return;

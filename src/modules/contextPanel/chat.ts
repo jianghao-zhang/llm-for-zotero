@@ -34,6 +34,7 @@ import type {
   ReasoningLevelSelection,
   AdvancedModelParams,
   ChatAttachment,
+  SelectedTextContext,
   SelectedTextSource,
   PaperContextRef,
 } from "./types";
@@ -43,6 +44,9 @@ import {
   loadingConversationTasks,
   selectedModelCache,
   selectedReasoningCache,
+  selectedImageCache,
+  selectedFileAttachmentCache,
+  selectedPaperContextCache,
   activeContextPanels,
   activeContextPanelStateSync,
   cancelledRequestId,
@@ -93,10 +97,14 @@ import {
   setLastReasoningExpanded,
 } from "./prefHelpers";
 import { resolveMultiContextPlan } from "./multiContextPlanner";
-import { formatPaperCitationLabel } from "./paperAttribution";
+import {
+  formatPaperCitationLabel,
+  resolvePaperContextRefFromAttachment,
+} from "./paperAttribution";
 import {
   getActiveContextAttachmentFromTabs,
   resolveContextSourceItem,
+  setSelectedTextContextEntries,
 } from "./contextResolution";
 import { isGlobalPortalItem } from "./portalScope";
 import { buildChatHistoryNotePayload } from "./notes";
@@ -1360,6 +1368,112 @@ function normalizeEditablePinnedPaperContexts(
   return normalizePaperContexts(pinnedPaperContexts);
 }
 
+function includeAutoLoadedPaperContext(
+  item: Zotero.Item,
+  paperContexts?: PaperContextRef[],
+  pinnedPaperContexts?: PaperContextRef[],
+): {
+  paperContexts: PaperContextRef[];
+  pinnedPaperContexts: PaperContextRef[];
+} {
+  const normalizedPaperContexts = normalizePaperContexts(paperContexts);
+  const normalizedPinnedPaperContexts = normalizePaperContexts(
+    pinnedPaperContexts,
+  );
+  if (isGlobalPortalItem(item)) {
+    return {
+      paperContexts: normalizedPaperContexts,
+      pinnedPaperContexts: normalizedPinnedPaperContexts,
+    };
+  }
+  const contextSource = resolveContextSourceItem(item);
+  const autoLoadedPaperContext = resolvePaperContextRefFromAttachment(
+    contextSource.contextItem,
+  );
+  if (!autoLoadedPaperContext) {
+    return {
+      paperContexts: normalizedPaperContexts,
+      pinnedPaperContexts: normalizedPinnedPaperContexts,
+    };
+  }
+  return {
+    paperContexts: normalizePaperContexts([
+      autoLoadedPaperContext,
+      ...normalizedPaperContexts,
+    ]),
+    pinnedPaperContexts: normalizePaperContexts([
+      autoLoadedPaperContext,
+      ...normalizedPinnedPaperContexts,
+    ]),
+  };
+}
+
+function syncComposeContextForInlineEdit(
+  body: Element,
+  item: Zotero.Item,
+  userMessage: Message,
+): void {
+  const conversationKey = getConversationKey(item);
+  const selectedTexts = getMessageSelectedTexts(userMessage);
+  const selectedTextSources = normalizeSelectedTextSources(
+    userMessage.selectedTextSources,
+    selectedTexts.length,
+  );
+  const selectedTextPaperContexts = normalizeSelectedTextPaperContextsByIndex(
+    userMessage.selectedTextPaperContexts,
+    selectedTexts.length,
+  );
+  const selectedTextEntries: SelectedTextContext[] = selectedTexts.map(
+    (text, index) => ({
+      text,
+      source: selectedTextSources[index] || "pdf",
+      paperContext: selectedTextPaperContexts[index],
+    }),
+  );
+  setSelectedTextContextEntries(conversationKey, selectedTextEntries);
+
+  const screenshotImages = Array.isArray(userMessage.screenshotImages)
+    ? userMessage.screenshotImages
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, MAX_SELECTED_IMAGES)
+    : [];
+  if (screenshotImages.length) {
+    selectedImageCache.set(item.id, screenshotImages);
+  } else {
+    selectedImageCache.delete(item.id);
+  }
+
+  const fileAttachments = normalizeEditableAttachments(userMessage.attachments);
+  if (fileAttachments.length) {
+    selectedFileAttachmentCache.set(item.id, fileAttachments);
+  } else {
+    selectedFileAttachmentCache.delete(item.id);
+  }
+
+  const paperContexts = normalizePaperContexts(userMessage.paperContexts);
+  const autoLoadedPaperContext = isGlobalPortalItem(item)
+    ? null
+    : resolvePaperContextRefFromAttachment(resolveContextSourceItem(item).contextItem);
+  const selectedPaperContexts = autoLoadedPaperContext
+    ? paperContexts.filter(
+        (paperContext) =>
+          !(
+            paperContext.itemId === autoLoadedPaperContext.itemId &&
+            paperContext.contextItemId === autoLoadedPaperContext.contextItemId
+          ),
+      )
+    : paperContexts;
+  if (selectedPaperContexts.length) {
+    selectedPaperContextCache.set(item.id, selectedPaperContexts);
+  } else {
+    selectedPaperContextCache.delete(item.id);
+  }
+
+  activeContextPanelStateSync.get(body)?.();
+}
+
 export async function editLatestUserMessageAndRetry(
   body: Element,
   item: Zotero.Item,
@@ -1411,9 +1525,17 @@ export async function editLatestUserMessageAndRetry(
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
-  const paperContextsForMessage = normalizeEditablePaperContexts(paperContexts);
-  const pinnedPaperContextsForMessage =
+  const normalizedPaperContexts = normalizeEditablePaperContexts(paperContexts);
+  const normalizedPinnedPaperContexts =
     normalizeEditablePinnedPaperContexts(pinnedPaperContexts);
+  const {
+    paperContexts: paperContextsForMessage,
+    pinnedPaperContexts: pinnedPaperContextsForMessage,
+  } = includeAutoLoadedPaperContext(
+    item,
+    normalizedPaperContexts,
+    normalizedPinnedPaperContexts,
+  );
   const attachmentsForMessage = normalizeEditableAttachments(attachments);
   const updatedTimestamp = Date.now();
   const nextDisplayQuestion = sanitizeText(displayQuestion || "");
@@ -1744,6 +1866,18 @@ export async function editUserTurnAndRetry(
   userTimestamp: number,
   assistantTimestamp: number,
   newText: string,
+  selectedTexts?: string[],
+  selectedTextSources?: SelectedTextSource[],
+  selectedTextPaperContexts?: (PaperContextRef | undefined)[],
+  screenshotImages?: string[],
+  paperContexts?: PaperContextRef[],
+  pinnedPaperContexts?: PaperContextRef[],
+  attachments?: ChatAttachment[],
+  model?: string,
+  apiBase?: string,
+  apiKey?: string,
+  reasoning?: LLMReasoningConfig,
+  advanced?: AdvancedModelParams,
 ): Promise<void> {
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
@@ -1798,6 +1932,68 @@ export async function editUserTurnAndRetry(
   const userMsg = history[userIndex]!;
   userMsg.text = sanitizeText(newText) || newText;
   userMsg.timestamp = Date.now();
+  const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
+  const selectedTextSourcesForMessage = normalizeSelectedTextSources(
+    selectedTextSources,
+    selectedTextsForMessage.length,
+  );
+  const selectedTextPaperContextsForMessage =
+    normalizeSelectedTextPaperContextsByIndex(
+      selectedTextPaperContexts,
+      selectedTextsForMessage.length,
+    );
+  const selectedTextForMessage = selectedTextsForMessage[0] || "";
+  const screenshotImagesForMessage = Array.isArray(screenshotImages)
+    ? screenshotImages
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .slice(0, MAX_SELECTED_IMAGES)
+    : [];
+  const normalizedPaperContexts = normalizeEditablePaperContexts(paperContexts);
+  const normalizedPinnedPaperContexts =
+    normalizeEditablePinnedPaperContexts(pinnedPaperContexts);
+  const {
+    paperContexts: paperContextsForMessage,
+    pinnedPaperContexts: pinnedPaperContextsForMessage,
+  } = includeAutoLoadedPaperContext(
+    item,
+    normalizedPaperContexts,
+    normalizedPinnedPaperContexts,
+  );
+  const attachmentsForMessage = normalizeEditableAttachments(attachments);
+  userMsg.selectedText = selectedTextForMessage || undefined;
+  userMsg.selectedTextExpanded = false;
+  userMsg.selectedTexts = selectedTextsForMessage.length
+    ? selectedTextsForMessage
+    : undefined;
+  userMsg.selectedTextSources = selectedTextSourcesForMessage.length
+    ? selectedTextSourcesForMessage
+    : undefined;
+  userMsg.selectedTextPaperContexts =
+    selectedTextPaperContextsForMessage.some((entry) => Boolean(entry))
+      ? selectedTextPaperContextsForMessage
+      : undefined;
+  userMsg.selectedTextExpandedIndex = -1;
+  userMsg.screenshotImages = screenshotImagesForMessage.length
+    ? screenshotImagesForMessage
+    : undefined;
+  userMsg.screenshotExpanded = false;
+  userMsg.screenshotActiveIndex = screenshotImagesForMessage.length
+    ? 0
+    : undefined;
+  userMsg.paperContexts = paperContextsForMessage.length
+    ? paperContextsForMessage
+    : undefined;
+  userMsg.pinnedPaperContexts = pinnedPaperContextsForMessage.length
+    ? pinnedPaperContextsForMessage
+    : undefined;
+  userMsg.paperContextsExpanded = false;
+  userMsg.attachments = attachmentsForMessage.length
+    ? attachmentsForMessage
+    : undefined;
+  userMsg.attachmentsExpanded = false;
+  userMsg.attachmentActiveIndex = undefined;
 
   // Persist the updated user message
   try {
@@ -1818,20 +2014,26 @@ export async function editUserTurnAndRetry(
 
   // Resolve current model settings and retry
   const profile = getSelectedModelEntryForItem(item.id);
-  const reasoning = getSelectedReasoningForItem(
-    item.id,
-    profile?.model || "",
-    profile?.apiBase,
-  );
-  const advanced = getAdvancedModelParamsForEntry(profile?.entryId);
+  const resolvedModel = model || profile?.model;
+  const resolvedApiBase = apiBase ?? profile?.apiBase;
+  const resolvedApiKey = apiKey ?? profile?.apiKey;
+  const resolvedReasoning =
+    reasoning ||
+    getSelectedReasoningForItem(
+      item.id,
+      resolvedModel || "",
+      resolvedApiBase,
+    );
+  const resolvedAdvanced =
+    advanced || getAdvancedModelParamsForEntry(profile?.entryId);
   await retryLatestAssistantResponse(
     body,
     item,
-    profile?.model,
-    profile?.apiBase,
-    profile?.apiKey,
-    reasoning,
-    advanced,
+    resolvedModel,
+    resolvedApiBase,
+    resolvedApiKey,
+    resolvedReasoning,
+    resolvedAdvanced,
   );
 }
 
@@ -1893,9 +2095,17 @@ export async function sendQuestion(
       selectedTextsForMessage.length,
     );
   const selectedTextForMessage = selectedTextsForMessage[0] || "";
-  const paperContextsForMessage = normalizePaperContexts(paperContexts);
-  const pinnedPaperContextsForMessage =
+  const normalizedPaperContexts = normalizePaperContexts(paperContexts);
+  const normalizedPinnedPaperContexts =
     normalizePaperContexts(pinnedPaperContexts);
+  const {
+    paperContexts: paperContextsForMessage,
+    pinnedPaperContexts: pinnedPaperContextsForMessage,
+  } = includeAutoLoadedPaperContext(
+    item,
+    normalizedPaperContexts,
+    normalizedPinnedPaperContexts,
+  );
   const screenshotImagesForMessage = Array.isArray(images)
     ? images
         .filter((entry): entry is string => typeof entry === "string")
@@ -2826,6 +3036,14 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             e.stopPropagation();
             const win = body.ownerDocument?.defaultView;
             if (!win) return;
+            try {
+              syncComposeContextForInlineEdit(body, item, msg);
+            } catch (syncErr) {
+              ztoolkit.log(
+                "LLM: Failed to sync compose context for inline edit",
+                syncErr,
+              );
+            }
             setInlineEditTarget({
               conversationKey,
               userTimestamp: msg.timestamp,
