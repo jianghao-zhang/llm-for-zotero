@@ -4041,11 +4041,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       const hasReasoningDetails = Boolean(msg.reasoningDetails?.trim());
       if (hasReasoningSummary || hasReasoningDetails) {
         const details = doc.createElement("details") as HTMLDetailsElement;
-        details.className = "llm-reasoning";
+        details.className = "llm-agent-reasoning";
         details.open = Boolean(msg.reasoningOpen);
 
         const summary = doc.createElement("summary") as HTMLElement;
-        summary.className = "llm-reasoning-summary";
+        summary.className = "llm-agent-reasoning-summary";
         summary.textContent = "Thinking";
         const toggleReasoning = (e: Event) => {
           e.preventDefault();
@@ -4070,16 +4070,16 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         details.appendChild(summary);
 
         const bodyWrap = doc.createElement("div") as HTMLDivElement;
-        bodyWrap.className = "llm-reasoning-body";
+        bodyWrap.className = "llm-agent-reasoning-body";
 
         if (hasReasoningSummary) {
           const summaryBlock = doc.createElement("div") as HTMLDivElement;
-          summaryBlock.className = "llm-reasoning-block";
+          summaryBlock.className = "llm-agent-reasoning-block";
           const label = doc.createElement("div") as HTMLDivElement;
-          label.className = "llm-reasoning-label";
+          label.className = "llm-agent-reasoning-label";
           label.textContent = "Summary";
           const text = doc.createElement("div") as HTMLDivElement;
-          text.className = "llm-reasoning-text";
+          text.className = "llm-agent-reasoning-text";
           try {
             text.innerHTML = renderMarkdown(msg.reasoningSummary || "");
           } catch (err) {
@@ -4092,12 +4092,12 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
         if (hasReasoningDetails) {
           const detailsBlock = doc.createElement("div") as HTMLDivElement;
-          detailsBlock.className = "llm-reasoning-block";
+          detailsBlock.className = "llm-agent-reasoning-block";
           const label = doc.createElement("div") as HTMLDivElement;
-          label.className = "llm-reasoning-label";
+          label.className = "llm-agent-reasoning-label";
           label.textContent = "Details";
           const text = doc.createElement("div") as HTMLDivElement;
-          text.className = "llm-reasoning-text";
+          text.className = "llm-agent-reasoning-text";
           try {
             text.innerHTML = renderMarkdown(msg.reasoningDetails || "");
           } catch (err) {
