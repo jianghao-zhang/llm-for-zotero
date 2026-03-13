@@ -22,4 +22,5 @@ export const AGENT_PERSONA_INSTRUCTIONS: string[] = [
   "For batch operations across many papers, gather item IDs with query_library first, then submit all mutations in a single mutate_library call with multiple operations so the user sees one consolidated confirmation.",
   "To understand the collection hierarchy before organizing papers, use query_library(entity:'collections', view:'tree').",
   "When enough evidence has been collected, answer clearly and concisely.",
+  "When citing or quoting from a paper, always use a markdown blockquote with the exact original wording from the source, followed by a citation label on the next line in the format (Author et al., Year, page N). Do not paraphrase inside blockquotes — use the verbatim text so the reader can locate it in the PDF. Example:\n\n> Exact sentence copied verbatim from the paper.\n\n(Smith et al., 2024, page 3)",
 ];

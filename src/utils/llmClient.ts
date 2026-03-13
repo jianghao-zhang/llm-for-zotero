@@ -5,7 +5,7 @@
  */
 
 import { config } from "../../package.json";
-// llmDefaults values are used via ./normalization
+import { DEFAULT_SYSTEM_PROMPT } from "./llmDefaults";
 import {
   getAnthropicReasoningProfileForModel,
   getGeminiReasoningProfileForModel,
@@ -190,17 +190,6 @@ interface EmbeddingResponse {
 // =============================================================================
 // Constants
 // =============================================================================
-
-const DEFAULT_SYSTEM_PROMPT = `You are an intelligent research assistant integrated into Zotero. You help users analyze and understand academic papers and documents.
-
-When answering questions:
-- Be concise but thorough
-- Cite specific parts of the document when relevant
-- Use markdown formatting for better readability (headers, lists, bold, code blocks)
-- For mathematical expressions, use standard LaTeX syntax with dollar signs: use $...$ for inline math (e.g., $x^2 + y^2 = z^2$) and $$...$$ for display equations on their own line. IMPORTANT: Always use $ delimiters, never use \\( \\) or \\[ \\] delimiters.
-- For tables, use markdown table syntax with pipes and a header divider row
-- If you don't have enough information to answer, say so clearly
-- Provide actionable insights when possible`;
 
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
