@@ -3,320 +3,316 @@
 [![zotero target version](https://img.shields.io/badge/Zotero-7-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![zotero target version](https://img.shields.io/badge/Zotero-8-green?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![Using Zotero Plugin Template](https://img.shields.io/badge/Using-Zotero%20Plugin%20Template-blue?style=flat-square&logo=github)](https://github.com/windingwind/zotero-plugin-template)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat-square)](https://www.gnu.org/licenses/agpl-3.0)
+[![Latest release](https://img.shields.io/github/v/release/yilewang/llm-for-zotero?style=flat-square)](https://github.com/yilewang/llm-for-zotero/releases)
+[![GitHub Stars](https://img.shields.io/github/stars/yilewang/llm-for-zotero?style=flat-square)](https://github.com/yilewang/llm-for-zotero/stargazers)
 
 <p align="center">
-  <img src="./assets/label.png" alt="LLM for Zotero icon" width="512" />
+  <img src="./assets/label.png" alt="LLM for Zotero logo — a brain icon merged with the Zotero shield" width="512" />
 </p>
 
-## 🚀 This plugin is now renamed to LLM-for-Zotero
-
-Please see the latest [release notes](https://github.com/yilewang/llm-for-zotero/releases). The plugin name is now changed to `llm-for-zotero`.
-
-## Recent Update: 🤖 LLM-for-Zotero now becomes your own Agent in your Zotero app (BETA)! Please check the [Agent Mode](#agent-mode-beta) section for more details.
-
-LLM-for-Zotero now becomes your own Zotero Agent! It is currently in beta and is disabled by default. To enable it, please go to the settings and check the `Enable Agent Mode` checkbox.
-
-When you enable the agent mode, you will see the `Agent (beta)` toggle in the context bar. Click it to switch to agent mode.
-
-However, the agent mode is still in beta and is disabled by default. The functionality is still limited and is not fully tested. I recommend you to use either Codex, Gemini or Anthropic models to get the best performance. If you have any feedback or suggestions, please feel free to open an issue on GitHub!
-
-## Previous Update: ChatGPT Plus subscription users can use their Codex quote to access Codex models (e.g. `gpt-5.4`) without an API key. Please see the [Usage Guide](#usage-guide) for more details.
-
-## Introduction
-
-**llm-for-zotero** is a powerful plugin for [Zotero](https://www.zotero.org/) that integrates Large Language Models (LLMs) directly into the Zotero PDF reader. Unlike other tools that require you to upload your pdfs to a portal, this plugin is designed to conveniently access LLMs without the need to leave Zotero. It quietly sits in the panel of the Zotero reader, like your standby research assistant, ready to help you with any questions you have when reading a paper.
+**llm-for-zotero** is a plugin for [Zotero](https://www.zotero.org/) that integrates Large Language Models directly into the Zotero PDF reader. Unlike tools that require uploading PDFs to a web portal, this plugin lets you chat with your papers without leaving Zotero. It sits quietly in the reader sidebar — your standby research assistant, ready whenever you need it.
 
 <p align="center">
-  <img src="./assets/demo.png" alt="demo" width="1024" />
+  <img src="./assets/demo.png" alt="Screenshot of the llm-for-zotero sidebar inside the Zotero PDF reader" width="1024" />
 </p>
 
-## Key Features
+### 📢 Recent Updates
 
-### 0. Built for researchers, jump to your source of paper in one click
+- **Agent Mode (beta)** — LLM-for-Zotero can now act as an autonomous agent inside your Zotero library. See [Agent Mode](#agent-mode-beta) for details.
+- **Codex auth** — ChatGPT Plus subscribers can use their Codex quota to access Codex models (e.g. `gpt-5.4`) without an API key. See [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers).
+- **Renamed** — The plugin has been renamed from its earlier name to `llm-for-zotero`. See the [release notes](https://github.com/yilewang/llm-for-zotero/releases) for full history.
+
+---
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage Guide](#usage-guide)
+- [Features](#features)
+- [Agent Mode (beta)](#agent-mode-beta)
+- [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers)
+- [FAQ](#faq)
+- [Contributing](#contributing)
+- [Star History](#star-history)
+
+---
+
+## Installation
+
+### Step 1 — Download the latest `.xpi` release
+
+Download the latest `.xpi` file from the [Releases Page](https://github.com/yilewang/llm-for-zotero/releases).
+
+### Step 2 — Install the add-on
+
+Open Zotero → `Tools` → `Add-ons` → click the gear icon → **Install Add-on From File** → select the `.xpi` file.
+
+### Step 3 — Restart Zotero
+
+Restart Zotero to complete the installation. The plugin will automatically check for future updates when Zotero starts.
+
+---
+
+## Configuration
+
+Open `Preferences` → navigate to the `llm-for-zotero` tab.
+
+1. Select your **Provider** (e.g. OpenAI, Gemini, Deepseek).
+2. Paste your **API Base URL**, **secret key**, and **model name**.
+3. Click **Test Connection** to verify.
 
 <p align="center">
-  <img src="./assets/citation_jump.gif" alt="demo" width="1024" />
+  <img src="./assets/model_setting.gif" alt="Animation showing provider and model configuration" width="1024" />
 </p>
 
-This plugin is designed for researchers, so it tries to mimic the way how researchers work. When you ask a question in the chat, the model will automatically load the paper as context to generate answer with grounded information. You can also easily jump to the source of the paper in your Zotero library with just one click.
+The plugin natively supports multiple provider protocols: `responses_api`, `openai_chat_compat`, `anthropic_messages`, `gemini_native`, and more.
 
-### 1. "Everything starts with: Summarize this paper for me"
+### Supported Models (examples)
+
+| API URL | Model | Reasoning Levels | Notes |
+| --- | --- | --- | --- |
+| `https://api.openai.com/v1/responses` | gpt-5.4 | default, low, medium, high, xhigh | PDF uploads supported |
+| `https://api.openai.com/v1/responses` | gpt-5.4-pro | medium, high, xhigh | PDF uploads supported |
+| `https://api.deepseek.com/v1` | deepseek-chat | default | |
+| `https://api.deepseek.com/v1` | deepseek-reasoner | default | |
+| `https://generativelanguage.googleapis.com` | gemini-3-pro-preview | low, high | |
+| `https://generativelanguage.googleapis.com` | gemini-2.5-flash | medium | |
+| `https://generativelanguage.googleapis.com` | gemini-2.5-pro | default, low, high | |
+| `https://api.moonshot.ai/v1` | kimi-k2.5 | default | |
+
+You can also set up **multiple providers**, each with multiple models for different tasks (e.g. a multimodal model for figures, a text model for summaries). Cross-check answers across models for more comprehensive understanding.
+
+### Advanced: Reasoning Levels & Hyperparameters
+
+You can set different reasoning levels per model in the conversation panel (e.g. "default", "low", "medium", "high", "xhigh") depending on model support. Power users can also adjust hyperparameters like `temperature`, `max_tokens_output`, etc. for more creative or deterministic responses.
+
+---
+
+## Usage Guide
+
+1. **Open any PDF** in the Zotero reader.
+2. **Click the LLM Assistant icon** in the right-hand toolbar to open the sidebar.
+3. **Type a question** such as *"What is the main conclusion of this paper?"*
+
+On the first message, the model loads the full paper content as context. Follow-up questions use focused retrieval from the same paper, so the conversation stays fast and relevant.
+
+---
+
+## Features
+
+### Grounded Answers with One-Click Source Navigation
 
 <p align="center">
-  <img src="./assets/summarize.gif" alt="demo" width="1024" />
+  <img src="./assets/citation_jump.gif" alt="Animation showing one-click jump from an AI citation to the paper source" width="1024" />
 </p>
 
-It is always the first question that comes to mind when you open a new paper. With this plugin, you can get a concise summary of the paper in seconds, without having to read through the entire text. You can always find the relevant information you need, and quickly decide whether this paper is worth your time. The summary is generated based on the full content of the paper currently open in your Zotero reader, so you can be sure that the information is accurate and relevant. You can also customize the summary prompt to fit your specific research needs, such as focusing on the methodology, results, or implications of the paper.
+When you ask a question, the model generates answers grounded in the paper's content. Click any citation to jump straight to the source passage in your Zotero library.
 
-### 2. "Explain this selected text for me"
+### Paper Summarization
 
 <p align="center">
-  <img src="./assets/text.gif" alt="demo" width="1024" />
+  <img src="./assets/summarize.gif" alt="Animation showing an instant paper summary in the sidebar" width="1024" />
 </p>
 
-If you come across a complex paragraph or a technical term that you don't understand, simply select the text and ask the model to explain it.
+Get a concise summary of any paper in seconds. The summary is generated from the full text of the open PDF, and you can customize the prompt (e.g. focus on methodology, results, or implications).
 
-You can select up to 5 contexts from both model's answer and the paper content to provide more context for the model to generate a more accurate and detailed explanation.
-
-In the plugin, you can enable the pop-up option to conveniently add text to the chat.
-
-**If you don't like it, that's totally fine. You can always disable it in the settings! I really think it is important to give you the choice.**
-
-When you start your chat with the model, the full context of this paper is loaded into the model on the first turn. Follow-up questions switch to focused retrieval from the same paper, so the selected text becomes an additional layer of context that helps the model give a more accurate and detailed explanation without resending the whole paper each time.
-
-### 3. "What does this figure mean?"
+### Selected Text Explanation
 
 <p align="center">
-  <img src="./assets/screenshot.gif" alt="demo" width="1024" />
+  <img src="./assets/text.gif" alt="Animation showing selected text being explained by the model" width="1024" />
 </p>
 
-In our research, understanding the figures equivalent to understanding the paper. With this plugin, you can take a screenshot of any figure in the paper and ask the model to interpret it for you. It supports up to 10 screenshots at a time.
+Select any complex paragraph or technical term and ask the model to explain it. You can add up to 5 pieces of context from the model's answer or the paper to refine the explanation.
 
-### 4. "Wait.. How this paper is related to another paper?"
+An optional pop-up lets you add selected text to the chat with one click. Don't like it? Disable it in settings — your choice.
+
+### Figure Interpretation
 
 <p align="center">
-  <img src="./assets/multi.gif" alt="demo" width="1024" />
+  <img src="./assets/screenshot.gif" alt="Animation showing screenshot-based figure interpretation" width="1024" />
 </p>
 
-In this plugin, you can open multiple papers in different tabs and ask the model to read and compare the papers for you. You can simply type `/` to cite the other paper as additional context.
+Take a screenshot of any figure and ask the model to interpret it. Supports up to 10 screenshots at a time.
 
-### 5. "I have another document that is not in my Zotero, can you also read it for me?"
+### Cross-Paper Comparison
 
 <p align="center">
-  <img src="./assets/upload_files.gif" alt="demo" width="1024" />
+  <img src="./assets/multi.gif" alt="Animation showing cross-paper comparison using the slash command" width="1024" />
 </p>
 
-Not limited by the papers in your Zotero library, you can also upload any document from your local drive to the model as additional context. The supported file types include PDF, DOCX, PPTX, TXT, and markdown files. This feature is developed by coder contributor [@jianghao-zhang](https://github.com/jianghao-zhang). Kudos to him!
+Open multiple papers in different tabs and compare them side by side. Type `/` to cite another paper as additional context.
 
-### 6. "This answer is nice, I want to save it into my note"
+### External Document Upload
 
 <p align="center">
-  <img src="./assets/save_notes.gif" alt="demo" width="1024" />
+  <img src="./assets/upload_files.gif" alt="Animation showing external file upload for additional context" width="1024" />
 </p>
 
-This plugin supports seamless integration with your note-taking workflow. You can easily save an answer, or selected text generated by the model into your Zotero notes with just one click.
+Upload documents from your local drive as additional context — supports PDF, DOCX, PPTX, TXT, and Markdown files. *(Feature by [@jianghao-zhang](https://github.com/jianghao-zhang).)*
 
-### 7. "I learned a lot from talking to you, I wish I could come back to it later"
+### Save to Notes
 
 <p align="center">
-  <img src="./assets/save_chat.gif" alt="demo" width="1024" />
+  <img src="./assets/save_notes.gif" alt="Animation showing model answers being saved to Zotero notes" width="1024" />
 </p>
 
-The local conversation history is automatically saved and associated with the paper you are reading. You can also export the whole conversation into your note with markdown format. I spent a plenty amount effort to make sure the mathematical equations rendering is correct in the exported markdown, so complex knowledge will be presented in the most clear way in your note.
+Save any answer or selected text to your Zotero notes with one click — seamless integration with your note-taking workflow.
 
-**The export to note function also supports saving the selected text and screenshots into your note with markdown format. So, you never lose context.**
-
-### 8. "Do you remember my preference?"
+### Conversation History & Export
 
 <p align="center">
-  <img src="./assets/shortcuts.gif" alt="demo" width="1024" />
+  <img src="./assets/save_chat.gif" alt="Animation showing conversation export to Zotero notes with markdown" width="1024" />
 </p>
 
-You can customize the quick-action presets to fit your specific research workflow.
+Local conversation history is automatically saved and associated with the paper you're reading. Export entire conversations to Zotero notes in Markdown format — including selected text, screenshots, and properly rendered math equations.
 
-### 9. "Time to upgrade you, solider"
+### Custom Quick-Action Presets
 
 <p align="center">
-  <img src="./assets/model_setting.gif" alt="demo" width="1024" />
+  <img src="./assets/shortcuts.gif" alt="Animation showing custom quick-action preset configuration" width="1024" />
 </p>
 
-You can set up multiple provider connections, and each provider can include multiple LLM models to help you handle different types of tasks. For instance,
+Customize quick-action presets to match your research workflow — predefined prompts available at the tap of a button.
 
-- the multimodal model for helping you to interpret the Figure;
-- text-based model for helping you understand text.
+---
 
-Different models can also be used for the same task, and you can cross check their answers to get a more comprehensive understanding of the paper.
+## Agent Mode (beta)
 
-If you want more customization, you can also set up different reasoning levels for the same model in the conversation panel, such as "default", "low", "medium", "high" and "xhigh" for `gpt-5.4`, "medium", "high" and "xhigh" for `gpt-5.4-pro`, "low" and "high" for `gemini-3-pro-preview`, "medium" for `gemini-2.5-flash`. You can always check the connections by clicking the "Test Connection" button in the settings.
+> Agent Mode is disabled by default. Enable it in Preferences, then toggle `Agent (beta)` in the context bar.
 
-If you are a pro player, you can also change some hyperparameters of the model, such as temperature, max_tokens_output, etc. to get more creative or more deterministic answers.
+When enabled, the LLM becomes an autonomous agent that can read, search, and write within your Zotero library.
 
-### 10. "Can you upgrade yourself?"
+### Available Tools
+
+| Tool | Description |
+| --- | --- |
+| `query_library` | Search/list Zotero items, collections, related papers, and duplicates |
+| `read_library` | Read metadata, notes, annotations, attachments, and collections |
+| `inspect_pdf` | Read front matter, search pages, retrieve evidence, inspect the active reader view |
+| `search_literature_online` | Search live scholarly sources or fetch external metadata |
+| `mutate_library` | Batch write operations — metadata edits, tagging, collection changes, note writes, imports |
+| `undo_last_action` | Revert the last approved write batch |
+
+The design philosophy is **fewer, more general tools** rather than a long list of task-specific ones. Ask the agent what it can do — it will tell you.
+
+### Demos
+
+#### Multi-step workflow
 
 <p align="center">
-  <img src="./assets/auto_update.gif" alt="demo" width="1024" />
+  <img src="./assets/agent/multi_steps.gif" alt="Animation showing multi-step agent workflow" width="512" />
 </p>
 
-The plugin will automatically check for updates when you open Zotero. If I release an update, you will be able to update the plugin with just one click, without having to go through the installation process again. This way, you can always enjoy the latest features and improvements without any hassle.
-
-### Migration note for existing users
-
-The public plugin name is now `llm-for-zotero`.
-To keep auto-update seamless for existing installs, the internal add-on ID remains unchanged from earlier releases.
-User settings and local chat history are migrated automatically on startup.
-
-### Installation
-
-#### Step 1: Download the latest `.xpi` release
-
-Download the latest `.xpi` release from the [Releases Page](https://github.com/yilewang/llm-for-zotero/releases).
-
-Open `Zotero` and go to `Tools -> Add-ons`.
-
-#### Step 2: Install the `.xpi` file
-
-Click the gear icon and select `Install Add-on From File`
-
-#### Step 3: Restart `Zotero`
-
-Select the `.xpi` file and restart `Zotero` to complete the installation.
-
-### Configuration
-
-Open `Preferences` and navigate to the `llm-for-zotero` tab.
-
-Select your Provider (e.g., OpenAI, Gemini, Deepseek).
-
-Paste your API Base URL, secret key and model name.
-
-This plugin also supports **codex auth** mode (ChatGPT/Codex login reuse) for Codex models:
-
-1. Run `codex login` on your machine first.
-2. In plugin settings, set provider **Auth Mode** to `codex auth`.
-3. Use API URL `https://chatgpt.com/backend-api/codex/responses` and a Codex model (e.g. `gpt-5.4`).
-
-codex auth v1 notes:
-
-- The plugin reads local credentials from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
-- If request returns 401, the plugin attempts token refresh automatically.
-- Embeddings are not supported in codex auth mode yet.
-- Local PDF/reference text grounding and screenshot/image inputs are supported in codex auth mode.
-- Only Responses `/files` upload + `file_id` attachment flow is not supported in codex auth mode yet.
-
-I will give some popular model as example:
-
-| API url                                   | Model Name           | Reasoning Level                   | Notes                 |
-| ----------------------------------------- | -------------------- | --------------------------------- | --------------------- |
-| https://api.openai.com/v1/responses       | gpt-5.4              | default, low, medium, high, xhigh | PDF uploads supported |
-| https://api.openai.com/v1/responses       | gpt-5.4-pro          | medium, high, xhigh               | PDF uploads supported |
-| https://api.deepseek.com/v1               | deepseek-chat        | default                           |                       |
-| https://api.deepseek.com/v1               | deepseek-reasoner    | default                           |                       |
-| https://generativelanguage.googleapis.com | gemini-3-pro-preview | low, high                         |                       |
-| https://generativelanguage.googleapis.com | gemini-2.5-flash     | medium                            |                       |
-| https://generativelanguage.googleapis.com | gemini-2.5-pro       | default, low, high                |                       |
-| https://api.moonshot.ai/v1                | kimi-k2.5            | default                           |                       |
-
-Now, the plugin natively supports different provider protocols, such as `responses_api`, `openai_chat_compat`, `anthropic_messages`, `gemini_native`, etc. You can choose the one that suits your needs.
-
-You can always check the connections by clicking the "Test Connection" button.
-
-### Agent Mode (beta)
-
-When you enable the agent mode in the preferences settings, you will see the `Agent (beta)` toggle in the context bar. Click it to switch to agent mode.
-
-Currently, the agent mode exposes a compact primitive tool surface:
-
-- `query_library`: Search and list Zotero items or collections, find related library papers, and detect duplicates.
-- `read_library`: Read structured library state such as metadata, notes, annotations, attachments, and collections.
-- `inspect_pdf`: Read front matter, retrieve evidence, read chunks, search or render pages, inspect the active reader view, or attach a local file.
-- `search_literature_online`: Search live scholarly sources or fetch external metadata.
-- `mutate_library`: Apply batched write operations such as metadata edits, tagging, collection changes, note writes, and imports.
-- `undo_last_action`: Revert the last approved write batch.
-
-The demos below only show a few of those compositions. You can always ask the agent what it can do.
-
-The direction here is fewer, more general tools rather than a long list of task-specific ones.
-
-#### Multi-steps workflow with agent mode:
+#### Read a figure directly
 
 <p align="center">
-  <img src="./assets/agent/multi_steps.gif" alt="agent mode demo" width="1024" />
+  <img src="./assets/agent/single_figure.gif" alt="Animation showing agent reading a figure from the PDF" width="1024" />
 </p>
 
-#### Directly read the figure with agent mode:
+#### Read multiple pages
 
 <p align="center">
-  <img src="./assets/agent/single_figure.gif" alt="agent mode demo" width="1024" />
+  <img src="./assets/agent/full_docs.gif" alt="Animation showing agent reading multiple pages at once" width="1024" />
 </p>
 
-#### Directly read the multiple pages with agent mode:
+#### Find related papers
 
 <p align="center">
-  <img src="./assets/agent/full_docs.gif" alt="agent mode demo" width="1024" />
+  <img src="./assets/agent/related_papers.gif" alt="Animation showing agent finding related papers in the library" width="1024" />
 </p>
 
-#### Find related papers with agent mode:
+#### Apply tags
 
 <p align="center">
-  <img src="./assets/agent/related_papers.gif" alt="agent mode demo" width="1024" />
+  <img src="./assets/agent/apply_tags.gif" alt="Animation showing agent applying tags to a paper" width="1024" />
 </p>
 
-#### Apply tags to the paper:
+#### Write a note
 
 <p align="center">
-  <img src="./assets/agent/apply_tags.gif" alt="agent mode demo" width="1024" />
+  <img src="./assets/agent/write_note.gif" alt="Animation showing agent writing a note for a paper" width="1024" />
 </p>
 
-#### Write a note with agent mode:
+This is the first step for Agent Mode. The goal is a versatile agent that masters all tasks in your Zotero library.
 
-<p align="center">
-  <img src="./assets/agent/write_note.gif" alt="agent mode demo" width="1024" />
-</p>
+---
 
-This is one the first step for this agent mode. In the future, it should be a versatile agent mastering all the tasks in your Zotero library.
+## Codex Auth Setup (ChatGPT Plus Subscribers)
 
-### Usage Guide
+If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI — a great way to save on token costs.
 
-To chat with a paper, open any PDF in the Zotero reader.
+*Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for contributions to this feature.*
 
-Open the LLM Assistant sidebar (click the distinct icon in the right-hand toolbar).
+### Step-by-step setup
 
-Type a question in the chat box, such as "What is the main conclusion of this paper?"
-
-### A special feature for users with ChatGPT Plus subscription
-
-We know token consumption is a big concern for many users. If you have a ChatGPT Plus subscription, you can use **Codex auth** mode to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI. This is a great way to save your tokens. Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for their valuable contributions to this project.
-
-**Step-by-step setup (including new computers):**
-
-1. **Install the Codex CLI** (one-time setup). You need Node.js 18+ first. If you don't have Node.js:
-   - **macOS:** Install [Node.js](https://nodejs.org/) or run `brew install node`, then:
+1. **Install the Codex CLI** (one-time):
+   - **macOS:** Install [Node.js 18+](https://nodejs.org/) or `brew install node`, then:
      ```bash
      npm install -g @openai/codex
      ```
-   - **macOS (Homebrew):** Alternatively, `brew install --cask codex` (no Node.js needed).
-   - **Windows/Linux:** Install [Node.js](https://nodejs.org/), then run `npm install -g @openai/codex`.
+   - **macOS (Homebrew alternative):** `brew install --cask codex` (no Node.js needed).
+   - **Windows/Linux:** Install [Node.js 18+](https://nodejs.org/), then `npm install -g @openai/codex`.
 
-2. **Log in with your ChatGPT account.** Open a terminal and run:
-
+2. **Log in with your ChatGPT account:**
    ```bash
    codex login
    ```
+   A browser window opens — sign in with your ChatGPT Plus account. Credentials are saved to `~/.codex/auth.json`.
 
-   A browser window will open. Sign in with the same ChatGPT Plus account you use at chatgpt.com. When done, credentials are saved to `~/.codex/auth.json`.
-
-3. **Configure the plugin.** In Zotero → Preferences → llm-for-zotero:
-   - Set provider **Auth Mode** to `codex auth`.
-   - Set **API URL** to `https://chatgpt.com/backend-api/codex/responses`.
-   - Set **Model** to a Codex model (e.g. `gpt-5.4`).
+3. **Configure the plugin** (Zotero → Preferences → llm-for-zotero):
+   - **Auth Mode** → `codex auth`
+   - **API URL** → `https://chatgpt.com/backend-api/codex/responses`
+   - **Model** → a Codex model (e.g. `gpt-5.4`)
    - Click **Test Connection** to verify.
 
 <p align="center">
-  <img src="./assets/codex.png" alt="codex auth setup" width="1024" />
+  <img src="./assets/codex.png" alt="Screenshot showing Codex auth configuration in plugin settings" width="1024" />
 </p>
 
-### FAQ
+### Codex Auth Technical Notes
 
-> Q: Is it free to use?
+- Reads local credentials from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
+- Automatically attempts token refresh on 401 responses.
+- Embeddings are not supported in codex auth mode yet.
+- Local PDF/reference text grounding and screenshot/image inputs are supported.
+- The Responses `/files` upload + `file_id` attachment flow is not supported yet.
 
-A: Yes, absolutely free. You only pay for API calls, if you choose to use a paid API provider. And now, you can even use Codex models (e.g. `gpt-5.4`) from your ChatGPT Plus subscription without an API key. If you find this tool helpful, please consider leaving a ⭐ on GitHub or buying me a coffee via [Buy Me a Coffee](https://buymeacoffee.com/yat.lok) / Alipay. Either way is greatly appreciated!
+---
+
+## FAQ
+
+> **Q: Is it free to use?**
+>
+> Yes, absolutely free. You only pay for API calls if you choose a paid provider. With Codex auth, ChatGPT Plus subscribers can use Codex models without a separate API key. If you find this helpful, consider leaving a ⭐ on GitHub or [buying me a coffee](https://buymeacoffee.com/yat.lok).
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/1e945e57-4b99-4d25-b8d5-fb120e100b62" width="200">
+  <img src="https://github.com/user-attachments/assets/1e945e57-4b99-4d25-b8d5-fb120e100b62" width="200" alt="Alipay donation QR code">
 </p>
 
-> Q: Does this work with local models?
+> **Q: Does it work with local models?**
+>
+> Yes — as long as the local model provides an OpenAI-compatible HTTP API, you can connect it by entering the appropriate API Base URL and key in settings.
 
-A: Actually, yes. As long as the local model provides an OpenAI compatible HTTP API that is compatible with the plugin, you can connect it by entering the appropriate API Base URL and secret key in the settings.
+> **Q: Is my data used to train models?**
+>
+> No. You use your own API key, so data privacy is governed by the terms of your chosen provider (e.g. OpenAI's API terms typically exclude training on API data).
 
-> Q: Is my data used to train models?
+> **Q: How do I report a bug or ask a question?**
+>
+> Please [open an issue](https://github.com/yilewang/llm-for-zotero/issues) on GitHub. I'll do my best to help!
 
-A: No. Since you use your own API key, your data privacy is governed by the terms of the API provider you choose (e.g., OpenAI Enterprise terms usually exclude training on API data).
+---
 
-> Q: If I have any questions, how to contact you?
+## Contributing
 
-A: Please feel free to open an issue on GitHub! I will try my best to help you.
+Contributions are welcome! Whether it's bug reports, feature requests, or pull requests — feel free to [open an issue](https://github.com/yilewang/llm-for-zotero/issues) or submit a PR.
 
-### GitHub star history
+If you'd like to support the project financially, you can [buy me a coffee ☕](https://buymeacoffee.com/yat.lok).
+
+---
+
+## Star History
 
 [![Star History Chart](https://api.star-history.com/image?repos=yilewang/llm-for-zotero&type=date&legend=top-left)](https://www.star-history.com/?repos=yilewang%2Fllm-for-zotero&type=date&legend=top-left)

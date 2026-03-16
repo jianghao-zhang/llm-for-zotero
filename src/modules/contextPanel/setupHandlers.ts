@@ -625,8 +625,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     // Lock button: visible only in open-chat mode; reflect lock state
     if (modeLockBtn) {
-      modeLockBtn.style.visibility =
-        mode === "global" && !noteSession ? "visible" : "hidden";
+      modeLockBtn.style.display =
+        mode === "global" && !noteSession ? "flex" : "none";
       const libraryID = getCurrentLibraryID();
       const lockedKey =
         libraryID > 0 ? getLockedGlobalConversationKey(libraryID) : null;

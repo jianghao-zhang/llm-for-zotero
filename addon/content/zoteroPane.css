@@ -84,8 +84,10 @@
 }
 
 .llm-history-bar {
-  display: none;
-  align-items: center;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
   gap: 10px;
   min-height: 22px;
 }
@@ -265,17 +267,29 @@
 /* ---- Mode chip: single pill showing current mode + lock ---- */
 
 .llm-mode-switch {
-  display: inline-flex;
-  align-items: center;
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  justify-content: flex-start;
   gap: 5px;
-  flex-shrink: 0;
+  margin: 0 !important;
+  padding: 0 !important;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  height: 22px;
 }
 
 .llm-mode-chip {
   appearance: none;
   -moz-appearance: none;
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
+  margin: 0 !important;
+  width: auto;
+  flex: 0 0 auto;
   border: 1px solid var(--stroke-secondary);
   background: var(--fill-quinary);
   cursor: pointer;
@@ -286,7 +300,11 @@
   padding: 2px 9px;
   border-radius: 999px;
   white-space: nowrap;
-  line-height: 1.5;
+  line-height: normal;
+  height: 22px;
+  min-height: 22px;
+  vertical-align: middle;
+  align-self: center;
   transition:
     background 0.15s,
     border-color 0.15s;
@@ -311,16 +329,20 @@
   background: transparent;
   color: var(--fill-tertiary);
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
+  margin: 0 !important;
+  padding: 0 !important;
   width: 16px;
   min-width: 16px;
   height: 16px;
+  flex: 0 0 16px;
   border-radius: 3px;
-  padding: 0;
   font-size: 0;
   line-height: 0;
+  vertical-align: middle;
+  align-self: center;
   transition:
     color 0.15s,
     background 0.15s;
@@ -354,6 +376,13 @@
   -webkit-mask-position: center;
   -webkit-mask-size: contain;
   pointer-events: none;
+}
+
+/* Hide stale lock icons from inactive Zotero Reader tabs.
+   buildUI() marks non-current locks with [data-stale-tab].
+   !important prevents old-tab JS handlers from overriding. */
+.llm-mode-lock[data-stale-tab] {
+  display: none !important;
 }
 
 .llm-subtitle {
@@ -2836,7 +2865,7 @@ label.llm-search-results-item:hover {
   text-decoration: underline;
 }
 
-.llm-bubble.assistant .llm-paper-citation-row {
+.llm-bubble.assistant .llm-citation-row-container {
   margin-top: 4px;
   display: block;
   max-width: 100%;
@@ -2844,85 +2873,87 @@ label.llm-search-results-item:hover {
   overflow: visible;
 }
 
-.llm-bubble.assistant .llm-paper-citation-link {
-  appearance: none;
-  -moz-appearance: none;
+.llm-citation-row,
+.llm-citation-inline-wrap {
   display: inline-flex;
   align-items: center;
-  gap: 0;
-  border: none;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
+  gap: 2px;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+
+.llm-citation-text {
   color: var(--fill-secondary);
-  text-decoration: none;
   font: inherit;
   font-size: inherit;
   font-weight: inherit;
   line-height: inherit;
-  cursor: pointer;
-  max-width: none;
-  text-align: left;
-  white-space: nowrap;
+  user-select: text;
 }
 
-.llm-bubble.assistant .llm-paper-citation-link:hover:not(:disabled),
-.llm-bubble.assistant .llm-paper-citation-link:focus-visible {
-  color: inherit;
-  background: transparent;
-}
-
-.llm-bubble.assistant .llm-paper-citation-link:focus-visible {
-  outline: 1px solid var(--color-accent);
-  outline-offset: 1px;
-  border-radius: 8px;
-}
-
-.llm-bubble.assistant .llm-paper-citation-link-label {
-  display: inline-block;
-  min-width: 0;
-  max-width: none;
-  white-space: nowrap;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-.llm-bubble.assistant .llm-paper-citation-link .llm-paper-context-chip-label {
-  padding: 2px 6px;
-  font-size: var(--llm-fs-11);
-  max-width: none;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-
-.llm-bubble.assistant
-  .llm-paper-citation-link.llm-paper-citation-link-inline
-{
-  color: var(--color-accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.llm-bubble.assistant
-  .llm-paper-citation-link.llm-paper-citation-link-inline
-  .llm-paper-context-chip-label {
+.llm-citation-icon {
+  appearance: none;
+  -moz-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  min-width: 14px;
+  height: 14px;
   padding: 0;
-  color: inherit;
+  margin: 0 0 0 1px;
+  border: none;
+  border-radius: 3px;
   background: transparent;
-  text-decoration: inherit;
-  text-underline-offset: inherit;
+  color: var(--fill-tertiary);
+  cursor: pointer;
+  vertical-align: middle;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
-.llm-bubble.assistant
-  .llm-paper-citation-link:hover
-  .llm-paper-context-chip-label {
-  color: var(--fill-primary);
+.llm-citation-icon::before {
+  content: "";
+  display: block;
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  mask-image: url("icons/citation-jump.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/citation-jump.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  pointer-events: none;
 }
 
-.llm-bubble.assistant .llm-paper-citation-link[data-loading="true"] {
+.llm-citation-icon:hover {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.llm-citation-icon:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+  border-radius: 50%;
+}
+
+.llm-citation-icon[data-loading="true"] {
   opacity: 0.68;
   cursor: progress;
+}
+
+.llm-citation-icon-inline {
+  width: 12px;
+  min-width: 12px;
+  height: 12px;
+}
+
+.llm-citation-icon-inline::before {
+  width: 10px;
+  height: 10px;
 }
 
 .llm-bubble.assistant hr {

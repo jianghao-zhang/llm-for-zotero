@@ -238,6 +238,19 @@ describe("assistantCitationLinks", function () {
     );
   });
 
+  it("extracts yearless dual-author parenthetical citations", function () {
+    const mentions = extractInlineCitationMentions(
+      "Drift is ubiquitous but modulated by circuit architecture (Marks & Goard).",
+    );
+
+    assert.lengthOf(mentions, 1);
+    assert.equal(mentions[0]?.rawText, "(Marks & Goard)");
+    assert.equal(
+      mentions[0]?.extractedCitation.citationLabel,
+      "Marks & Goard",
+    );
+  });
+
   it("splits semicolon-grouped inline citations into separate mentions", function () {
     const mentions = extractInlineCitationMentions(
       "Drift spans regions (e.g., Ziv et al., 2013; Deitch et al., 2021).",
@@ -292,6 +305,32 @@ describe("assistantCitationLinks", function () {
     );
   });
 
+  it("extracts narrative citations with two authors joined by '&'", function () {
+    const mentions = extractInlineCitationMentions(
+      "In contrast, Marks & Goard (2021) showed that drift rate depends on the stimulus.",
+    );
+
+    assert.lengthOf(mentions, 1);
+    assert.equal(mentions[0]?.rawText, "Marks & Goard (2021)");
+    assert.equal(
+      mentions[0]?.extractedCitation.citationLabel,
+      "Marks & Goard, 2021",
+    );
+  });
+
+  it("extracts narrative citations with two authors joined by 'and'", function () {
+    const mentions = extractInlineCitationMentions(
+      "According to Smith and Jones (2024), the results were significant.",
+    );
+
+    assert.lengthOf(mentions, 1);
+    assert.equal(mentions[0]?.rawText, "Smith and Jones (2024)");
+    assert.equal(
+      mentions[0]?.extractedCitation.citationLabel,
+      "Smith and Jones, 2024",
+    );
+  });
+
   it("extracts narrative citations when 'et al' omits the trailing period", function () {
     const mentions = extractInlineCitationMentions(
       "Based on Climer et al (2025), mice were exposed to different odor stimuli.",
@@ -341,6 +380,44 @@ describe("assistantCitationLinks", function () {
       "The year (2025) was notable for several labs.",
     );
     assert.lengthOf(mentions, 0);
+  });
+
+  it("does not fuzzy-match by author surname alone when year differs", function () {
+    const papers: PaperContextRef[] = [
+      {
+        itemId: 1,
+        contextItemId: 11,
+        title: "Paper A",
+        firstCreator: "Brian Lee",
+        year: "2020",
+      },
+    ];
+
+    const matches = matchAssistantCitationCandidates(
+      "(Lee et al., 2018)",
+      papers,
+    );
+
+    assert.lengthOf(matches, 0);
+  });
+
+  it("does not return the single candidate when citation label does not match", function () {
+    const papers: PaperContextRef[] = [
+      {
+        itemId: 1,
+        contextItemId: 11,
+        title: "Paper A",
+        firstCreator: "Alice Smith",
+        year: "2024",
+      },
+    ];
+
+    const matches = matchAssistantCitationCandidates(
+      "(Jones et al., 2022)",
+      papers,
+    );
+
+    assert.lengthOf(matches, 0);
   });
 
 });

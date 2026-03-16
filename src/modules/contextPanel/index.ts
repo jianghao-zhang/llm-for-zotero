@@ -43,7 +43,7 @@ import {
   collectAndDeleteUnreferencedBlobs,
 } from "../../utils/attachmentRefStore";
 import { normalizeSelectedText, setStatus } from "./textUtils";
-import { buildUI } from "./buildUI";
+import { buildUI, syncGlobalLockVisibility } from "./buildUI";
 import { setupHandlers } from "./setupHandlers";
 import { ensureConversationLoaded } from "./chat";
 import { renderShortcuts } from "./shortcuts";
@@ -93,6 +93,9 @@ export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
 export function registerReaderContextPanel() {
   if (readerContextPanelRegistered) return;
   setReaderContextPanelRegistered(true);
+  // Generation counter: incremented on every onAsyncRender call so stale
+  // (superseded) renders can bail out at each await point.
+  let renderGeneration = 0;
   Zotero.ItemPaneManager.registerSection({
     paneID: PANE_ID,
     pluginID: config.addonID,
@@ -113,22 +116,31 @@ export function registerReaderContextPanel() {
       ztoolkit.log(`LLM: panel itemChange tabType=${tabType}`);
       return true;
     },
-    onRender: ({ body, item }) => {
-      buildUI(body, item);
+    onRender: ({ body }) => {
+      // Intentional no-op for main rendering, but used to refresh visibility state.
+      syncGlobalLockVisibility(body);
     },
     onAsyncRender: async ({ body, item, setEnabled, tabType }) => {
       setEnabled(true);
+      const thisGeneration = ++renderGeneration;
       ztoolkit.log(
-        `LLM: panel asyncRender tabType=${tabType} hasItem=${Boolean(item)}`,
+        `LLM: panel asyncRender tabType=${tabType} hasItem=${Boolean(item)} gen=${thisGeneration}`,
       );
 
-      buildUI(body, item);
-      const resolvedItem = resolveInitialPanelItemState(item).item;
+      const resolvedInitialState = resolveInitialPanelItemState(item);
+      const resolvedItem = resolvedInitialState.item;
+      const basePaperItem = resolvedInitialState.basePaperItem;
+
+      buildUI(body, resolvedItem);
+      
       if (resolvedItem) {
         await ensureConversationLoaded(resolvedItem);
       }
+      // Bail if a newer render has started while we were awaiting.
+      if (renderGeneration !== thisGeneration) return;
       await renderShortcuts(body, resolvedItem);
-      setupHandlers(body, item);
+      if (renderGeneration !== thisGeneration) return;
+      setupHandlers(body, item); // setupHandlers will re-resolve its own state from item
       refreshChat(body, resolvedItem);
       // Defer content extraction so the panel becomes interactive sooner.
       const activeContextItem = getActiveContextAttachmentFromTabs();

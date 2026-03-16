@@ -81,9 +81,9 @@ type GroupedInlineCitationParseResult = {
 const INLINE_CITATION_PATTERN =
   /(\([^()]+?\)(?:\s*\[[^\]]+\])?(?:\s*,?\s*page\s+[^,.;:!?]+)?)/gi;
 const INLINE_NARRATIVE_CITATION_PATTERN =
-  /\b([A-Z][\p{L}'’.-]+(?:\s+et\s+al\.?)?)\s*\(\s*((?:19|20)\d{2}[a-z]?)\s*\)/gu;
+  /\b([A-Z][\p{L}'’.-]+(?:\s+(?:and|&)\s+[A-Z][\p{L}'’.-]+)?(?:\s+et\s+al\.?)?)\s*\(\s*((?:19|20)\d{2}[a-z]?)\s*\)/gu;
 const INLINE_NARRATIVE_COMMA_CITATION_PATTERN =
-  /\b([A-Z][\p{L}'’.-]+(?:\s+et\s+al\.?)?)\s*,\s*((?:19|20)\d{2}[a-z]?)\b/gu;
+  /\b([A-Z][\p{L}'’.-]+(?:\s+(?:and|&)\s+[A-Z][\p{L}'’.-]+)?(?:\s+et\s+al\.?)?)\s*,\s*((?:19|20)\d{2}[a-z]?)\b/gu;
 
 type CitationMatchBuffer = {
   cleanText: string;
@@ -206,8 +206,8 @@ function formatCitationChipLabel(
   const cleanCitation = stripCitationKeyFromLabel(displayCitationLabel);
   const cleanPage = sanitizeText(pageLabel || "").trim();
   return cleanPage
-    ? `(${cleanCitation}, page ${cleanPage})`
-    : `(${cleanCitation})`;
+    ? `${cleanCitation}, page ${cleanPage}`
+    : cleanCitation;
 }
 
 function setCitationButtonLabel(
@@ -216,19 +216,28 @@ function setCitationButtonLabel(
   pageLabel?: string,
 ): void {
   const labelText = formatCitationChipLabel(displayCitationLabel, pageLabel);
-  let labelNode = button.querySelector(
-    ".llm-paper-citation-link-label",
+  // In the new icon-based layout the text span is a sibling of the button
+  // inside a shared .llm-citation-row / .llm-citation-inline-wrap container.
+  const container = button.parentElement;
+  const textSpan = container?.querySelector(
+    ".llm-citation-text",
   ) as HTMLSpanElement | null;
-  if (!labelNode) {
-    const doc = button.ownerDocument || Zotero.getMainWindow?.()?.document;
-    if (!doc) return;
-    labelNode = doc.createElement("span");
-    labelNode.className =
-      "llm-paper-citation-link-label llm-paper-context-chip-label";
-    button.appendChild(labelNode);
+  if (textSpan) {
+    const rawText = textSpan.dataset.rawText;
+    if (rawText) {
+      if (pageLabel) {
+        if (rawText.endsWith(")")) {
+          textSpan.textContent = rawText.replace(/\)$/, `, page ${pageLabel})`);
+        } else {
+          textSpan.textContent = `${rawText}, page ${pageLabel}`;
+        }
+      } else {
+        textSpan.textContent = rawText;
+      }
+    } else {
+      textSpan.textContent = labelText;
+    }
   }
-  labelNode.textContent = labelText;
-  button.title = `Jump to cited source: ${labelText}`;
   button.setAttribute("aria-label", `Jump to cited source: ${labelText}`);
 }
 
@@ -240,14 +249,14 @@ function replaceBlockquoteText(blockquote: Element, quoteText: string): void {
   blockquote.textContent = normalizedQuote;
 }
 
-/**
- * Extract the author surname from a citation label for fuzzy matching.
- * E.g. "zheng et al., 2026" → "zheng", "(zheng et al., 2026)" → "zheng"
- */
 function extractAuthorKey(normalizedLabel: string): string {
   const stripped = normalizedLabel.replace(/^\(|\)$/g, "").trim();
-  const match = stripped.match(/^(\S+)\s+et\s+al/i);
-  return match ? match[1].replace(/[,;.]+$/g, "") : "";
+  // Try to match "Author et al" first
+  const matchEtAl = stripped.match(/^(\S+)\s+et\s+al/i);
+  if (matchEtAl) return matchEtAl[1].replace(/[,;.]+$/g, "");
+  // Otherwise, match the first word before a comma, '&', 'and', or year
+  const matchFirst = stripped.match(/^(\p{L}+)/u);
+  return matchFirst ? matchFirst[1].toLowerCase() : "";
 }
 
 function normalizeQuoteKey(value: string): string {
@@ -487,17 +496,18 @@ export function extractStandalonePaperSourceLabel(
 }
 
 function isLikelyStandaloneCitationLabel(value: string): boolean {
-  const normalized = stripCitationControlChars(sanitizeText(value || ""))
+  const clean = stripCitationControlChars(sanitizeText(value || ""))
     .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    .trim();
+  const normalized = clean.toLowerCase();
   if (!normalized) return false;
   return (
     /\bet\s+al\b/.test(normalized) ||
     /\b(19|20)\d{2}\b/.test(normalized) ||
     /\bcid:[^\]]+/.test(normalized) ||
     /\[[^\]]+\]/.test(normalized) ||
-    /\bpaper(?:\s+\d+)?\b/.test(normalized)
+    /\bpaper(?:\s+\d+)?\b/.test(normalized) ||
+    /(?:[A-Z][\p{L}'’.-]+)\s+(?:and|&)\s+(?:[A-Z][\p{L}'’.-]+)/u.test(clean)
   );
 }
 
@@ -695,7 +705,7 @@ export function extractInlineCitationMentions(
       const leftContextStart = Math.max(0, start - 128);
       const leftContext = cleanText.slice(leftContextStart, start);
       const authorMatch = leftContext.match(
-        /([A-Z][\p{L}'’.-]+(?:\s+et\s+al\.?)?)\s*$/u,
+        /([A-Z][\p{L}'’.-]+(?:\s+(?:and|&)\s+[A-Z][\p{L}'’.-]+)?(?:\s+et\s+al\.?)?)\s*$/u,
       );
       if (authorMatch) {
         const authorText = stripCitationControlChars(
@@ -1247,7 +1257,7 @@ function updateCitationButtonPage(
   for (const doc of docs) {
     try {
       const syncButtons = Array.from(
-        doc.querySelectorAll("button.llm-paper-citation-link"),
+        doc.querySelectorAll("button.llm-citation-icon"),
       ) as HTMLButtonElement[];
       for (const syncButton of syncButtons) {
         if (syncButton === button) continue;
@@ -1868,23 +1878,39 @@ function resolveMatchingCandidatesForExtractedCitation(
       candidate.normalizedCitationLabel ===
         extractedCitation.normalizedCitationLabel,
   );
+  // Fuzzy author-key fallback: 
+  // If the citation has a year (e.g. "Marks & Goard, 2021"), we fuzzy match the author 
+  // but *require* the year to match exactly to prevent linking to the wrong paper.
+  // If no year is present, we allow any paper matching the author.
   if (!out.length && candidates.length && !isGroupedCitation) {
+    const extractedYear = extractCitationYear(
+      extractedCitation.normalizedCitationLabel,
+    );
     const citationAuthorKey = extractAuthorKey(
       extractedCitation.normalizedCitationLabel,
     );
+
     if (citationAuthorKey) {
-      const fuzzy = candidates.filter(
-        (candidate) =>
-          extractAuthorKey(candidate.normalizedCitationLabel) ===
-          citationAuthorKey,
-      );
+      const fuzzy = candidates.filter((candidate) => {
+        const candidateAuthorKey = extractAuthorKey(
+          candidate.normalizedCitationLabel,
+        );
+        if (candidateAuthorKey !== citationAuthorKey) return false;
+
+        if (extractedYear) {
+          const candidateYear = extractCitationYear(
+            candidate.normalizedCitationLabel,
+          );
+          return candidateYear === extractedYear;
+        }
+
+        return true;
+      });
+
       if (fuzzy.length) {
         out.push(...fuzzy);
       }
     }
-  }
-  if (!out.length && candidates.length === 1 && !isGroupedCitation) {
-    out.push(candidates[0]);
   }
   return out;
 }
@@ -1897,28 +1923,64 @@ function createCitationButton(params: {
   extractedCitation: ExtractedCitationLabel;
   quoteText: string;
   inline?: boolean;
-}): HTMLButtonElement {
+  rawCitationText?: string;
+}): HTMLSpanElement {
   const baseSourceLabel = params.extractedCitation.sourceLabel;
   const displayCitationLabel = params.extractedCitation.displayCitationLabel;
+
+  // --- Container ---
+  const container = params.ownerDoc.createElement("span");
+  container.className = params.inline
+    ? "llm-citation-inline-wrap"
+    : "llm-citation-row";
+
+  // --- Plain-text citation label ---
+  const textSpan = params.ownerDoc.createElement("span");
+  textSpan.className = "llm-citation-text";
+  if (params.rawCitationText) {
+    textSpan.dataset.rawText = params.rawCitationText;
+  }
+  textSpan.textContent =
+    params.rawCitationText ||
+    formatCitationChipLabel(
+      displayCitationLabel,
+      params.extractedCitation.pageLabel,
+    );
+  container.appendChild(textSpan);
+
+  // --- Icon button (the only clickable element) ---
   const citationButton = params.ownerDoc.createElement(
     "button",
   ) as HTMLButtonElement;
   citationButton.type = "button";
   citationButton.className = params.inline
-    ? "llm-paper-citation-link llm-paper-context-chip-header llm-paper-citation-link-inline"
-    : "llm-paper-citation-link llm-paper-context-chip-header";
-  citationButton.title = "Jump to the cited source in the paper";
+    ? "llm-citation-icon llm-citation-icon-inline"
+    : "llm-citation-icon";
   citationButton.dataset.loading = "false";
   citationButton.dataset.citationSyncKey = `${normalizeCitationLabel(baseSourceLabel)}\u241f${normalizeQuoteKey(params.quoteText)}`;
-  setCitationButtonLabel(
-    citationButton,
-    displayCitationLabel,
-    params.extractedCitation.pageLabel,
-  );
   if (params.extractedCitation.pageLabel) {
     citationButton.dataset.citationPageLabel =
       params.extractedCitation.pageLabel;
   }
+
+  // Tooltip: show a preview of the quoted text, or fallback to paper title
+  const quotePreview = sanitizeText(params.quoteText || "").trim();
+  if (quotePreview) {
+    const truncated =
+      quotePreview.length > 120
+        ? quotePreview.slice(0, 117) + "…"
+        : quotePreview;
+    citationButton.title = truncated;
+  } else {
+    const paperTitle = params.candidates[0]?.paperContext.title || "";
+    citationButton.title = paperTitle
+      ? `Jump to: ${paperTitle}`
+      : "Jump to cited source";
+  }
+  citationButton.setAttribute(
+    "aria-label",
+    `Jump to cited source: ${displayCitationLabel}`,
+  );
 
   const handleCitationClick = () => {
     void resolveAndNavigateAssistantCitation({
@@ -1950,6 +2012,8 @@ function createCitationButton(params: {
     handleCitationClick();
   });
 
+  container.appendChild(citationButton);
+
   void resolvePageForCitationButton({
     button: citationButton,
     displayCitationLabel,
@@ -1959,7 +2023,7 @@ function createCitationButton(params: {
     quoteText: params.quoteText,
   });
 
-  return citationButton;
+  return container;
 }
 
 function shouldSkipInlineCitationNode(element: Element | null): boolean {
@@ -2029,16 +2093,26 @@ function decorateInlineCitationNodes(params: {
         mention.extractedCitation,
         params.candidates,
       );
-      const citationButton = createCitationButton({
-        ownerDoc: params.ownerDoc,
-        body: params.body,
-        panelItem: params.panelItem,
-        candidates: matchingCandidates,
-        extractedCitation: mention.extractedCitation,
-        quoteText: "",
-        inline: true,
-      });
-      frag.appendChild(citationButton);
+      // Only create a citation element with an icon when there are matching
+      // candidates.  Without matching candidates, render plain text only.
+      if (matchingCandidates.length) {
+        const citationEl = createCitationButton({
+          ownerDoc: params.ownerDoc,
+          body: params.body,
+          panelItem: params.panelItem,
+          candidates: matchingCandidates,
+          extractedCitation: mention.extractedCitation,
+          quoteText: "",
+          inline: true,
+          rawCitationText: mention.rawText,
+        });
+        frag.appendChild(citationEl);
+      } else {
+        // No match → keep original text as-is (no icon)
+        frag.appendChild(
+          params.ownerDoc.createTextNode(text.slice(mention.start, mention.end)),
+        );
+      }
       cursor = mention.end;
       decoratedCount += 1;
     }
@@ -2181,7 +2255,7 @@ export function decorateAssistantCitationLinks(params: {
     );
     // NOTE: matchingCandidates may still be empty here.  That is fine — the
     // click handler will resolve fallback candidates dynamically.
-    const citationButton = createCitationButton({
+    const citationElement = createCitationButton({
       ownerDoc,
       body: params.body,
       panelItem: params.panelItem,
@@ -2190,13 +2264,9 @@ export function decorateAssistantCitationLinks(params: {
       quoteText,
     });
 
-    citationEl.classList.add(
-      "llm-paper-citation-row",
-      "llm-paper-context-chip",
-      "llm-paper-context-chip-pinned",
-    );
+    citationEl.classList.add("llm-citation-row-container");
     citationEl.textContent = "";
-    citationEl.appendChild(citationButton);
+    citationEl.appendChild(citationElement);
 
     // If the citation was mixed with continuation text (edge-case leading-line
     // extraction), re-insert the remainder as a new paragraph after this element
