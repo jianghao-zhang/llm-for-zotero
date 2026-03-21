@@ -147,6 +147,7 @@ import {
 } from "./contextResolution";
 import {
   flashPageInLivePdfReader,
+  scrollToExactQuoteInReader,
 } from "./livePdfSelectionLocator";
 import {
   resolvePaperContextRefFromAttachment,
@@ -9396,7 +9397,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       typeof activeReader?.navigate === "function"
     ) {
       await activeReader.navigate(location);
-      await flashPageInLivePdfReader(activeReader, pageIndex);
+      if (selectedContext.text) {
+        await scrollToExactQuoteInReader(activeReader, selectedContext.text);
+      } else {
+        await flashPageInLivePdfReader(activeReader, pageIndex);
+      }
       return true;
     }
 
@@ -9434,7 +9439,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           })()) ||
         getActiveReaderForSelectedTab();
       if (nextReader) {
-        await flashPageInLivePdfReader(nextReader, pageIndex);
+        if (selectedContext.text) {
+          await scrollToExactQuoteInReader(nextReader, selectedContext.text);
+        } else {
+          await flashPageInLivePdfReader(nextReader, pageIndex);
+        }
       }
       return true;
     }
@@ -9451,7 +9460,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       await pane.viewPDF(targetItemId, location);
       const nextReader = getActiveReaderForSelectedTab();
       if (nextReader) {
-        await flashPageInLivePdfReader(nextReader, pageIndex);
+        if (selectedContext.text) {
+          await scrollToExactQuoteInReader(nextReader, selectedContext.text);
+        } else {
+          await flashPageInLivePdfReader(nextReader, pageIndex);
+        }
       }
       return true;
     }
