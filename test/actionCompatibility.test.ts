@@ -110,8 +110,8 @@ describe("action compatibility after tool refactors", function () {
     registry.register(
       createStubTool(
         {
-          name: "mutate_library",
-          description: "mutate",
+          name: "import_identifiers",
+          description: "import",
           inputSchema: { type: "object" },
           mutability: "write",
           requiresConfirmation: false,
@@ -120,16 +120,11 @@ describe("action compatibility after tool refactors", function () {
         async (input) => {
           importArgs = input;
           return {
-            results: [
-              {
-                operation: "import_identifiers",
-                result: {
-                  succeeded: 1,
-                  failed: 1,
-                  itemIds: [501],
-                },
-              },
-            ],
+            result: {
+              succeeded: 1,
+              failed: 1,
+              itemIds: [501],
+            },
           };
         },
       ),
@@ -149,7 +144,7 @@ describe("action compatibility after tool refactors", function () {
     if (!result.ok) return;
     assert.equal(searchArgs?.doi, "10.1000/seed");
     assert.deepEqual(
-      ((importArgs?.operations as Array<Record<string, unknown>>)[0] || {}).identifiers,
+      importArgs?.identifiers,
       ["10.1000/r1", "10.1000/r2"],
     );
     assert.deepEqual(result.output, {
@@ -194,24 +189,19 @@ describe("action compatibility after tool refactors", function () {
     registry.register(
       createStubTool(
         {
-          name: "mutate_library",
-          description: "mutate",
+          name: "move_to_collection",
+          description: "move",
           inputSchema: { type: "object" },
           mutability: "write",
           requiresConfirmation: false,
         },
         (args) => ({ ok: true, value: args as Record<string, unknown> }),
         async () => ({
-          results: [
-            {
-              operation: "move_to_collection",
-              result: {
-                selectedCount: 3,
-                movedCount: 2,
-                skippedCount: 1,
-              },
-            },
-          ],
+          result: {
+            selectedCount: 3,
+            movedCount: 2,
+            skippedCount: 1,
+          },
         }),
       ),
     );
@@ -233,7 +223,7 @@ describe("action compatibility after tool refactors", function () {
     );
   });
 
-  it("auto_tag uses nested tag update counts from mutate_library", async function () {
+  it("auto_tag uses nested tag update counts from apply_tags", async function () {
     const registry = new AgentToolRegistry();
 
     registry.register(
@@ -255,24 +245,19 @@ describe("action compatibility after tool refactors", function () {
     registry.register(
       createStubTool(
         {
-          name: "mutate_library",
-          description: "mutate",
+          name: "apply_tags",
+          description: "apply tags",
           inputSchema: { type: "object" },
           mutability: "write",
           requiresConfirmation: false,
         },
         (args) => ({ ok: true, value: args as Record<string, unknown> }),
         async () => ({
-          results: [
-            {
-              operation: "apply_tags",
-              result: {
-                selectedCount: 3,
-                updatedCount: 2,
-                skippedCount: 1,
-              },
-            },
-          ],
+          result: {
+            selectedCount: 3,
+            updatedCount: 2,
+            skippedCount: 1,
+          },
         }),
       ),
     );
@@ -327,22 +312,17 @@ describe("action compatibility after tool refactors", function () {
     registry.register(
       createStubTool(
         {
-          name: "mutate_library",
-          description: "mutate",
+          name: "edit_current_note",
+          description: "edit note",
           inputSchema: { type: "object" },
           mutability: "write",
           requiresConfirmation: false,
         },
         (args) => ({ ok: true, value: args as Record<string, unknown> }),
         async () => ({
-          results: [
-            {
-              operation: "save_note",
-              result: {
-                status: "standalone_created",
-              },
-            },
-          ],
+          result: {
+            status: "standalone_created",
+          },
         }),
       ),
     );

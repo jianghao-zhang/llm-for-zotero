@@ -1,6 +1,6 @@
 /**
  * Focused facade tool for importing papers into Zotero by DOI, ISBN, arXiv ID, or URL.
- * Replaces the opaque `mutate_library` interface with a rich, self-describing schema.
+ * Provides a self-describing schema for importing papers by identifier.
  */
 import type { AgentToolDefinition } from "../../types";
 import {
@@ -71,6 +71,14 @@ export function createImportIdentifiersTool(
             : "Papers imported";
         },
       },
+    },
+
+    acceptInheritedApproval: async (_input, approval) => {
+      // Accept review-mode approvals from search_literature_online review cards
+      return (
+        approval.sourceMode === "review" &&
+        approval.sourceActionId === "import"
+      );
     },
 
     validate(args: unknown) {

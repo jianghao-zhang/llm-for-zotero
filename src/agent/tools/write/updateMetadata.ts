@@ -1,27 +1,64 @@
 /**
- * Focused facade tool for updating metadata fields on a Zotero item.
- * Replaces the opaque `mutate_library` interface with a rich, self-describing schema.
+ * Focused facade tool for updating metadata fields on one or more Zotero items.
+ *
+ * Supports two input modes:
+ * - Single item: `{ itemId?, metadata: {...} }` — used by the LLM directly
+ * - Batch: `{ operations: [{ itemId, metadata, paperContext? }, ...] }` — used
+ *   internally by the syncMetadata action and review cards
  */
+import type { PaperContextRef } from "../../../shared/types";
 import type { AgentToolDefinition } from "../../types";
 import {
   LibraryMutationService,
   type UpdateMetadataOperation,
 } from "../../services/libraryMutationService";
-import type {
-  EditableArticleMetadataPatch,
-  ZoteroGateway,
-} from "../../services/zoteroGateway";
+import type { ZoteroGateway } from "../../services/zoteroGateway";
 import { EDITABLE_ARTICLE_METADATA_FIELDS } from "../../services/zoteroGateway";
-import { ok, fail, validateObject, normalizePositiveInt } from "../shared";
+import {
+  ok,
+  fail,
+  validateObject,
+  normalizePositiveInt,
+  normalizeToolPaperContext,
+} from "../shared";
 import {
   buildUpdateMetadataReviewField,
   executeAndRecordUndo,
+  executeAndRecordUndoBatch,
   normalizeMetadataPatch,
 } from "./mutateLibraryShared";
 
 type UpdateMetadataInput = {
-  operation: UpdateMetadataOperation;
+  operations: UpdateMetadataOperation[];
 };
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function normalizeOperationEntry(
+  value: unknown,
+  index: number,
+): UpdateMetadataOperation | null {
+  if (!validateObject<Record<string, unknown>>(value)) return null;
+  const metadata =
+    normalizeMetadataPatch(value.metadata) ||
+    normalizeMetadataPatch(value.patch) ||
+    normalizeMetadataPatch(value);
+  if (!metadata) return null;
+  const paperContext = validateObject<Record<string, unknown>>(
+    value.paperContext,
+  )
+    ? (normalizeToolPaperContext(
+        value.paperContext as Record<string, unknown>,
+      ) as PaperContextRef | undefined) || undefined
+    : undefined;
+  return {
+    id: typeof value.id === "string" && value.id.trim() ? value.id.trim() : `op-${index + 1}`,
+    type: "update_metadata",
+    itemId: normalizePositiveInt(value.itemId),
+    paperContext,
+    metadata,
+  };
+}
 
 // ── Tool factory ──────────────────────────────────────────────────────────────
 
@@ -112,7 +149,16 @@ export function createUpdateMetadataTool(
         onPending: "Waiting for confirmation on metadata changes",
         onApproved: "Applying metadata changes",
         onDenied: "Metadata update cancelled",
-        onSuccess: "Metadata updated",
+        onSuccess: ({ content }) => {
+          const result =
+            content && typeof content === "object"
+              ? (content as Record<string, unknown>)
+              : {};
+          const count = Number(result.appliedCount || 1);
+          return count > 1
+            ? `Updated metadata for ${count} items`
+            : "Metadata updated";
+        },
       },
     },
 
@@ -123,6 +169,22 @@ export function createUpdateMetadataTool(
         );
       }
 
+      // Batch mode: { operations: [...] }
+      if (Array.isArray(args.operations)) {
+        const operations = args.operations
+          .map((entry, index) => normalizeOperationEntry(entry, index))
+          .filter(
+            (entry): entry is UpdateMetadataOperation => Boolean(entry),
+          );
+        if (!operations.length) {
+          return fail(
+            "operations must contain at least one entry with valid metadata fields.",
+          );
+        }
+        return ok({ operations });
+      }
+
+      // Single mode: { itemId?, metadata: {...} }
       const metadata = normalizeMetadataPatch(args.metadata);
       if (!metadata) {
         return fail(
@@ -140,38 +202,73 @@ export function createUpdateMetadataTool(
         metadata,
       };
 
-      return ok({ operation });
+      return ok({ operations: [operation] });
+    },
+
+    acceptInheritedApproval: async (_input, approval) => {
+      // Accept review-mode approvals from search_literature_online review cards
+      return (
+        approval.sourceMode === "review" &&
+        (approval.sourceActionId === "apply_direct" ||
+          approval.sourceActionId === "review_changes")
+      );
     },
 
     createPendingAction(input, context) {
-      const operation = input.operation;
-      const item = zoteroGateway.resolveMetadataItem({
-        itemId: operation.itemId,
-        paperContext: operation.paperContext,
-        request: context.request,
-        item: context.item,
-      });
-      const title =
-        zoteroGateway.getEditableArticleMetadata(item)?.title ||
-        operation.paperContext?.title ||
-        `Item ${operation.itemId ?? "active item"}`;
+      const isBatch = input.operations.length > 1;
+      const reviewFields = input.operations
+        .map((operation) => {
+          const item = zoteroGateway.resolveMetadataItem({
+            itemId: operation.itemId,
+            paperContext: operation.paperContext,
+            request: context.request,
+            item: context.item,
+          });
+          const title =
+            zoteroGateway.getEditableArticleMetadata(item)?.title ||
+            operation.paperContext?.title ||
+            `Item ${operation.itemId ?? "active item"}`;
+          return buildUpdateMetadataReviewField(
+            operation,
+            zoteroGateway,
+            context,
+            title,
+            isBatch,
+          );
+        })
+        .filter(
+          (f): f is NonNullable<typeof f> => Boolean(f),
+        );
 
-      const reviewField = buildUpdateMetadataReviewField(
-        operation,
-        zoteroGateway,
-        context,
-        title,
-        false,
-      );
+      const title = isBatch
+        ? `Update metadata for ${input.operations.length} items`
+        : `Update metadata for ${
+            (() => {
+              const op = input.operations[0];
+              const item = zoteroGateway.resolveMetadataItem({
+                itemId: op.itemId,
+                paperContext: op.paperContext,
+                request: context.request,
+                item: context.item,
+              });
+              return (
+                zoteroGateway.getEditableArticleMetadata(item)?.title ||
+                op.paperContext?.title ||
+                `Item ${op.itemId ?? "active item"}`
+              );
+            })()
+          }`;
 
       return {
         toolName: "update_metadata",
         mode: "review",
-        title: `Update metadata for ${title}`,
-        description: "Review the proposed field changes below.",
+        title,
+        description: isBatch
+          ? "Review the proposed metadata changes below."
+          : "Review the proposed field changes below.",
         confirmLabel: "Apply",
         cancelLabel: "Cancel",
-        fields: reviewField ? [reviewField] : [],
+        fields: reviewFields,
       };
     },
 
@@ -181,9 +278,17 @@ export function createUpdateMetadataTool(
     },
 
     async execute(input, context) {
-      return executeAndRecordUndo(
+      if (input.operations.length === 1) {
+        return executeAndRecordUndo(
+          mutationService,
+          input.operations[0],
+          context,
+          "update_metadata",
+        );
+      }
+      return executeAndRecordUndoBatch(
         mutationService,
-        input.operation,
+        input.operations,
         context,
         "update_metadata",
       );

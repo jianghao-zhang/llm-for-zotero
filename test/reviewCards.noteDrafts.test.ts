@@ -125,11 +125,11 @@ describe("reviewCards note drafts", function () {
 
     assert.equal(next.kind, "invoke_tool");
     if (next.kind !== "invoke_tool") return;
-    const operations = (
-      next.call.arguments as { operations?: Array<{ type?: string; content?: string }> }
-    ).operations;
-    assert.equal(operations?.[0]?.type, "save_note");
-    assert.equal(operations?.[0]?.content, "# Summary\n\n**Key point**");
+    assert.equal(next.call.name, "edit_current_note");
+    const args = next.call.arguments as { mode?: string; content?: string; target?: string };
+    assert.equal(args.mode, "create");
+    assert.equal(args.content, "# Summary\n\n**Key point**");
+    assert.equal(args.target, "item");
   });
 
   it("builds a metadata update mutation directly from the selected metadata source", function () {
@@ -185,21 +185,15 @@ describe("reviewCards note drafts", function () {
 
     assert.equal(next.kind, "invoke_tool");
     if (next.kind !== "invoke_tool") return;
-    assert.equal(next.call.name, "mutate_library");
-    const operations = (
-      next.call.arguments as {
-        operations?: Array<{
-          type?: string;
-          itemId?: number;
-          metadata?: Record<string, unknown>;
-        }>;
-      }
-    ).operations;
-    assert.equal(operations?.[0]?.type, "update_metadata");
-    assert.equal(operations?.[0]?.itemId, 55);
-    assert.equal(operations?.[0]?.metadata?.title, "Climer metadata");
-    assert.equal(operations?.[0]?.metadata?.DOI, "10.1000/example");
-    assert.equal(operations?.[0]?.metadata?.publicationTitle, "Journal of Tests");
-    assert.equal(operations?.[0]?.metadata?.abstractNote, "Useful abstract");
+    assert.equal(next.call.name, "update_metadata");
+    const args = next.call.arguments as {
+      itemId?: number;
+      metadata?: Record<string, unknown>;
+    };
+    assert.equal(args.itemId, 55);
+    assert.equal(args.metadata?.title, "Climer metadata");
+    assert.equal(args.metadata?.DOI, "10.1000/example");
+    assert.equal(args.metadata?.publicationTitle, "Journal of Tests");
+    assert.equal(args.metadata?.abstractNote, "Useful abstract");
   });
 });

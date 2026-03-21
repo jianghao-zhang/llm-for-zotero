@@ -92,7 +92,7 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
       return { ok: true, output: { untagged: 0, tagged: 0, skipped: 0 } };
     }
 
-    // Step 2: apply tags via mutate_library (HITL tag_assignment_table)
+    // Step 2: apply tags via apply_tags (HITL tag_assignment_table)
     ctx.onProgress({
       type: "step_start",
       step: "Assigning tags to items",
@@ -109,30 +109,20 @@ export const autoTagAction: AgentAction<AutoTagInput, AutoTagOutput> = {
       .filter((id): id is number => id !== null);
 
     const mutateResult = await callTool(
-      "mutate_library",
+      "apply_tags",
       {
-        operations: [
-          {
-            type: "apply_tags",
-            // No tags pre-specified — the HITL tag_assignment_table collects them per item
-            assignments: itemIds.map((itemId) => ({ itemId, tags: [] })),
-          },
-        ],
+        action: "add",
+        // No tags pre-specified — the HITL tag_assignment_table collects them per item
+        assignments: itemIds.map((itemId) => ({ itemId, tags: [] })),
       },
       ctx,
       "Assigning tags",
     );
 
     const mutateContent = mutateResult.content as Record<string, unknown>;
-    const mutateResults = Array.isArray(mutateContent.results) ? mutateContent.results : [];
-    const taggedCount = mutateResult.ok
-      ? mutateResults.reduce((total, entry) => {
-          if (!entry || typeof entry !== "object") return total;
-          const result = (entry as { result?: unknown }).result;
-          if (!result || typeof result !== "object") return total;
-          const updated = Number((result as { updatedCount?: unknown }).updatedCount || 0);
-          return total + (Number.isFinite(updated) ? updated : 0);
-        }, 0)
+    const resultObj = mutateContent.result as Record<string, unknown> | undefined;
+    const taggedCount = mutateResult.ok && resultObj
+      ? Number(resultObj.updatedCount || 0)
       : 0;
 
     ctx.onProgress({

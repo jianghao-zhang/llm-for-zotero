@@ -1,6 +1,6 @@
 /**
  * Focused facade tool for adding and removing tags on Zotero papers.
- * Replaces the opaque `mutate_library` interface with a rich, self-describing schema.
+ * Provides a self-describing schema for managing Zotero tags.
  */
 import type { AgentToolDefinition } from "../../types";
 import {

@@ -98,7 +98,7 @@ describe("agentTrace render", function () {
 
   it("keeps the footer execute button for legacy confirm-cancel cards", function () {
     const action: AgentPendingAction = {
-      toolName: "mutate_library",
+      toolName: "update_metadata",
       title: "Confirm library change",
       confirmLabel: "Apply",
       cancelLabel: "Cancel",

@@ -1,6 +1,6 @@
 /**
  * Focused facade tool for moving Zotero items to the trash.
- * Replaces the opaque `mutate_library` interface with a rich, self-describing schema.
+ * Provides a self-describing schema for trashing Zotero items.
  */
 import type { AgentToolDefinition } from "../../types";
 import {

@@ -9,7 +9,7 @@ import {
   createInspectPdfTool,
 } from "./read/inspectPdf";
 import { createSearchLiteratureOnlineTool } from "./read/searchLiteratureOnline";
-import { createMutateLibraryTool } from "./write/mutateLibrary";
+
 import { createEditCurrentNoteTool } from "./write/editCurrentNote";
 import { createUndoLastActionTool } from "./write/undoLastAction";
 import { createApplyTagsTool } from "./write/applyTags";
@@ -42,7 +42,6 @@ export function createBuiltInToolRegistry(
     ),
   );
   registry.register(createSearchLiteratureOnlineTool(deps.zoteroGateway));
-  registry.register(createMutateLibraryTool(deps.zoteroGateway));
   registry.register(createApplyTagsTool(deps.zoteroGateway));
   registry.register(createMoveToCollectionTool(deps.zoteroGateway));
   registry.register(createUpdateMetadataTool(deps.zoteroGateway));

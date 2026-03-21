@@ -215,7 +215,7 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
       };
     }
 
-    // Step 3: apply updates via mutate_library (with HITL diff review)
+    // Step 3: apply updates via update_metadata (with HITL diff review)
     ctx.onProgress({
       type: "step_start",
       step: "Applying metadata updates",
@@ -224,13 +224,13 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
     });
 
     const operations = updateCandidates.map(({ itemId, patch }) => ({
-      type: "update_metadata",
+      type: "update_metadata" as const,
       itemId,
       metadata: patch,
     }));
 
     const mutateResult = await callTool(
-      "mutate_library",
+      "update_metadata",
       { operations },
       ctx,
       "Updating metadata",
@@ -238,7 +238,7 @@ export const syncMetadataAction: AgentAction<SyncMetadataInput, SyncMetadataOutp
 
     const mutateContent = mutateResult.content as Record<string, unknown>;
     const succeeded = mutateResult.ok
-      ? (Array.isArray(mutateContent.results) ? mutateContent.results.length : updateCandidates.length)
+      ? Number(mutateContent.appliedCount || (Array.isArray(mutateContent.results) ? mutateContent.results.length : updateCandidates.length))
       : 0;
     const denied = mutateResult.ok ? 0 : updateCandidates.length;
 

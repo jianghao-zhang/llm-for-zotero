@@ -74,7 +74,7 @@ export class AgentToolRegistry {
   ): AgentToolDefinition<any, any>[] {
     return Array.from(this.tools.values()).filter(
       (tool) =>
-        !tool.spec.internalOnly && tool.isAvailable?.(request) !== false,
+        tool.isAvailable?.(request) !== false,
     );
   }
 

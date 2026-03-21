@@ -143,15 +143,11 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
       ];
 
       const saveResult = await callTool(
-        "mutate_library",
+        "edit_current_note",
         {
-          operations: [
-            {
-              type: "save_note",
-              content: reportLines.join("\n"),
-              target: "standalone",
-            },
-          ],
+          mode: "create",
+          content: reportLines.join("\n"),
+          target: "standalone",
         },
         ctx,
         "Saving audit report",
@@ -159,9 +155,8 @@ export const auditLibraryAction: AgentAction<AuditLibraryInput, AuditLibraryOutp
 
       if (saveResult.ok) {
         const saveContent = saveResult.content as Record<string, unknown>;
-        const results = Array.isArray(saveContent.results) ? saveContent.results : [];
-        const firstResult = results[0] as Record<string, unknown> | undefined;
-        noteId = typeof firstResult?.noteId === "number" ? firstResult.noteId : undefined;
+        const resultObj = saveContent.result as Record<string, unknown> | undefined;
+        noteId = typeof resultObj?.noteId === "number" ? resultObj.noteId : undefined;
       }
       ctx.onProgress({ type: "step_done", step: "Saving audit note" });
     }

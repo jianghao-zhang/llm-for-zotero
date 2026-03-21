@@ -1,6 +1,6 @@
 /**
  * Focused facade tool for creating and deleting Zotero collections (folders).
- * Replaces the opaque `mutate_library` interface with a rich, self-describing schema.
+ * Provides a self-describing schema for managing Zotero collections.
  */
 import type { AgentToolDefinition } from "../../types";
 import {

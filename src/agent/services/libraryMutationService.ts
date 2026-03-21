@@ -125,7 +125,7 @@ function buildMetadataUndo(
 ): LibraryMutationUndo {
   const { itemId, fields, creators, title } = snapshot;
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Undo metadata edit for "${title}"`,
     revert: async () => {
       const item = zoteroGateway.getItem(itemId);
@@ -144,7 +144,7 @@ function buildTagUndo(
 ): LibraryMutationUndo | null {
   if (!itemIdsByTag.length) return null;
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Undo tags applied to ${itemIdsByTag.length} paper${
       itemIdsByTag.length === 1 ? "" : "s"
     }`,
@@ -162,7 +162,7 @@ function buildRemoveTagsUndo(
 ): LibraryMutationUndo | null {
   if (!restored.length) return null;
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Restore removed tags on ${restored.length} paper${
       restored.length === 1 ? "" : "s"
     }`,
@@ -183,7 +183,7 @@ function buildCollectionAddUndo(
 ): LibraryMutationUndo | null {
   if (!movedItems.length) return null;
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Undo collection moves for ${movedItems.length} paper${
       movedItems.length === 1 ? "" : "s"
     }`,
@@ -204,7 +204,7 @@ function buildCollectionRemoveUndo(
 ): LibraryMutationUndo | null {
   if (!removedItems.length) return null;
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Restore ${removedItems.length} paper${
       removedItems.length === 1 ? "" : "s"
     } to their collection`,
@@ -224,7 +224,7 @@ function buildCreateCollectionUndo(
   collection: CollectionSummary,
 ): LibraryMutationUndo {
   return {
-    toolName: "mutate_library",
+    toolName: "library_mutation",
     description: `Undo creation of collection "${collection.name}"`,
     revert: async () => {
       await zoteroGateway.deleteCollection({
@@ -495,7 +495,7 @@ export class LibraryMutationService {
           undo:
             result.trashedCount > 0
               ? {
-                  toolName: "mutate_library",
+                  toolName: "library_mutation",
                   description: `Restore ${result.trashedCount} trashed item${
                     result.trashedCount === 1 ? "" : "s"
                   }`,

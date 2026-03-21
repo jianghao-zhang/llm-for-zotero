@@ -1,13 +1,12 @@
 /**
- * Shared helpers extracted from mutateLibrary.ts for use by
- * both the internal mutate_library tool and the focused facade tools.
+ * Shared helpers used by the focused facade tools for building
+ * confirmation cards, normalizing inputs, and executing operations.
  */
-import type { AgentPendingField, AgentToolContext, AgentToolDefinition } from "../../types";
+import type { AgentPendingField, AgentToolContext } from "../../types";
 import type {
   ApplyTagsOperation,
   MoveToCollectionOperation,
   UpdateMetadataOperation,
-  SaveNoteOperation,
   LibraryMutationOperation,
   LibraryMutationService,
 } from "../../services/libraryMutationService";
@@ -19,7 +18,6 @@ import type {
 } from "../../services/zoteroGateway";
 import { EDITABLE_ARTICLE_METADATA_FIELDS } from "../../services/zoteroGateway";
 import { pushUndoEntry } from "../../store/undoStore";
-import { normalizeNoteSourceText } from "../../../modules/contextPanel/notes";
 import { normalizePositiveInt, normalizeStringArray, validateObject } from "../shared";
 
 // ── Tag assignment helpers ──────────────────────────────────────────────────
@@ -357,169 +355,11 @@ export function buildUpdateMetadataReviewField(
   };
 }
 
-// ── Save note review helpers ────────────────────────────────────────────────
-
-export function getSaveNoteContentFieldId(operation: SaveNoteOperation): string {
-  return `saveNoteContent:${operation.id || "save_note"}`;
-}
-
-export function buildSaveNoteReviewFields(
-  operations: LibraryMutationOperation[],
-): AgentPendingField[] {
-  const saveNoteOperations = operations.filter(
-    (operation): operation is SaveNoteOperation =>
-      operation.type === "save_note",
-  );
-  if (!saveNoteOperations.length) return [];
-  return saveNoteOperations.flatMap((operation, index) => {
-    const suffix = saveNoteOperations.length > 1 ? ` ${index + 1}` : "";
-    return [
-      {
-        type: "diff_preview" as const,
-        id: `saveNoteDiff:${operation.id || "save_note"}`,
-        label: `Note changes${suffix}`,
-        before: "",
-        after: operation.content,
-        sourceFieldId: getSaveNoteContentFieldId(operation),
-        contextLines: 2,
-        emptyMessage: "No note content yet.",
-      },
-      {
-        type: "textarea" as const,
-        id: getSaveNoteContentFieldId(operation),
-        label: `Final note content${suffix}`,
-        value: operation.content,
-      },
-    ];
-  });
-}
-
-// ── Operation summary ───────────────────────────────────────────────────────
-
-export function summarizeOperation(
-  operation: LibraryMutationOperation,
-  zoteroGateway: ZoteroGateway,
-): { label: string; description: string } {
-  switch (operation.type) {
-    case "update_metadata": {
-      const fieldNames = Object.keys(operation.metadata);
-      const item = zoteroGateway.resolveMetadataItem({
-        itemId: operation.itemId,
-        paperContext: operation.paperContext,
-      });
-      const title =
-        zoteroGateway.getEditableArticleMetadata(item)?.title ||
-        operation.paperContext?.title ||
-        "selected item";
-      return {
-        label: `Update metadata for ${title}`,
-        description: `Fields: ${fieldNames.join(", ")}`,
-      };
-    }
-    case "apply_tags": {
-      const count =
-        operation.assignments?.length || operation.itemIds?.length || 0;
-      return {
-        label: `Apply tags to ${count} paper${count === 1 ? "" : "s"}`,
-        description: operation.tags?.length
-          ? `Tags: ${operation.tags.join(", ")}`
-          : "Per-paper tag assignments",
-      };
-    }
-    case "remove_tags":
-      return {
-        label: `Remove tags from ${operation.itemIds.length} paper${
-          operation.itemIds.length === 1 ? "" : "s"
-        }`,
-        description: `Tags: ${operation.tags.join(", ")}`,
-      };
-    case "move_to_collection": {
-      const count =
-        operation.assignments?.length || operation.itemIds?.length || 0;
-      const collection = operation.targetCollectionId
-        ? zoteroGateway.getCollectionSummary(operation.targetCollectionId)
-        : null;
-      return {
-        label: `Add ${count} paper${count === 1 ? "" : "s"} to a collection`,
-        description: collection
-          ? `Target: ${describeCollection(collection)}`
-          : "Per-paper collection assignments",
-      };
-    }
-    case "remove_from_collection": {
-      const collection = zoteroGateway.getCollectionSummary(
-        operation.collectionId,
-      );
-      return {
-        label: `Remove ${operation.itemIds.length} paper${
-          operation.itemIds.length === 1 ? "" : "s"
-        } from a collection`,
-        description: `Collection: ${describeCollection(collection)}`,
-      };
-    }
-    case "create_collection":
-      return {
-        label: `Create collection "${operation.name}"`,
-        description: operation.parentCollectionId
-          ? `Parent: ${describeCollection(
-              zoteroGateway.getCollectionSummary(
-                operation.parentCollectionId,
-              ),
-            )}`
-          : "Top-level collection",
-      };
-    case "delete_collection":
-      return {
-        label: "Delete collection",
-        description: describeCollection(
-          zoteroGateway.getCollectionSummary(operation.collectionId),
-        ),
-      };
-    case "save_note":
-      return {
-        label: "Save note",
-        description:
-          operation.target === "standalone"
-            ? "Standalone note"
-            : "Attach to current or selected item",
-      };
-    case "import_identifiers": {
-      const collection = operation.targetCollectionId
-        ? zoteroGateway.getCollectionSummary(operation.targetCollectionId)
-        : null;
-      return {
-        label: `Import ${operation.identifiers.length} identifier${
-          operation.identifiers.length === 1 ? "" : "s"
-        }`,
-        description: collection
-          ? `${operation.identifiers.join(", ")} → ${describeCollection(collection)}`
-          : operation.identifiers.join(", "),
-      };
-    }
-    case "trash_items": {
-      const titles = operation.itemIds.map((id) => {
-        const item = zoteroGateway.getItem(id);
-        return item
-          ? String(item.getField?.("title") || `Item ${id}`)
-          : `Item ${id}`;
-      });
-      return {
-        label: `Trash ${operation.itemIds.length} item${
-          operation.itemIds.length === 1 ? "" : "s"
-        }`,
-        description:
-          titles.slice(0, 5).join(", ") +
-          (titles.length > 5 ? `, +${titles.length - 5} more` : ""),
-      };
-    }
-  }
-}
-
-// ── Execution + undo helper ─────────────────────────────────────────────────
+// ── Execution + undo helpers ────────────────────────────────────────────────
 
 /**
  * Execute a single operation via the mutation service and register undo.
- * Used by both the internal mutate_library and the focused facade tools.
+ * Used by the focused facade tools for single-operation calls.
  */
 export async function executeAndRecordUndo(
   mutationService: LibraryMutationService,
@@ -539,7 +379,47 @@ export async function executeAndRecordUndo(
   return { result: executed.result };
 }
 
-// ── Metadata & Creator normalization (shared by mutateLibrary + updateMetadata) ──
+/**
+ * Execute multiple operations via the mutation service and register a single
+ * grouped undo entry. Used by facade tools that support batching (e.g.
+ * update_metadata with multiple items).
+ */
+export async function executeAndRecordUndoBatch(
+  mutationService: LibraryMutationService,
+  operations: LibraryMutationOperation[],
+  context: AgentToolContext,
+  facadeToolName: string,
+): Promise<{ appliedCount: number; results: unknown[] }> {
+  const results: unknown[] = [];
+  const undoEntries: Array<{
+    description: string;
+    revert: () => Promise<void>;
+  }> = [];
+  for (const operation of operations) {
+    const executed = await mutationService.executeOperation(operation, context);
+    results.push(executed.result);
+    if (executed.undo) {
+      undoEntries.push(executed.undo);
+    }
+  }
+  if (undoEntries.length) {
+    pushUndoEntry(context.request.conversationKey, {
+      id: `undo-${facadeToolName}-batch-${Date.now()}`,
+      toolName: facadeToolName,
+      description: `Undo ${undoEntries.length} ${facadeToolName} change${
+        undoEntries.length === 1 ? "" : "s"
+      }`,
+      revert: async () => {
+        for (const undo of [...undoEntries].reverse()) {
+          await undo.revert();
+        }
+      },
+    });
+  }
+  return { appliedCount: results.length, results };
+}
+
+// ── Metadata & Creator normalization ─────────────────────────────────────────
 
 export function normalizeStringValue(value: unknown): string | null {
   if (typeof value === "string") return value.trim();

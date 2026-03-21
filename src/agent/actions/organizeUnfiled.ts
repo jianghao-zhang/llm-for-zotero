@@ -119,7 +119,7 @@ export const organizeUnfiledAction: AgentAction<OrganizeUnfiledInput, OrganizeUn
       summary: `${collections.length} collection${collections.length === 1 ? "" : "s"} available`,
     });
 
-    // Step 3: batch move via mutate_library (HITL assignment_table)
+    // Step 3: batch move via move_to_collection (HITL assignment_table)
     ctx.onProgress({
       type: "step_start",
       step: "Assigning items to collections",
@@ -136,30 +136,20 @@ export const organizeUnfiledAction: AgentAction<OrganizeUnfiledInput, OrganizeUn
       .filter((id): id is number => id !== null);
 
     const mutateResult = await callTool(
-      "mutate_library",
+      "move_to_collection",
       {
-        operations: [
-          {
-            type: "move_to_collection",
-            itemIds,
-            // No collectionId — the HITL assignment_table will collect per-item destinations
-          },
-        ],
+        action: "add",
+        itemIds,
+        // No collectionId — the HITL assignment_table will collect per-item destinations
       },
       ctx,
       "Assigning unfiled items to collections",
     );
 
     const mutateContent = mutateResult.content as Record<string, unknown>;
-    const mutateResults = Array.isArray(mutateContent.results) ? mutateContent.results : [];
-    const movedCount = mutateResult.ok
-      ? mutateResults.reduce((total, entry) => {
-          if (!entry || typeof entry !== "object") return total;
-          const result = (entry as { result?: unknown }).result;
-          if (!result || typeof result !== "object") return total;
-          const moved = Number((result as { movedCount?: unknown }).movedCount || 0);
-          return total + (Number.isFinite(moved) ? moved : 0);
-        }, 0)
+    const resultObj = mutateContent.result as Record<string, unknown> | undefined;
+    const movedCount = mutateResult.ok && resultObj
+      ? Number(resultObj.movedCount || 0)
       : 0;
 
     ctx.onProgress({

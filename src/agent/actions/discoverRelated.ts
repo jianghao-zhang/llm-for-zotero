@@ -245,30 +245,19 @@ export const discoverRelatedAction: AgentAction<DiscoverRelatedInput, DiscoverRe
     }
 
     const importResult = await callTool(
-      "mutate_library",
+      "import_identifiers",
       {
-        operations: [
-          {
-            type: "import_identifiers",
-            identifiers,
-            libraryID: ctx.libraryID,
-          },
-        ],
+        identifiers,
+        libraryID: ctx.libraryID,
       },
       ctx,
       "Importing selected papers",
     );
 
     const importContent = importResult.content as Record<string, unknown>;
-    const importResults = Array.isArray(importContent.results) ? importContent.results : [];
-    const importedCount = importResult.ok
-      ? importResults.reduce((total, entry) => {
-          if (!entry || typeof entry !== "object") return total;
-          const result = (entry as { result?: unknown }).result;
-          if (!result || typeof result !== "object") return total;
-          const succeeded = Number((result as { succeeded?: unknown }).succeeded || 0);
-          return total + (Number.isFinite(succeeded) ? succeeded : 0);
-        }, 0)
+    const resultObj = importContent.result as Record<string, unknown> | undefined;
+    const importedCount = importResult.ok && resultObj
+      ? Number(resultObj.succeeded || resultObj.importedCount || 0)
       : 0;
 
     ctx.onProgress({

@@ -781,13 +781,15 @@ export function resolveSearchLiteratureReview(
       return {
         kind: "invoke_tool",
         call: {
-          name: "mutate_library",
+          name: "edit_current_note",
           arguments: {
-            operations: [{ type: "save_note", content: noteContent, target: "item" }],
+            mode: "create",
+            content: noteContent,
+            target: "item",
           },
           inheritedApproval: {
             sourceToolName: "search_literature_online",
-            sourceActionId: "save_note",
+            sourceActionId: "save_metadata_note",
             sourceMode: "review",
           } satisfies AgentInheritedApproval,
         },
@@ -816,17 +818,11 @@ export function resolveSearchLiteratureReview(
       return {
         kind: "invoke_tool",
         call: {
-          name: "mutate_library",
+          name: "update_metadata",
           arguments: {
-            operations: [
-              {
-                type: "update_metadata",
-                ...(paperContext ? { paperContext } : { itemId }),
-                metadata,
-              },
-            ],
+            ...(paperContext ? { paperContext } : { itemId }),
+            metadata,
           },
-          // Skip the second confirmation card — the user already reviewed the diff
           inheritedApproval: {
             sourceToolName: "search_literature_online",
             sourceActionId: "apply_direct",
@@ -862,17 +858,11 @@ export function resolveSearchLiteratureReview(
       return {
         kind: "invoke_tool",
         call: {
-          name: "mutate_library",
+          name: "update_metadata",
           arguments: {
-            operations: [
-              {
-                type: "update_metadata",
-                ...(paperContext ? { paperContext } : { itemId }),
-                metadata,
-              },
-            ],
+            ...(paperContext ? { paperContext } : { itemId }),
+            metadata,
           },
-          // User already reviewed the source selection — skip mutate_library's card
           inheritedApproval: {
             sourceToolName: "search_literature_online",
             sourceActionId: "review_changes",
@@ -913,15 +903,10 @@ export function resolveSearchLiteratureReview(
     return {
       kind: "invoke_tool",
       call: {
-        name: "mutate_library",
+        name: "import_identifiers",
         arguments: {
-          operations: [
-            {
-              type: "import_identifiers",
-              identifiers,
-              libraryID: normalizedArgs.libraryID || context.request.libraryID,
-            },
-          ],
+          identifiers,
+          libraryID: normalizedArgs.libraryID || context.request.libraryID,
         },
         inheritedApproval: {
           sourceToolName: "search_literature_online",
@@ -944,13 +929,15 @@ export function resolveSearchLiteratureReview(
     return {
       kind: "invoke_tool",
       call: {
-        name: "mutate_library",
+        name: "edit_current_note",
         arguments: {
-          operations: [{ type: "save_note", content: noteContent, target: "item" }],
+          mode: "create",
+          content: noteContent,
+          target: "item",
         },
         inheritedApproval: {
           sourceToolName: "search_literature_online",
-          sourceActionId: "save_note",
+          sourceActionId: "save_paper_note",
           sourceMode: "review",
         } satisfies AgentInheritedApproval,
       },

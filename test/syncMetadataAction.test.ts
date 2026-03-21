@@ -90,7 +90,7 @@ describe("sync_metadata action", function () {
     registry.register(
       createStubTool(
         {
-          name: "mutate_library",
+          name: "update_metadata",
           description: "mutate",
           inputSchema: { type: "object" },
           mutability: "write",
@@ -135,7 +135,7 @@ describe("sync_metadata action", function () {
         {
           createPendingAction: async () =>
             ({
-              toolName: "mutate_library",
+              toolName: "update_metadata",
               title: "Review 1 library change",
               confirmLabel: "Apply changes",
               cancelLabel: "Cancel",

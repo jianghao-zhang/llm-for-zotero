@@ -78,6 +78,16 @@ export function createEditCurrentNoteTool(
         },
       },
     },
+    acceptInheritedApproval: async (_input, approval) => {
+      // Accept review-mode approvals from search_literature_online review cards
+      // that chain a save_note operation
+      return (
+        approval.sourceMode === "review" &&
+        (approval.sourceActionId === "save_metadata_note" ||
+          approval.sourceActionId === "save_paper_note")
+      );
+    },
+
     validate: (args) => {
       if (!validateObject<Record<string, unknown>>(args)) {
         return fail("Expected an object with a 'content' string");

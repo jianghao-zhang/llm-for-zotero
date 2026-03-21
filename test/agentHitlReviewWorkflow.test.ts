@@ -151,13 +151,15 @@ function createStubSearchTool(
   };
 }
 
-function createStubMutateTool(
+function createStubFacadeTool(
+  toolName: string,
   execute: (input: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>,
+  acceptActionIds: string[] = [],
 ): AgentToolDefinition<Record<string, unknown>, unknown> {
   return {
     spec: {
-      name: "mutate_library",
-      description: "mutate",
+      name: toolName,
+      description: toolName,
       inputSchema: { type: "object" },
       mutability: "write",
       requiresConfirmation: true,
@@ -167,26 +169,26 @@ function createStubMutateTool(
       value:
         args && typeof args === "object" && !Array.isArray(args)
           ? (args as Record<string, unknown>)
-          : { operations: [] },
+          : {},
     }),
     createPendingAction: (input) => ({
-      toolName: "mutate_library",
+      toolName,
       title: "Confirm library change",
       confirmLabel: "Apply",
       cancelLabel: "Cancel",
       fields: [
         {
           type: "textarea",
-          id: "operationsJson",
-          label: "Operations",
-          value: JSON.stringify(input.operations || [], null, 2),
+          id: "inputJson",
+          label: "Input",
+          value: JSON.stringify(input, null, 2),
           editorMode: "json",
         },
       ],
     }),
     acceptInheritedApproval: (_input, approval) =>
       approval.sourceToolName === "search_literature_online" &&
-      (approval.sourceActionId === "import" || approval.sourceActionId === "save_note"),
+      acceptActionIds.includes(approval.sourceActionId),
     applyConfirmation: (input) => ({ ok: true, value: input }),
     execute: async (input) => execute(input),
   };
@@ -227,18 +229,15 @@ describe("AgentRuntime HITL review workflow", function () {
         })),
       );
       registry.register(
-        createStubMutateTool(async (input) => {
-          const operations = Array.isArray(input.operations)
-            ? (input.operations as Array<Record<string, unknown>>)
-            : [];
-          assert.lengthOf(operations, 1);
-          assert.equal(operations[0].type, "update_metadata");
-          assert.equal((operations[0].metadata as Record<string, unknown>)?.DOI, "10.1000/a");
+        createStubFacadeTool("update_metadata", async (input) => {
+          const metadata = input.metadata as Record<string, unknown> | undefined;
+          assert.exists(metadata);
+          assert.equal(metadata?.DOI, "10.1000/a");
           return {
             appliedCount: 1,
             results: [{ itemId: 1 }],
           };
-        }),
+        }, ["apply_direct", "review_changes"]),
       );
       const adapter = new StepAdapter([
         {
@@ -292,14 +291,8 @@ describe("AgentRuntime HITL review workflow", function () {
               data: { selectedMetadataResult: "metadata-1" },
             });
           }
-          if (
-            event.type === "confirmation_required" &&
-            event.action.toolName === "mutate_library"
-          ) {
-            runtime.resolveConfirmation(event.requestId, {
-              approved: true,
-            });
-          }
+          // update_metadata accepts inherited approval from the review card,
+          // so no separate confirmation is expected here
         },
       });
 
@@ -317,20 +310,22 @@ describe("AgentRuntime HITL review workflow", function () {
           event.type === "confirmation_required" &&
           event.action.toolName === "search_literature_online",
       );
-      const mutateIndex = events.findIndex(
+      const updateResultIndex = events.findIndex(
         (event) =>
-          event.type === "confirmation_required" &&
-          event.action.toolName === "mutate_library",
+          event.type === "tool_result" &&
+          event.name === "update_metadata",
       );
       assert.isAtLeast(resultIndex, 0);
       assert.isAbove(reviewIndex, resultIndex);
-      assert.isAbove(mutateIndex, reviewIndex);
+      // update_metadata accepts inherited approval from review_changes,
+      // so it executes directly without a separate confirmation
+      assert.isAbove(updateResultIndex, reviewIndex);
     } finally {
       restoreDb();
     }
   });
 
-  it("can import selected reviewed papers through mutate_library", async function () {
+  it("can import selected reviewed papers through import_identifiers", async function () {
     const restoreDb = installMockDb();
     try {
       const registry = new AgentToolRegistry();
@@ -350,24 +345,17 @@ describe("AgentRuntime HITL review workflow", function () {
         })),
       );
       registry.register(
-        createStubMutateTool(async (input) => {
-          const operations = Array.isArray(input.operations) ? input.operations : [];
-          assert.equal((operations[0] as { type?: string })?.type, "import_identifiers");
+        createStubFacadeTool("import_identifiers", async (input) => {
           assert.deepEqual(
-            (operations[0] as { identifiers?: string[] })?.identifiers,
+            input.identifiers,
             ["10.1000/importable"],
           );
           return {
             appliedCount: 1,
-            results: [
-              {
-                operation: "import_identifiers",
-                result: { succeeded: 1, failed: 0 },
-              },
-            ],
+            result: { succeeded: 1, failed: 0 },
             warnings: [],
           };
-        }),
+        }, ["import"]),
       );
       const adapter = new StepAdapter([
         {
@@ -397,7 +385,7 @@ describe("AgentRuntime HITL review workflow", function () {
         adapterFactory: () => adapter,
       });
 
-      let sawMutateConfirmation = false;
+      let sawFacadeConfirmation = false;
       const outcome = await runtime.runTurn({
         request: makeRequest(),
         onEvent: async (event) => {
@@ -416,8 +404,8 @@ describe("AgentRuntime HITL review workflow", function () {
             });
             return;
           }
-          if (event.type === "confirmation_required" && event.action.toolName === "mutate_library") {
-            sawMutateConfirmation = true;
+          if (event.type === "confirmation_required" && event.action.toolName === "import_identifiers") {
+            sawFacadeConfirmation = true;
           }
         },
       });
@@ -426,13 +414,13 @@ describe("AgentRuntime HITL review workflow", function () {
       if (outcome.kind !== "completed") return;
       assert.equal(outcome.text, "Imported the selected papers into Zotero.");
       assert.equal(adapter.stepIndex, 1);
-      assert.isFalse(sawMutateConfirmation);
+      assert.isFalse(sawFacadeConfirmation);
     } finally {
       restoreDb();
     }
   });
 
-  it("can save reviewed papers into a note through mutate_library", async function () {
+  it("can save reviewed papers into a note through edit_current_note", async function () {
     const restoreDb = installMockDb();
     try {
       const registry = new AgentToolRegistry();
@@ -451,24 +439,18 @@ describe("AgentRuntime HITL review workflow", function () {
         })),
       );
       registry.register(
-        createStubMutateTool(async (input) => {
-          const operations = Array.isArray(input.operations) ? input.operations : [];
-          assert.equal((operations[0] as { type?: string })?.type, "save_note");
+        createStubFacadeTool("edit_current_note", async (input) => {
+          assert.equal(input.mode, "create");
           assert.include(
-            String((operations[0] as { content?: unknown }).content || ""),
+            String(input.content || ""),
             "Custom reviewed note",
           );
           return {
             appliedCount: 1,
-            results: [
-              {
-                operation: "save_note",
-                result: { status: "created" },
-              },
-            ],
+            result: { status: "created" },
             warnings: [],
           };
-        }),
+        }, ["save_paper_note", "save_metadata_note"]),
       );
       const adapter = new StepAdapter([
         {
@@ -498,7 +480,7 @@ describe("AgentRuntime HITL review workflow", function () {
         adapterFactory: () => adapter,
       });
 
-      let sawMutateConfirmation = false;
+      let sawFacadeConfirmation = false;
       const outcome = await runtime.runTurn({
         request: makeRequest(),
         onEvent: async (event) => {
@@ -516,8 +498,8 @@ describe("AgentRuntime HITL review workflow", function () {
             });
             return;
           }
-          if (event.type === "confirmation_required" && event.action.toolName === "mutate_library") {
-            sawMutateConfirmation = true;
+          if (event.type === "confirmation_required" && event.action.toolName === "edit_current_note") {
+            sawFacadeConfirmation = true;
           }
         },
       });
@@ -526,7 +508,7 @@ describe("AgentRuntime HITL review workflow", function () {
       if (outcome.kind !== "completed") return;
       assert.equal(outcome.text, "Saved the selected papers to a note.");
       assert.equal(adapter.stepIndex, 1);
-      assert.isFalse(sawMutateConfirmation);
+      assert.isFalse(sawFacadeConfirmation);
     } finally {
       restoreDb();
     }

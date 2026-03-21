@@ -185,8 +185,6 @@ export type ToolSpec = {
   inputSchema: object;
   mutability: "read" | "write";
   requiresConfirmation: boolean;
-  /** When true, the tool is hidden from the model's tool list but remains callable by actions and internal code. */
-  internalOnly?: boolean;
 };
 
 export type AgentEvent =
