@@ -6,6 +6,8 @@ import { normalizeNoteSourceText } from "../../../modules/contextPanel/notes";
 import { ok, fail, validateObject, normalizePositiveInt } from "../shared";
 import { executeAndRecordUndo } from "./mutateLibraryShared";
 
+type NotePatch = { find: string; replace: string };
+
 type EditCurrentNoteInput = {
   mode: "edit" | "create";
   content: string;
@@ -15,6 +17,25 @@ type EditCurrentNoteInput = {
   target?: "item" | "standalone";
   targetItemId?: number;
 };
+
+/**
+ * Apply find-and-replace patches to a base text.
+ * Each patch replaces the first occurrence of `find` with `replace`.
+ * Returns the patched text.
+ */
+function applyPatches(base: string, patches: NotePatch[]): string {
+  let result = base;
+  for (const patch of patches) {
+    const index = result.indexOf(patch.find);
+    if (index >= 0) {
+      result =
+        result.slice(0, index) +
+        patch.replace +
+        result.slice(index + patch.find.length);
+    }
+  }
+  return result;
+}
 
 export function createEditCurrentNoteTool(
   zoteroGateway: ZoteroGateway,
@@ -28,7 +49,6 @@ export function createEditCurrentNoteTool(
       inputSchema: {
         type: "object",
         additionalProperties: false,
-        required: ["content"],
         properties: {
           mode: {
             type: "string",
@@ -39,7 +59,28 @@ export function createEditCurrentNoteTool(
           content: {
             type: "string",
             description:
-              "The full note body as plain text or Markdown. Do not include raw HTML.",
+              "The full note body as plain text or Markdown. Use this OR patches, not both. Required for mode 'create'.",
+          },
+          patches: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                find: {
+                  type: "string",
+                  description:
+                    "The exact text in the current note to find (must match verbatim).",
+                },
+                replace: {
+                  type: "string",
+                  description: "The replacement text.",
+                },
+              },
+              required: ["find", "replace"],
+              additionalProperties: false,
+            },
+            description:
+              "For mode 'edit': find-and-replace patches applied to the current note. Much faster than rewriting the full content. Each patch replaces the first occurrence of 'find' with 'replace'.",
           },
           target: {
             type: "string",
@@ -61,7 +102,8 @@ export function createEditCurrentNoteTool(
       matches: (request) => Boolean(request.activeNoteContext),
       instruction:
         "MANDATORY: When a note is open and the user asks to edit, rewrite, revise, polish, or update ANY text, you MUST call `edit_current_note` with mode 'edit'. NEVER output rewritten or edited text directly in chat — always use the tool so the user sees a diff review card. " +
-        "When the user asks to create a new note for a paper, call `edit_current_note` with mode 'create'. Always pass plain text or Markdown, never raw HTML.",
+        "For edits, PREFER using `patches` (find-and-replace pairs) instead of `content` (full rewrite) — patches are much faster because you only send the changed parts. " +
+        "When the user asks to create a new note for a paper, call `edit_current_note` with mode 'create' with `content`. Always pass plain text or Markdown, never raw HTML.",
     },
     presentation: {
       label: "Edit / Create Note",
@@ -91,30 +133,83 @@ export function createEditCurrentNoteTool(
 
     validate: (args) => {
       if (!validateObject<Record<string, unknown>>(args)) {
-        return fail("Expected an object with a 'content' string");
-      }
-      if (typeof args.content !== "string" || !args.content.trim()) {
-        return fail(
-          "content is required: provide the note body as a string, e.g. { content: 'My note text' }",
-        );
+        return fail("Expected an object with a 'content' string or 'patches' array");
       }
       const mode =
         args.mode === "create" ? ("create" as const) : ("edit" as const);
+
+      // Parse patches if provided
+      const hasPatches = Array.isArray(args.patches) && args.patches.length > 0;
+      const hasContent = typeof args.content === "string" && args.content.trim();
+
+      if (mode === "create") {
+        if (!hasContent) {
+          return fail(
+            "content is required for mode 'create': provide the note body as a string",
+          );
+        }
+      } else if (!hasContent && !hasPatches) {
+        return fail(
+          "Either 'content' (full note text) or 'patches' (find-and-replace pairs) is required for mode 'edit'",
+        );
+      }
+
+      // Validate patches structure
+      let patches: NotePatch[] | undefined;
+      if (hasPatches) {
+        patches = [];
+        for (const entry of args.patches as unknown[]) {
+          if (!validateObject<Record<string, unknown>>(entry)) {
+            return fail("Each patch must be an object with { find: string, replace: string }");
+          }
+          if (typeof entry.find !== "string" || !entry.find) {
+            return fail("Each patch must include a non-empty 'find' string");
+          }
+          if (typeof entry.replace !== "string") {
+            return fail("Each patch must include a 'replace' string");
+          }
+          patches.push({ find: entry.find, replace: entry.replace });
+        }
+      }
+
       const target =
         args.target === "standalone"
           ? ("standalone" as const)
           : ("item" as const);
-      return ok<EditCurrentNoteInput>({
+
+      // For patches mode, content will be resolved in createPendingAction
+      // using the current note snapshot + patches
+      const content = hasContent
+        ? normalizeNoteSourceText(args.content as string)
+        : "";
+
+      return ok<EditCurrentNoteInput & { _patches?: NotePatch[] }>({
         mode,
-        content: normalizeNoteSourceText(args.content),
+        content,
+        _patches: patches,
         target: mode === "create" ? target : undefined,
         targetItemId:
           mode === "create"
             ? normalizePositiveInt(args.targetItemId)
             : undefined,
-      });
+      } as EditCurrentNoteInput);
     },
     createPendingAction: (input, context) => {
+      // Resolve patches into full content if needed
+      const inputWithPatches = input as EditCurrentNoteInput & { _patches?: NotePatch[] };
+      if (inputWithPatches._patches && input.mode === "edit") {
+        const snapshot = zoteroGateway.getActiveNoteSnapshot({
+          request: context.request,
+          item: context.item,
+        });
+        if (!snapshot) {
+          throw new Error("No active note is available to edit");
+        }
+        const patched = applyPatches(snapshot.text, inputWithPatches._patches);
+        input.content = normalizeNoteSourceText(patched);
+        delete inputWithPatches._patches;
+      }
+
       const normalizedContent = normalizeNoteSourceText(input.content);
       input.content = normalizedContent;
 
