@@ -186,6 +186,7 @@ async function processNext(): Promise<void> {
       state.paused = true;
       state.running = false;
       state.error = e.message || "Daily limit reached. Resume tomorrow.";
+      state.lastFailedItemId = entry.attachmentId;
       state.currentItemId = null;
       state.currentItemTitle = "";
       // Put entry back at front so it retries next time

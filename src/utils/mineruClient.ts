@@ -90,12 +90,14 @@ async function downloadViaCurl(url: string): Promise<Uint8Array | null> {
       if (!Cc || !Ci) { resolve(null); return; }
 
       // Get temp directory to write the downloaded data to
-      const dirService = Cc["@mozilla.org/file/directory_service;1"]
-        ?.createInstance(Ci.nsIProperties as unknown) as {
-          get?: (prop: string, iface: unknown) => { path?: string };
-        } | undefined;
+      const dirService = (Cc["@mozilla.org/file/directory_service;1"] as unknown as {
+        getService?: (iface: unknown) => { get?: (prop: string, iface: unknown) => { path?: string } };
+      })?.getService?.(Ci.nsIProperties as unknown);
       const tempDir = dirService?.get?.("TmpD", Ci.nsIFile as unknown);
-      if (!tempDir?.path) { resolve(null); return; }
+      if (!tempDir?.path) {
+        ztoolkit.log("MinerU download [curl]: cannot resolve temp directory");
+        resolve(null); return;
+      }
 
       const outPath = `${tempDir.path}${tempDir.path.includes("\\") ? "\\" : "/"}mineru_dl_${Date.now()}.bin`;
 
@@ -113,9 +115,13 @@ async function downloadViaCurl(url: string): Promise<Uint8Array | null> {
       const process = Cc["@mozilla.org/process/util;1"]?.createInstance(Ci.nsIProcess as unknown) as {
         init?: (executable: unknown) => void;
         run?: (blocking: boolean, args: string[], count: number) => void;
+        runAsync?: (args: string[], count: number, observer: unknown) => void;
         exitValue?: number;
       } | undefined;
-      if (!process?.init || !process.run) { resolve(null); return; }
+      if (!process?.init) {
+        ztoolkit.log("MinerU download [curl]: nsIProcess unavailable");
+        resolve(null); return;
+      }
 
       process.init(localFile);
       const args = [
@@ -123,8 +129,48 @@ async function downloadViaCurl(url: string): Promise<Uint8Array | null> {
         "-o", outPath,
         "--max-time", "300",
         "-L",
-        url,
+        "--url", url,
       ];
+
+      if (!process.runAsync) {
+        // Fallback: synchronous run (blocks main thread, but better than hanging)
+        ztoolkit.log("MinerU download [curl]: runAsync unavailable, using synchronous run");
+        try {
+          process.run?.(true, args, args.length);
+          const exitCode = process.exitValue ?? -1;
+          if (exitCode !== 0) {
+            ztoolkit.log(`MinerU download [curl]: sync run failed exit=${exitCode}`);
+            resolve(null); return;
+          }
+        } catch (runErr) {
+          ztoolkit.log(`MinerU download [curl]: sync run threw: ${(runErr as Error).message}`);
+          resolve(null); return;
+        }
+        // Read temp file after synchronous completion
+        const readTempFile = async (): Promise<Uint8Array | null> => {
+          try {
+            const io = getIOUtils();
+            if (io?.read) {
+              const data = await io.read(outPath);
+              try {
+                const ioFull = (globalThis as unknown as {
+                  IOUtils?: { remove?: (path: string) => Promise<void> };
+                }).IOUtils;
+                await ioFull?.remove?.(outPath);
+              } catch { /* ignore */ }
+              return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+            }
+            const osFile = getOSFile();
+            if (osFile?.read) {
+              const data = await osFile.read(outPath);
+              return data instanceof Uint8Array ? data : new Uint8Array(data as ArrayBuffer);
+            }
+          } catch { /* ignore */ }
+          return null;
+        };
+        readTempFile().then(resolve).catch(() => resolve(null));
+        return;
+      }
 
       const observer = {
         observe(_subject: unknown, topic: string) {
@@ -162,8 +208,7 @@ async function downloadViaCurl(url: string): Promise<Uint8Array | null> {
         },
         QueryInterface: () => observer,
       };
-      (process as { runAsync?: (args: string[], count: number, observer: unknown) => void })
-        .runAsync?.(args, args.length, observer);
+      process.runAsync(args, args.length, observer);
     } catch (e) {
       ztoolkit.log(`MinerU download [curl] threw: ${(e as Error).message}`);
       resolve(null);
@@ -446,9 +491,10 @@ async function uploadViaCurl(
       const process = Cc["@mozilla.org/process/util;1"]?.createInstance(Ci.nsIProcess as unknown) as {
         init?: (executable: unknown) => void;
         run?: (blocking: boolean, args: string[], count: number) => void;
+        runAsync?: (args: string[], count: number, observer: unknown) => void;
         exitValue?: number;
       } | undefined;
-      if (!process?.init || !process.run) {
+      if (!process?.init) {
         ztoolkit.log("MinerU upload [curl]: nsIProcess unavailable");
         resolve({ status: 0 });
         return;
@@ -463,8 +509,29 @@ async function uploadViaCurl(
         "-s", "-f",
         "-T", pdfPath,
         "--max-time", "180",
-        url,
+        "--url", url,
       ];
+
+      if (!process.runAsync) {
+        // Fallback: synchronous run (blocks main thread, but better than hanging)
+        ztoolkit.log("MinerU upload [curl]: runAsync unavailable, using synchronous run");
+        try {
+          process.run?.(true, args, args.length);
+          const exitCode = process.exitValue ?? -1;
+          if (exitCode === 0) {
+            ztoolkit.log("MinerU upload [curl]: sync success (exit=0)");
+            resolve({ status: 200 });
+          } else {
+            ztoolkit.log(`MinerU upload [curl]: sync failed exit=${exitCode}`);
+            resolve({ status: 0 });
+          }
+        } catch (runErr) {
+          ztoolkit.log(`MinerU upload [curl]: sync run threw: ${(runErr as Error).message}`);
+          resolve({ status: 0 });
+        }
+        return;
+      }
+
       // Use runAsync to avoid blocking the main thread
       const observer = {
         observe(_subject: unknown, topic: string) {
@@ -479,8 +546,7 @@ async function uploadViaCurl(
         },
         QueryInterface: () => observer,
       };
-      (process as { runAsync?: (args: string[], count: number, observer: unknown) => void })
-        .runAsync?.(args, args.length, observer);
+      process.runAsync(args, args.length, observer);
     } catch (e) {
       ztoolkit.log(`MinerU upload [curl] threw: ${(e as Error).message}`);
       resolve({ status: 0 });
@@ -680,6 +746,71 @@ export async function parsePdfWithMineruCloud(
   }
 }
 
+/**
+ * Quick curl-based connectivity test to an OSS URL.
+ * Uses curl without -f so even a 403 (expected) counts as success.
+ * Returns true if curl can reach the host.
+ */
+async function testOssViaCurl(ossUrl: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const Cc = (globalThis as { Components?: { classes?: Record<string, { createInstance: (iface: unknown) => unknown }> } }).Components?.classes;
+      const Ci = (globalThis as { Components?: { interfaces?: Record<string, unknown> } }).Components?.interfaces;
+      if (!Cc || !Ci) { resolve(false); return; }
+
+      const localFile = Cc["@mozilla.org/file/local;1"]?.createInstance(Ci.nsIFile as unknown) as {
+        initWithPath?: (path: string) => void;
+        exists?: () => boolean;
+      } | undefined;
+      if (!localFile?.initWithPath) { resolve(false); return; }
+
+      const curlPath = getCurlPath();
+      if (!curlPath) { resolve(false); return; }
+      localFile.initWithPath(curlPath);
+      if (localFile.exists && !localFile.exists()) { resolve(false); return; }
+
+      const process = Cc["@mozilla.org/process/util;1"]?.createInstance(Ci.nsIProcess as unknown) as {
+        init?: (executable: unknown) => void;
+        run?: (blocking: boolean, args: string[], count: number) => void;
+        runAsync?: (args: string[], count: number, observer: unknown) => void;
+        exitValue?: number;
+      } | undefined;
+      if (!process?.init) { resolve(false); return; }
+
+      process.init(localFile);
+      // -s: silent, -o /dev/null: discard body, --max-time 10: timeout
+      // No -f: we want exit 0 even on 403 (proves connectivity)
+      const devNull = curlPath.includes("\\") ? "NUL" : "/dev/null";
+      const args = [
+        "-s",
+        "-o", devNull,
+        "--max-time", "10",
+        "--head",
+        "--url", ossUrl,
+      ];
+
+      if (!process.runAsync) {
+        try {
+          process.run?.(true, args, args.length);
+          resolve((process.exitValue ?? -1) === 0);
+        } catch { resolve(false); }
+        return;
+      }
+
+      const observer = {
+        observe(_subject: unknown, topic: string) {
+          const exitCode = (process as { exitValue?: number }).exitValue ?? -1;
+          resolve(topic === "process-finished" && exitCode === 0);
+        },
+        QueryInterface: () => observer,
+      };
+      process.runAsync(args, args.length, observer);
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 export async function testMineruConnection(apiKey: string): Promise<void> {
   const result = await httpJson(
     "GET",
@@ -695,12 +826,26 @@ export async function testMineruConnection(apiKey: string): Promise<void> {
   // but that proves the TLS connection works. Status 0 = network/TLS failure.
   const ossTestUrl = "https://mineru.oss-cn-shanghai.aliyuncs.com";
   let ossReachable = false;
+
+  // Attempt 1: fetch with timeout
   try {
     const fetchFn = ztoolkit.getGlobal("fetch") as typeof fetch;
-    const resp = await fetchFn(ossTestUrl, { method: "HEAD" });
+    const AbortCtrl = (globalThis as { AbortController?: typeof AbortController }).AbortController
+      ?? ztoolkit.getGlobal("AbortController") as typeof AbortController | undefined;
+    let signal: AbortSignal | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (AbortCtrl) {
+      const ctrl = new AbortCtrl();
+      signal = ctrl.signal;
+      timer = setTimeout(() => ctrl.abort(), 10000);
+    }
+    const resp = await fetchFn(ossTestUrl, { method: "HEAD", signal });
+    if (timer) clearTimeout(timer);
     // Any HTTP status (even 403) means the connection succeeded
     ossReachable = resp.status > 0;
   } catch { /* fall through */ }
+
+  // Attempt 2: Zotero.HTTP
   if (!ossReachable) {
     try {
       const xhr = await Zotero.HTTP.request("HEAD", ossTestUrl, {
@@ -710,6 +855,12 @@ export async function testMineruConnection(apiKey: string): Promise<void> {
       ossReachable = xhr.status > 0;
     } catch { /* fall through */ }
   }
+
+  // Attempt 3: curl (the actual upload/download path uses curl, so test that too)
+  if (!ossReachable) {
+    ossReachable = await testOssViaCurl(ossTestUrl);
+  }
+
   if (!ossReachable) {
     throw new Error(
       "API key is valid, but cannot reach Alibaba Cloud OSS (mineru.oss-cn-shanghai.aliyuncs.com). " +
