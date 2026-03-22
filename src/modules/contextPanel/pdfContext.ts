@@ -27,6 +27,98 @@ import type {
   PdfChunkKind,
 } from "./types";
 
+// ── HTML table → Markdown table conversion ──────────────────────────────────
+// MinerU sometimes emits tables as raw <table> HTML in the markdown.
+// LLMs struggle with HTML table markup, so we convert to markdown tables
+// at ingestion time (once, in memory) for better readability.
+
+const HTML_ENTITY_MAP: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&#x27;": "'",
+  "&apos;": "'",
+  "&nbsp;": " ",
+};
+
+function decodeHtmlEntities(text: string): string {
+  let result = text;
+  for (const [entity, char] of Object.entries(HTML_ENTITY_MAP)) {
+    result = result.split(entity).join(char);
+  }
+  // Decode numeric entities: &#123; and &#x1A;
+  result = result.replace(/&#(\d+);/g, (_, code) =>
+    String.fromCharCode(Number(code)),
+  );
+  result = result.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  );
+  return result;
+}
+
+function htmlTableToMarkdown(tableHtml: string): string {
+  // Extract rows: split by <tr> tags
+  const rowPattern = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  const cellPattern = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+
+  const rows: string[][] = [];
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowPattern.exec(tableHtml)) !== null) {
+    const rowHtml = rowMatch[1];
+    const cells: string[] = [];
+    let cellMatch: RegExpExecArray | null;
+    const cellRe = new RegExp(cellPattern.source, cellPattern.flags);
+    while ((cellMatch = cellRe.exec(rowHtml)) !== null) {
+      // Strip any nested HTML tags, decode entities, trim
+      const cellText = decodeHtmlEntities(
+        cellMatch[1].replace(/<[^>]*>/g, "").trim(),
+      );
+      cells.push(cellText);
+    }
+    if (cells.length > 0) {
+      rows.push(cells);
+    }
+  }
+
+  if (rows.length === 0) return "";
+
+  // Normalize column count (pad shorter rows)
+  const maxCols = Math.max(...rows.map((r) => r.length));
+  for (const row of rows) {
+    while (row.length < maxCols) row.push("");
+  }
+
+  // Build markdown table
+  const lines: string[] = [];
+  // Header row
+  lines.push("| " + rows[0].map((c) => c || " ").join(" | ") + " |");
+  // Separator
+  lines.push("| " + rows[0].map(() => "---").join(" | ") + " |");
+  // Data rows
+  for (let i = 1; i < rows.length; i++) {
+    lines.push("| " + rows[i].map((c) => c || " ").join(" | ") + " |");
+  }
+
+  return lines.join("\n");
+}
+
+function convertHtmlTablesToMarkdown(mdText: string): string {
+  // Match <table>...</table> blocks (possibly spanning multiple lines)
+  return mdText.replace(
+    /<table[^>]*>[\s\S]*?<\/table>/gi,
+    (tableBlock) => {
+      try {
+        const md = htmlTableToMarkdown(tableBlock);
+        return md || tableBlock; // Keep original if conversion produces nothing
+      } catch {
+        return tableBlock; // Keep original on error
+      }
+    },
+  );
+}
+
 async function cachePDFText(item: Zotero.Item) {
   if (pdfTextCache.has(item.id)) return;
 
@@ -50,7 +142,7 @@ async function cachePDFText(item: Zotero.Item) {
       ? await readCachedMineruMd(item.id)
       : null;
     if (cachedMd) {
-      pdfText = cachedMd;
+      pdfText = convertHtmlTablesToMarkdown(cachedMd);
       sourceType = "mineru";
     }
 
