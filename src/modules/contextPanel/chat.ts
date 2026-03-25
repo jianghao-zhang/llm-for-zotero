@@ -2596,6 +2596,8 @@ async function sendAgentQuestion(opts: {
   paperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
   attachments?: ChatAttachment[];
+  pdfModePaperKeys?: Set<string>;
+  pdfUploadSystemMessages?: string[];
 }): Promise<void> {
   await sendAgentTurn(opts, buildAgentEngineDeps());
 }
@@ -2612,6 +2614,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       body, item, question, images, model, apiBase, apiKey, reasoning, advanced,
       displayQuestion, selectedTexts, selectedTextSources, selectedTextPaperContexts,
       selectedTextNoteContexts, paperContexts, fullTextPaperContexts, attachments,
+      pdfModePaperKeys, pdfUploadSystemMessages: opts.pdfUploadSystemMessages,
     });
     return;
   }

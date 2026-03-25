@@ -19,8 +19,6 @@ import {
   getFetch,
   getToolContinuationMessages,
   groupToolContinuationMessages,
-  parseDataUrl,
-  readFileRefAsBase64,
 } from "./shared";
 import { resolveContentParts } from "./adapterUtils";
 

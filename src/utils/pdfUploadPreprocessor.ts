@@ -52,7 +52,10 @@ function buildMultipartBody(
   for (const field of fields) {
     if ("data" in field) {
       // File field
-      const header = `--${boundary}\r\nContent-Disposition: form-data; name="${field.name}"; filename="${field.filename}"\r\nContent-Type: ${field.contentType}\r\n\r\n`;
+      const safeName = (field.name || "").replace(/[\r\n"]/g, "_");
+      const safeFilename = (field.filename || "").replace(/[\r\n"]/g, "_");
+      const safeContentType = (field.contentType || "application/octet-stream").replace(/[\r\n"]/g, "_");
+      const header = `--${boundary}\r\nContent-Disposition: form-data; name="${safeName}"; filename="${safeFilename}"\r\nContent-Type: ${safeContentType}\r\n\r\n`;
       parts.push(encoder.encode(header));
       parts.push(field.data);
       parts.push(encoder.encode("\r\n"));

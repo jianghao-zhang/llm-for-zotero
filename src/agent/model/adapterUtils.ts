@@ -5,7 +5,7 @@
  * and openaiCompatible.ts into reusable functions.
  */
 
-import type { AgentModelMessage, AgentModelContentPart } from "../types";
+import type { AgentModelMessage } from "../types";
 import { parseDataUrl, readFileRefAsBase64 } from "./shared";
 
 // ── Resolved content parts ──────────────────────────────────────────────────

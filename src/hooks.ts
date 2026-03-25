@@ -105,6 +105,10 @@ async function onMainWindowUnload(win: Window): Promise<void> {
 }
 
 function onShutdown(): void {
+  if (paperSearchInvalidateTimer !== null) {
+    clearTimeout(paperSearchInvalidateTimer);
+    paperSearchInvalidateTimer = null;
+  }
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
   pauseBatchProcessing();

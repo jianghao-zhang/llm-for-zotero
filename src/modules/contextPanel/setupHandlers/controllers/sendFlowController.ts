@@ -144,6 +144,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     deps.closePaperPicker();
     deps.autoLockGlobalChat();
 
+    try {
     const textContextConversationKey = deps.getConversationKey(item);
     const text = deps.inputBox.value.trim();
     const selectedContexts = deps.getSelectedTextContextEntries(
@@ -391,7 +392,6 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       }
       deps.setActiveEditSession(null);
       deps.scheduleAttachmentGc();
-      deps.autoUnlockGlobalChat();
       deps.refreshGlobalHistoryHeader();
       return;
     }
@@ -443,8 +443,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       }, 120);
     }
     await sendTask;
-    deps.autoUnlockGlobalChat();
     deps.refreshGlobalHistoryHeader();
+    } finally {
+      deps.autoUnlockGlobalChat();
+    }
   };
 
   return { doSend };
