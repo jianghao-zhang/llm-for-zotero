@@ -49,6 +49,7 @@ export type ExactQuoteJumpResult = {
   matched: boolean;
   reason: string;
   expectedPageIndex: number | null;
+  matchedPageIndex?: number;
   queryUsed?: string;
   queries: ExactQuoteJumpQueryAttempt[];
   debugSummary: string[];
@@ -1223,6 +1224,18 @@ export function locateQuoteByRawPrefixInPages(
   }));
   const debugSummary: string[] = [];
 
+  // Try all queries and keep the result from the longest matching query.
+  // A longer query is more specific and less likely to false-match a
+  // different page (e.g. a 15-char prefix matching the abstract while
+  // a 60-char prefix correctly matches the body text on page 23).
+  let bestMatch: {
+    pageIndex: number;
+    matchedPageIndexes: number[];
+    totalMatches: number;
+    queryLen: number;
+    confidence: "high" | "medium";
+  } | null = null;
+
   for (const query of queries) {
     const matchedPageIndexes: number[] = [];
     let totalMatches = 0;
@@ -1237,20 +1250,28 @@ export function locateQuoteByRawPrefixInPages(
       `Raw prefix "${formatQuerySnippet(query)}" -> ${formatPageList(matchedPageIndexes)}`,
     );
     if (matchedPageIndexes.length === 1) {
-      return buildPageTextQuoteResult(
-        quoteText,
-        expectedPageIndex,
-        { matchedPageIndexes, totalMatches },
-        pages.length,
-        `Direct text prefix search found the quote on a single page.`,
-        query.length >= 40 ? "high" : "medium",
-        matchedPageIndexes[0],
-        debugSummary,
-      );
+      if (!bestMatch || query.length > bestMatch.queryLen) {
+        bestMatch = {
+          pageIndex: matchedPageIndexes[0],
+          matchedPageIndexes,
+          totalMatches,
+          queryLen: query.length,
+          confidence: query.length >= 40 ? "high" : "medium",
+        };
+      }
     }
-    // Multiple pages → try next (longer) prefix to disambiguate
-    if (matchedPageIndexes.length > 1) continue;
-    // No matches → also try next length
+  }
+  if (bestMatch) {
+    return buildPageTextQuoteResult(
+      quoteText,
+      expectedPageIndex,
+      { matchedPageIndexes: bestMatch.matchedPageIndexes, totalMatches: bestMatch.totalMatches },
+      pages.length,
+      `Direct text prefix search found the quote on a single page.`,
+      bestMatch.confidence,
+      bestMatch.pageIndex,
+      debugSummary,
+    );
   }
   return null;
 }
@@ -1417,7 +1438,6 @@ function summarizeFindControllerMatches(pageMatches: unknown[]): {
 async function searchFindControllerForQuery(
   reader: any,
   query: string,
-  options?: { suppressNavigation?: boolean },
 ): Promise<{
   matchedPageIndexes: number[];
   totalMatches: number;
@@ -1541,19 +1561,6 @@ async function searchFindControllerForQuery(
         result.pageMatchCounts = [];
         result.pageMatchCounts[selectedPage] = fcTotal;
       }
-    }
-  }
-
-  // When suppressNavigation is set, close the find bar immediately after
-  // reading the results so that PDF.js does not scroll to the match.  This
-  // is used by scrollToExactQuoteInReader to silently probe multiple queries
-  // and only let the final successful one trigger visible navigation.
-  if (options?.suppressNavigation) {
-    try {
-      const findBar = app?.findBar;
-      if (typeof findBar?.close === "function") findBar.close();
-    } catch {
-      /* ignore */
     }
   }
 
@@ -1992,17 +1999,9 @@ export async function locateQuoteInLivePdfReader(
     );
 
     if (allPages.length) {
-      // Raw prefix substring search — first couple of words, like Ctrl+F
-      const rawResult = locateQuoteByRawPrefixInPages(
-        allPages,
-        cleanQuote,
-        expectedPageIndex,
-        allNorms,
-      );
-      if (rawResult) return rawResult;
-
-      // Exact / prefix-suffix matching against normalized page texts.
-      // This catches truncated quotes that begin/end mid-sentence.
+      // Exact / full-quote matching first — most accurate, avoids false
+      // positives from short prefixes matching the wrong page (e.g.
+      // abstract mentioning the same phrase as the body text).
       const exactPageTextResult = locateQuoteInPageTexts(
         allPages,
         cleanQuote,
@@ -2016,6 +2015,16 @@ export async function locateQuoteInLivePdfReader(
             "Resolved by normalized full-quote page-text matching.",
         };
       }
+
+      // Raw prefix substring search — tolerant of extraction quirks but
+      // less specific.  Only runs if the exact match above did not resolve.
+      const rawResult = locateQuoteByRawPrefixInPages(
+        allPages,
+        cleanQuote,
+        expectedPageIndex,
+        allNorms,
+      );
+      if (rawResult) return rawResult;
 
       // Progressive token query fallback on rendered/extracted page text.
       const progressivePageTextResult = locateQuoteProgressivelyInPageTexts(
@@ -2169,17 +2178,16 @@ export async function scrollToExactQuoteInReader(
     };
   }
 
+  // FindController searches all pages and navigates to the match by itself.
+  // No pre-navigation needed — the expectedPageIndex from the text search
+  // may be wrong (short prefix false-match), so navigating there first would
+  // cause an unnecessary jump to the wrong page.
+
   const attempts: ExactQuoteJumpQueryAttempt[] = [];
   const debugSummary: string[] = [];
-  let matchedOtherPagesOnly = false;
-  let successfulQuery: string | null = null;
 
-  // Probe phase: search with suppressNavigation to avoid intermediate scrolls.
-  // Only the final successful query will trigger visible navigation below.
   for (const query of queries) {
-    const searchResult = await searchFindControllerForQuery(reader, query, {
-      suppressNavigation: true,
-    });
+    const searchResult = await searchFindControllerForQuery(reader, query);
     if (!searchResult) {
       return {
         matched: false,
@@ -2199,39 +2207,26 @@ export async function scrollToExactQuoteInReader(
       `Paragraph query "${formatQuerySnippet(query)}" -> ${formatPageList(searchResult.matchedPageIndexes)}`,
     );
     if (searchResult.totalMatches <= 0) continue;
-    if (
-      expectedPageIndex !== null &&
-      !searchResult.matchedPageIndexes.includes(expectedPageIndex)
-    ) {
-      matchedOtherPagesOnly = true;
-      continue;
-    }
-    successfulQuery = query;
-    break;
-  }
-
-  if (successfulQuery) {
-    // Re-dispatch the successful query with visible navigation (find bar stays
-    // open so the user sees the highlighted match).
-    await searchFindControllerForQuery(reader, successfulQuery);
+    // FindController found the quote — trust it.  The expectedPageIndex from
+    // the text search is only a hint (short prefixes can match the wrong page,
+    // e.g. abstract vs. body).  FindController's match is authoritative.
+    const actualPage = searchResult.matchedPageIndexes[0];
     return {
       matched: true,
+      matchedPageIndex: actualPage,
       reason:
-        expectedPageIndex !== null
+        expectedPageIndex !== null && actualPage === expectedPageIndex
           ? `FindController matched the quote on target page ${expectedPageIndex + 1}.`
-          : "FindController matched the quote in the current reader.",
+          : `FindController matched the quote (page ${actualPage + 1}).`,
       expectedPageIndex,
-      queryUsed: successfulQuery,
+      queryUsed: query,
       queries: attempts,
       debugSummary,
     };
   }
   return {
     matched: false,
-    reason:
-      matchedOtherPagesOnly && expectedPageIndex !== null
-        ? `FindController matched other pages, but not the target page ${expectedPageIndex + 1}.`
-        : "FindController found no match for the available quote queries.",
+    reason: "FindController found no match for the available quote queries.",
     expectedPageIndex,
     queries: attempts,
     debugSummary,
