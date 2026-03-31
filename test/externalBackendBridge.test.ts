@@ -102,4 +102,44 @@ describe("external backend bridge runtime", function () {
       (globalThis as any).fetch = fetchBackup;
     }
   });
+
+  it("loads backend tools and exposes them as external actions", async function () {
+    const core = makeCoreRuntime();
+    const fetchBackup = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (url: string) => {
+      if (url.endsWith("/tools")) {
+        return new Response(
+          JSON.stringify({
+            tools: [
+              {
+                name: "Read",
+                description: "Read files",
+                inputSchema: { type: "object", properties: { file_path: { type: "string" } } },
+                mutability: "read",
+                riskLevel: "low",
+                requiresConfirmation: false,
+                source: "claude-runtime",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    try {
+      const runtime = createExternalBackendBridgeRuntime({
+        coreRuntime: core as any,
+        getBridgeUrl: () => "http://127.0.0.1:9999",
+      });
+      await runtime.refreshExternalActions(true);
+      const actions = runtime.listExternalActionsSync();
+      assert.equal(actions.length, 1);
+      assert.equal(actions[0].name, "cc_tool::Read");
+      assert.equal(actions[0].source, "backend");
+    } finally {
+      (globalThis as any).fetch = fetchBackup;
+    }
+  });
 });

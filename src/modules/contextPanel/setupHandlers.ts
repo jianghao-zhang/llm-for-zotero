@@ -7287,6 +7287,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (getCurrentRuntimeMode() === "agent") {
       const query = token.query.toLowerCase().trim();
       renderAgentActionsInSlashMenu(query);
+      const maybeRefresh = (getAgentApi() as unknown as { refreshActions?: () => Promise<void> }).refreshActions;
+      if (typeof maybeRefresh === "function") {
+        void maybeRefresh().then(() => {
+          if (getCurrentRuntimeMode() !== "agent") return;
+          if (!getActiveActionToken()) return;
+          renderAgentActionsInSlashMenu(query);
+          if (isFloatingMenuOpen(slashMenu)) {
+            slashMenuActiveIndex = 0;
+            updateSlashMenuSelection();
+          }
+        });
+      }
     }
     if (!isFloatingMenuOpen(slashMenu)) {
       closeRetryModelMenu();
@@ -7489,6 +7501,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             a.description.toLowerCase().includes(query),
         )
       : allActions;
+    const backendActions = filtered.filter((action) => {
+      const source = (action as unknown as { source?: string }).source;
+      return source === "backend";
+    });
+    const localAgentActions = filtered.filter((action) => {
+      const source = (action as unknown as { source?: string }).source;
+      return source !== "backend";
+    });
     const ownerDoc = body.ownerDocument;
     const list = slashMenu?.querySelector(".llm-action-picker-list");
     if (!ownerDoc || !list) return;
@@ -7499,13 +7519,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       el.setAttribute("data-slash-agent-item", "true");
       return el;
     };
-    // "Agent actions" section label
-    const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
-    agentLabel.setAttribute("aria-hidden", "true");
-    agentLabel.textContent = t("Agent actions");
-    list.insertBefore(agentLabel, firstBase);
-    // Agent action items
-    filtered.forEach((action) => {
+    const appendActions = (actions: ActionPickerItem[]) => {
+      actions.forEach((action) => {
+        const riskLevel = (action as unknown as { riskLevel?: string }).riskLevel;
+        const riskPrefix = riskLevel === "high"
+          ? "[HIGH] "
+          : riskLevel === "medium"
+          ? "[MED] "
+          : "";
       const btn = mkAgentEl("button", "llm-action-picker-item") as HTMLButtonElement;
       btn.type = "button";
       const titleEl = ownerDoc.createElement("span");
@@ -7513,7 +7534,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       titleEl.textContent = formatActionLabel(action.name);
       const descEl = ownerDoc.createElement("span");
       descEl.className = "llm-action-picker-description";
-      descEl.textContent = action.description;
+        descEl.textContent = `${riskPrefix}${action.description}`;
       btn.append(titleEl, descEl);
       btn.addEventListener("mousedown", (e: Event) => {
         e.preventDefault();
@@ -7523,7 +7544,22 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         void executeAgentAction(action);
       });
       list.insertBefore(btn, firstBase);
-    });
+      });
+    };
+    if (backendActions.length > 0) {
+      const backendLabel = mkAgentEl("div", "llm-slash-menu-section");
+      backendLabel.setAttribute("aria-hidden", "true");
+      backendLabel.textContent = "Backend Tools (Claude Code)";
+      list.insertBefore(backendLabel, firstBase);
+      appendActions(backendActions);
+    }
+    if (localAgentActions.length > 0) {
+      const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
+      agentLabel.setAttribute("aria-hidden", "true");
+      agentLabel.textContent = t("Agent actions");
+      list.insertBefore(agentLabel, firstBase);
+      appendActions(localAgentActions);
+    }
     // "Base actions" section label (above the static base items)
     const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
     baseLabel.setAttribute("aria-hidden", "true");

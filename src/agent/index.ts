@@ -196,7 +196,27 @@ export function getAgentApi() {
      */
     listActions: () => {
       if (!_actionRegistry) throw new Error("Agent subsystem is not initialized");
-      return _actionRegistry.listActions();
+      const localActions = _actionRegistry.listActions().map((action) => ({
+        ...action,
+        source: "local" as const,
+      }));
+      const externalActions =
+        runtimeBridge?.listExternalActionsSync?.().map((action) => ({
+          name: action.name,
+          description: action.description,
+          inputSchema: action.inputSchema,
+          source: "backend" as const,
+          riskLevel: action.riskLevel,
+          requiresConfirmation: action.requiresConfirmation,
+          mutability: action.mutability,
+        })) || [];
+      return [...externalActions, ...localActions];
+    },
+
+    refreshActions: async () => {
+      if (runtimeBridge?.refreshExternalActions) {
+        await runtimeBridge.refreshExternalActions();
+      }
     },
 
     /**
@@ -228,6 +248,9 @@ export function getAgentApi() {
         ) => Promise<import("./types").AgentConfirmationResolution>;
       } = {},
     ) => {
+      if (runtimeBridge?.runExternalAction && name.startsWith("cc_tool::")) {
+        return runtimeBridge.runExternalAction(name, input, opts);
+      }
       if (!_actionRegistry || !_toolRegistry) throw new Error("Agent subsystem is not initialized");
       if (!_zoteroGateway) throw new Error("Agent subsystem is not initialized");
       const libraryID =
