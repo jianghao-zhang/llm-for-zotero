@@ -38,8 +38,10 @@ Documentation:
 - [Usage Guide](#usage-guide)
 - [Features](#features)
 - [Agent Mode (beta)](#agent-mode-beta)
+- [WebChat Setup](#webchat-setup-chatgpt-web-sync)
 - [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers)
 - [MinerU PDF Parsing](#mineru-pdf-parsing)
+- [Roadmap](#roadmap)
 - [FAQ](#faq)
 - [Contributing](#contributing)
 - [Star History](#star-history)
@@ -246,6 +248,51 @@ This is the first step for Agent Mode. The goal is a versatile agent that master
 
 ---
 
+## WebChat Setup (ChatGPT Web Sync)
+
+**WebChat mode** lets you send questions directly to [chatgpt.com](https://chatgpt.com) through a browser extension — no API key needed. Your queries are relayed from Zotero to the ChatGPT web interface, and responses are streamed back into the plugin.
+
+  <img src="./assets/webchat.jpeg" alt="webchat demo" width="1024" />
+</p>
+
+### Prerequisites
+
+- A ChatGPT account (Free, Plus, or Team)
+- A Chromium-based browser (Chrome, Edge, Brave, Arc, etc.)
+
+### Step-by-step setup
+
+1. **Download the browser extension:**
+   - Go to [github.com/yilewang/sync-for-zotero](https://github.com/yilewang/sync-for-zotero) → **Releases**
+   - Download the latest `extension.zip`
+   - Unzip the file to a folder on your computer
+
+2. **Install the extension (sideload):**
+   - Open your browser and navigate to `chrome://extensions`
+   - Enable **Developer Mode** (toggle in the top-right corner)
+   - Click **Load unpacked** and select the unzipped extension folder
+   - The "Sync for Zotero" extension should now appear in your extensions list
+
+3. **Configure the plugin:**
+   - Open Zotero → `Preferences` → `llm-for-zotero`
+   - Set **Auth Mode** → `WebChat`
+   - The model is automatically set to `chatgpt.com`
+
+4. **Start chatting:**
+   - Open a ChatGPT tab in your browser (keep it open while using WebChat)
+   - Open a paper in Zotero — the plugin panel shows the "chatgpt.com" indicator with a connection dot
+   - A green dot means connected; red means the extension or ChatGPT tab is not detected
+   - Type a question and send — the plugin relays it to ChatGPT and streams the response back
+
+### WebChat features
+
+- **PDF attachment**: Right-click the paper chip to toggle PDF sending (purple = send, grey = skip)
+- **Screenshots**: Use the camera button to attach figure screenshots to your message
+- **Conversation history**: Click the clock icon to browse and load past ChatGPT conversations
+- **Exit**: Click the "Exit" button to return to regular API mode
+
+---
+
 ## Codex Auth Setup (ChatGPT Plus Subscribers)
 
 If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI — a great way to save on token costs.
@@ -315,6 +362,20 @@ The plugin provides a shared community proxy so MinerU works out of the box with
 4. Click **Test Connection** to verify.
 
 When a personal API key is provided, the plugin calls the MinerU API directly (`https://mineru.net/api/v4`). Without a key, it uses the community proxy.
+
+---
+
+## Roadmap
+
+- [x] Agent mode (beta)
+- [x] MinerU PDF parsing
+- [x] GitHub Copilot auth
+- [ ] WebChat mode (ChatGPT web sync)
+- [ ] Local MinerU support
+- [ ] Customized skills
+- [ ] Agent mode between Zotero and Obsidian
+- [ ] Independent floating window ([#78](https://github.com/yilewang/llm-for-zotero/issues/78))
+- [ ] Cross-device synchronization
 
 ---
 

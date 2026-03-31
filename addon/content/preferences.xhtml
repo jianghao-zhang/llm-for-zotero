@@ -151,6 +151,30 @@
 
         <html:div style="display: flex; flex-direction: column; gap: 4px">
           <html:label
+            style="
+              display: inline-flex;
+              align-items: center;
+              gap: 8px;
+              font-weight: 600;
+              font-size: 12px;
+              color: var(--fill-primary, inherit);
+            "
+          >
+            <html:input
+              id="__addonRef__-enable-query-rewrite"
+              type="checkbox"
+            ></html:input>
+            Rewrite queries for retrieval
+          </html:label>
+          <html:span style="font-size: 11px; color: var(--fill-secondary, #888); margin-top: 1px; display: block;">
+            Uses a lightweight LLM call to rewrite your question into
+            retrieval-optimized keywords before searching paper content.
+            Improves accuracy for vague queries but adds latency.
+          </html:span>
+        </html:div>
+
+        <html:div style="display: flex; flex-direction: column; gap: 4px">
+          <html:label
             for="__addonRef__-locale-select"
             style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
           >

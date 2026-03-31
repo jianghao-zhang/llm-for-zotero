@@ -10,6 +10,7 @@ import {
   RETRIEVAL_TOP_K_PER_PAPER,
 } from "./constants";
 import { normalizePaperContextRefs } from "./normalizers";
+import { getQueryRewriteEnabled } from "./prefHelpers";
 import {
   resolvePaperContextRefFromAttachment,
   resolvePaperContextRefFromNote,
@@ -775,7 +776,7 @@ export async function resolveMultiContextPlan(params: {
   // Reasoning/thinking models are too slow for this pre-flight call and
   // compensate through deeper reasoning anyway, so skip them entirely.
   const paperTitles = papers.map((p) => p.paperContext.title).filter(Boolean);
-  const skipRewrite = !!params.reasoning;
+  const skipRewrite = !!params.reasoning || !getQueryRewriteEnabled();
   let rewritePromise: Promise<string> | null = null;
   const getRewrittenQuestion = (): Promise<string> => {
     if (skipRewrite) return Promise.resolve(params.question);

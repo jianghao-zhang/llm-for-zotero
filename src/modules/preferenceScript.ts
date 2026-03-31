@@ -548,6 +548,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const enableAgentModeInput = doc.querySelector(
     `#${config.addonRef}-enable-agent-mode`,
   ) as HTMLInputElement | null;
+  const enableQueryRewriteInput = doc.querySelector(
+    `#${config.addonRef}-enable-query-rewrite`,
+  ) as HTMLInputElement | null;
 
   if (!modelSections) return;
 
@@ -662,7 +665,10 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       });
       const authModeHelperText =
         group.authMode === "webchat"
-          ? t("Relay questions to ChatGPT via the Sync for Zotero browser extension.")
+          ? t("Relay questions to ChatGPT via the Sync for Zotero browser extension. "
+            + "Download extension: github.com/yilewang/sync-for-zotero → Releases. "
+            + "Unzip, open chrome://extensions, enable Developer Mode, click \"Load unpacked\", select the extension folder. "
+            + "Keep a ChatGPT tab open while using WebChat mode.")
           : group.authMode === "copilot_auth"
             ? t(COPILOT_API_HELPER_TEXT)
             : t("codex auth reuses local `codex login` credentials from ~/.codex/auth.json");
@@ -1503,6 +1509,22 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       Zotero.Prefs.set(
         `${config.prefsPrefix}.enableAgentMode`,
         enableAgentModeInput.checked,
+        true,
+      );
+    });
+  }
+
+  if (enableQueryRewriteInput) {
+    const prefValue = Zotero.Prefs.get(
+      `${config.prefsPrefix}.enableQueryRewrite`,
+      true,
+    );
+    enableQueryRewriteInput.checked =
+      prefValue === true || `${prefValue || ""}`.toLowerCase() === "true";
+    enableQueryRewriteInput.addEventListener("change", () => {
+      Zotero.Prefs.set(
+        `${config.prefsPrefix}.enableQueryRewrite`,
+        enableQueryRewriteInput.checked,
         true,
       );
     });
