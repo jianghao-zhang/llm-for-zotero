@@ -863,6 +863,11 @@ const HeartbeatEndpoint = createEndpoint(["GET"], () => {
   return jsonReply({ ok: true, ts: Date.now(), seq: S().query.seq });
 });
 
+// GET /debug — minimal endpoint used by the browser extension for port discovery
+const DebugEndpoint = createEndpoint(["GET"], () => {
+  return jsonReply({ status: S().status });
+});
+
 // GET /poll_command
 const PollCommandEndpoint = createEndpoint(["GET"], () => {
   const cmd = S().pendingCommand;
@@ -988,6 +993,7 @@ const ExtensionStatusEndpoint = createEndpoint(["POST"], (opts) => {
 const ENDPOINTS: Record<string, ReturnType<typeof createEndpoint>> = {
   [`${PREFIX}/heartbeat`]: HeartbeatEndpoint,
   [`${PREFIX}/extension_status`]: ExtensionStatusEndpoint,
+  [`${PREFIX}/debug`]: DebugEndpoint,
 
   [`${PREFIX}/submit_query`]: SubmitQueryEndpoint,
   [`${PREFIX}/poll_query`]: PollQueryEndpoint,
@@ -1222,6 +1228,29 @@ export function relaySetCommand(cmd: { type: string; chatUrl?: string; chatId?: 
 /** Request the extension to stop ChatGPT generation (no HTTP). */
 export function relayRequestStop(): void {
   S().stopRequested = true;
+  // Write a cancel response so the plugin's pollForResponse exits immediately
+  const currentSeq = S().query.seq;
+  S().responses.push({
+    seq: currentSeq,
+    text: S().partial_text || "",
+    thinking: S().partial_thinking || undefined,
+    error: undefined,
+    timestamp: new Date().toISOString(),
+    run_state: "done",
+    completion_reason: "forced_cancel",
+    remote_chat_url: S().remote_chat_url,
+    remote_chat_id: S().remote_chat_id,
+    user_turn_key: S().user_turn_key,
+    assistant_turn_key: S().assistant_turn_key,
+    baseline_transcript_count: S().baseline_transcript_count,
+    baseline_transcript_hash: S().baseline_transcript_hash,
+    turn_status: "done",
+  });
+  // Reset relay state so new queries aren't rejected as "pipeline_busy"
+  S().status = "idle";
+  S().query.phase = "pending";
+  S().run_state = null;
+  S().completion_reason = "forced_cancel";
 }
 
 /** Refresh the current ChatGPT conversation by re-navigating and re-scraping. */

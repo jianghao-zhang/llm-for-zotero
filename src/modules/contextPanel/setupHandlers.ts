@@ -11102,6 +11102,22 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       }
       setCancelledRequestId(currentRequestId);
       if (status) setStatus(status, t("Cancelled"), "ready");
+      // Immediately mark the last assistant message as not streaming so any
+      // queued refresh won't bring back the loading dots.
+      if (item) {
+        const key = getConversationKey(item);
+        const history = chatHistory.get(key);
+        if (history) {
+          for (let i = history.length - 1; i >= 0; i--) {
+            if (history[i].role === "assistant") {
+              history[i].streaming = false;
+              if (!history[i].text) history[i].text = "[Cancelled]";
+              break;
+            }
+          }
+        }
+      }
+      body.querySelectorAll(".llm-typing").forEach((el: Element) => el.remove());
       // Re-enable UI
       if (inputBox) inputBox.disabled = false;
       if (sendBtn) {
