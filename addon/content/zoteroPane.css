@@ -2056,6 +2056,59 @@
   gap: 10px;
 }
 
+.llm-agent-process-details,
+.llm-agent-rawlog-details {
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--material-background) 92%, var(--fill-quinary));
+}
+
+.llm-agent-process-summary,
+.llm-agent-rawlog-summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--llm-fs-10);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--fill-secondary);
+  padding: 7px 10px;
+}
+
+.llm-agent-process-summary::-webkit-details-marker,
+.llm-agent-rawlog-summary::-webkit-details-marker {
+  display: none;
+}
+
+.llm-agent-process-summary::before,
+.llm-agent-rawlog-summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 120ms ease;
+}
+
+.llm-agent-process-details[open] > .llm-agent-process-summary::before,
+.llm-agent-rawlog-details[open] > .llm-agent-rawlog-summary::before {
+  transform: rotate(90deg);
+}
+
+.llm-agent-process-details > .llm-agent-activity-list {
+  padding: 0 10px 10px;
+}
+
+.llm-agent-rawlog-pre {
+  margin: 0;
+  padding: 0 10px 10px;
+  max-height: 240px;
+  overflow: auto;
+  font-size: var(--llm-fs-10);
+  line-height: 1.4;
+  color: var(--fill-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .llm-agent-reasoning {
   --llm-thinking-rail: color-mix(
     in srgb,

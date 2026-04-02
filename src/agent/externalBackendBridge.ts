@@ -79,6 +79,18 @@ type ExternalToolDescriptor = {
 
 const EXTERNAL_ACTION_PREFIX = "cc_tool::";
 
+type ContextEnvelope = {
+  activeItemId?: number;
+  libraryID?: number;
+  selectedTextCount: number;
+  selectedPaperCount: number;
+  fullTextPaperCount: number;
+  pinnedPaperCount: number;
+  attachmentCount: number;
+  screenshotCount: number;
+  selectedPaperKeys: string[];
+};
+
 function parseLine(raw: string): BridgeLine | null {
   const line = raw.trim();
   if (!line) return null;
@@ -147,17 +159,19 @@ async function streamBridgeLines(
 
 async function runExternalBridgeTurn(
   baseUrl: string,
-  params: RunTurnParams,
+  params: RunTurnParams & {
+    contextEnvelope?: ContextEnvelope;
+  },
 ): Promise<AgentRuntimeOutcome> {
   const url = `${normalizeBaseUrl(baseUrl)}/run-turn`;
   const payload = {
     conversationKey: params.request.conversationKey,
     userText: params.request.userText,
     metadata: {
-      model: params.request.model,
-      providerLabel: params.request.modelProviderLabel,
+      runType: "chat",
       activeItemId: params.request.activeItemId,
       libraryID: params.request.libraryID,
+      contextEnvelope: params.contextEnvelope,
     },
   };
 
@@ -202,6 +216,42 @@ async function runExternalBridgeTurn(
   }
 
   return finalOutcome;
+}
+
+function extractPaperKeys(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const keys: string[] = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const key = typeof record.paperKey === "string" ? record.paperKey.trim() : "";
+    if (key) keys.push(key);
+  }
+  return Array.from(new Set(keys)).sort().slice(0, 20);
+}
+
+function buildContextEnvelope(request: AgentRuntimeRequest): ContextEnvelope {
+  return {
+    activeItemId: request.activeItemId,
+    libraryID: request.libraryID,
+    selectedTextCount: Array.isArray(request.selectedTexts) ? request.selectedTexts.length : 0,
+    selectedPaperCount: Array.isArray(request.selectedPaperContexts)
+      ? request.selectedPaperContexts.length
+      : 0,
+    fullTextPaperCount: Array.isArray(request.fullTextPaperContexts)
+      ? request.fullTextPaperContexts.length
+      : 0,
+    pinnedPaperCount: Array.isArray(request.pinnedPaperContexts)
+      ? request.pinnedPaperContexts.length
+      : 0,
+    attachmentCount: Array.isArray(request.attachments) ? request.attachments.length : 0,
+    screenshotCount: Array.isArray(request.screenshots) ? request.screenshots.length : 0,
+    selectedPaperKeys: extractPaperKeys(request.selectedPaperContexts),
+  };
+}
+
+function signatureForContextEnvelope(envelope: ContextEnvelope): string {
+  return JSON.stringify(envelope);
 }
 
 async function fetchExternalTools(baseUrl: string): Promise<ExternalToolDescriptor[]> {
@@ -307,6 +357,7 @@ export function createExternalBackendBridgeRuntime(options: {
   let cachedTools: ExternalToolDescriptor[] = [];
   let cacheExpiresAt = 0;
   let refreshInFlight: Promise<void> | null = null;
+  const conversationContextSignature = new Map<number, string>();
   const TOOL_CACHE_TTL_MS = 60_000;
 
   const refreshExternalActions = async (force = false): Promise<void> => {
@@ -444,7 +495,21 @@ export function createExternalBackendBridgeRuntime(options: {
       if (!bridgeUrl) {
         return coreRuntime.runTurn(params);
       }
-      return runExternalBridgeTurn(bridgeUrl, params);
+      const contextEnvelope = buildContextEnvelope(params.request);
+      const currentSignature = signatureForContextEnvelope(contextEnvelope);
+      const previousSignature = conversationContextSignature.get(
+        params.request.conversationKey,
+      );
+      const contextStatus =
+        previousSignature && previousSignature === currentSignature
+          ? "已复用上轮上下文"
+          : "检测到新上下文并更新";
+      conversationContextSignature.set(params.request.conversationKey, currentSignature);
+      await params.onEvent?.({ type: "status", text: contextStatus });
+      return runExternalBridgeTurn(bridgeUrl, {
+        ...params,
+        contextEnvelope,
+      });
     },
   };
 }
