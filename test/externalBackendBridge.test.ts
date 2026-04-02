@@ -96,7 +96,7 @@ describe("external backend bridge runtime", function () {
 
       assert.equal(outcome.kind, "completed");
       assert.equal((outcome as any).runId, "bridge-run");
-      assert.deepEqual(seen, ["start:bridge-run", "event:status"]);
+      assert.deepEqual(seen, ["event:status", "start:bridge-run", "event:status"]);
       assert.isTrue(runtime.getCapabilities({} as any).toolCalls);
     } finally {
       (globalThis as any).fetch = fetchBackup;

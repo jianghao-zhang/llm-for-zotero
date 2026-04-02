@@ -2007,6 +2007,27 @@ function buildInitialAgentMessage(requestChips: AgentTraceChip[]): string {
     : "Checking the current request and Zotero context.";
 }
 
+function summarizeRunForHuman(
+  events: AgentRunEventRecord[],
+): { label: string; running: boolean; failed: boolean } {
+  let toolCalls = 0;
+  let failed = false;
+  let completed = false;
+  for (const entry of events) {
+    if (entry.payload.type === "tool_call") toolCalls += 1;
+    if (entry.payload.type === "tool_error") failed = true;
+    if (entry.payload.type === "fallback") failed = true;
+    if (entry.payload.type === "final") completed = true;
+  }
+  if (failed) {
+    return { label: `过程（失败，工具调用 ${toolCalls} 次）`, running: false, failed: true };
+  }
+  if (completed) {
+    return { label: `过程（已完成，工具调用 ${toolCalls} 次）`, running: false, failed: false };
+  }
+  return { label: `过程（进行中，工具调用 ${toolCalls} 次）`, running: true, failed: false };
+}
+
 function compactAgentTraceEvents(
   events: AgentRunEventRecord[],
 ): AgentRunEventRecord[] {
@@ -2238,6 +2259,9 @@ export function buildAgentTraceDisplayItems(
         });
         break;
       case "fallback":
+        if (entry.payload.reason === "unmapped_provider_event") {
+          break;
+        }
         items.push({
           type: "message",
           tone: "warning",
@@ -2282,6 +2306,20 @@ export function renderAgentTrace({
   const processItems = buildAgentTraceDisplayItems(events, userMessage);
   const pending = getPendingConfirmation(events);
   const hasFinalResponse = events.some((entry) => entry.payload.type === "final");
+  const runOverview = summarizeRunForHuman(events);
+  const processDetails = doc.createElement("details") as HTMLDetailsElement;
+  processDetails.className = "llm-agent-process-details";
+  processDetails.open = Boolean(pending) || runOverview.running || runOverview.failed;
+  const processSummary = doc.createElement("summary");
+  processSummary.className = "llm-agent-process-summary";
+  processSummary.textContent = processDetails.open ? "隐藏过程" : `查看${runOverview.label}`;
+  processDetails.addEventListener("toggle", () => {
+    processSummary.textContent = processDetails.open
+      ? "隐藏过程"
+      : `查看${runOverview.label}`;
+  });
+  processDetails.appendChild(processSummary);
+
   for (const itemEntry of processItems) {
     if (itemEntry.type === "message") {
       const messageEl = doc.createElement("div");
@@ -2397,7 +2435,28 @@ export function renderAgentTrace({
 
     list.appendChild(actionWrap);
   }
-  wrap.appendChild(list);
+  processDetails.appendChild(list);
+  wrap.appendChild(processDetails);
+
+  const rawLogDetails = doc.createElement("details") as HTMLDetailsElement;
+  rawLogDetails.className = "llm-agent-rawlog-details";
+  const rawLogSummary = doc.createElement("summary");
+  rawLogSummary.className = "llm-agent-rawlog-summary";
+  rawLogSummary.textContent = "查看原始日志";
+  rawLogDetails.appendChild(rawLogSummary);
+  const rawLogPre = doc.createElement("pre");
+  rawLogPre.className = "llm-agent-rawlog-pre";
+  rawLogPre.textContent = JSON.stringify(
+    events.map((entry) => ({
+      seq: entry.seq,
+      type: entry.payload.type,
+      payload: entry.payload,
+    })),
+    null,
+    2,
+  );
+  rawLogDetails.appendChild(rawLogPre);
+  wrap.appendChild(rawLogDetails);
 
   if (hasFinalResponse) {
     const divider = doc.createElement("div");
