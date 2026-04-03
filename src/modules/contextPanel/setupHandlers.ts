@@ -8290,13 +8290,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const next = agentQueuedInputs.takeNextForSend();
       if (!next?.text.trim()) return;
       liveInputBox.value = next.text;
+      // Remove immediately so queued entries disappear as soon as they are sent.
+      // This matches the expected UX: once dispatch starts, the item is no
+      // longer considered "queued".
+      agentQueuedInputs.remove(next.id);
       renderAgentQueuedInputs();
       persistDraftInputForCurrentConversation();
-      try {
-        await executeSend({ fromQueue: true });
-      } finally {
-        agentQueuedInputs.remove(next.id);
-      }
+      await executeSend({ fromQueue: true });
       renderAgentQueuedInputs();
       if (agentQueuedInputs.size()) {
         scheduleAgentQueueDrain();
