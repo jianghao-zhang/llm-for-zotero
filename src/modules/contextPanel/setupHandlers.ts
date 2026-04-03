@@ -8280,7 +8280,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         renderAgentQueuedInputs();
         return;
       }
-      if (currentAbortController) {
+      if (currentAbortController && !currentAbortController.signal.aborted) {
         scheduleAgentQueueDrain();
         return;
       }
