@@ -8908,6 +8908,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const liveRefs = getPanelDomRefs(body);
       const liveInputBox = liveRefs.inputBox;
       if (!agentQueuedInputs.size() || !liveInputBox) return;
+      // Never overwrite in-progress user drafting text.
+      // If the user is typing, defer queue dispatch until the input is empty.
+      if ((liveInputBox.value || "").trim().length > 0) {
+        scheduleAgentQueueDrain();
+        return;
+      }
       const next = agentQueuedInputs.takeNextForSend();
       if (!next?.text.trim()) return;
       liveInputBox.value = next.text;
