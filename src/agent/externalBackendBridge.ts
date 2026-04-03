@@ -633,10 +633,22 @@ export function createExternalBackendBridgeRuntime(options: {
           : "检测到新上下文并更新";
       conversationContextSignature.set(params.request.conversationKey, currentSignature);
       await params.onEvent?.({ type: "status", text: contextStatus });
-      return runExternalBridgeTurn(bridgeUrl, {
-        ...params,
-        contextEnvelope,
-      });
+      try {
+        return await runExternalBridgeTurn(bridgeUrl, {
+          ...params,
+          contextEnvelope,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (typeof ztoolkit !== "undefined" && typeof ztoolkit.log === "function") {
+          ztoolkit.log("LLM Agent: External bridge unavailable, fallback to local runtime", message);
+        }
+        await params.onEvent?.({
+          type: "status",
+          text: "外部 Agent 后端不可用，已自动回退到本地模式",
+        });
+        return coreRuntime.runTurn(params);
+      }
     },
   };
 }

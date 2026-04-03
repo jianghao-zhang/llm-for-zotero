@@ -103,6 +103,40 @@ describe("external backend bridge runtime", function () {
     }
   });
 
+  it("falls back to local runtime when bridge request fails", async function () {
+    const core = makeCoreRuntime();
+    const fetchBackup = (globalThis as any).fetch;
+    (globalThis as any).fetch = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+
+    try {
+      const runtime = createExternalBackendBridgeRuntime({
+        coreRuntime: core as any,
+        getBridgeUrl: () => "http://127.0.0.1:18787",
+      });
+      const seen: string[] = [];
+      const outcome = await runtime.runTurn({
+        request: {
+          conversationKey: 3,
+          mode: "agent",
+          userText: "fallback please",
+        } as any,
+        onEvent: (event) => {
+          seen.push(event.type === "status" ? `status:${(event as any).text}` : event.type);
+        },
+      });
+
+      assert.equal(outcome.kind, "completed");
+      assert.equal((outcome as any).runId, "core-run");
+      assert.isTrue(
+        seen.some((entry) => entry.includes("外部 Agent 后端不可用，已自动回退到本地模式")),
+      );
+    } finally {
+      (globalThis as any).fetch = fetchBackup;
+    }
+  });
+
   it("loads backend tools and exposes them as external actions", async function () {
     const core = makeCoreRuntime();
     const fetchBackup = (globalThis as any).fetch;
