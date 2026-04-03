@@ -27,6 +27,7 @@ declare namespace _ZoteroTypes {
       "temperatureQuaternary": string;
       "maxTokensQuaternary": string;
       "enableAgentMode": boolean;
+      "agentBackendBridgeUrl": string;
       "locale": string;
     };
   }
