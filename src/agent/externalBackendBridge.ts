@@ -428,14 +428,17 @@ async function buildBridgeRuntimeRequest(
 
   const resolveAttachmentAbsolutePath = async (
     contextItemId: unknown,
+    fallbackItemId?: unknown,
   ): Promise<string | undefined> => {
     const normalizedId =
       typeof contextItemId === "number" && Number.isFinite(contextItemId)
         ? Math.floor(contextItemId)
         : 0;
-    if (normalizedId <= 0) return undefined;
-    try {
-      const attachment = Zotero.Items.get(normalizedId);
+    const readAttachmentPath = async (
+      attachmentId: number,
+    ): Promise<string | undefined> => {
+      if (attachmentId <= 0) return undefined;
+      const attachment = Zotero.Items.get(attachmentId);
       if (!attachment?.isAttachment?.()) return undefined;
       const asyncPath = await (
         attachment as unknown as { getFilePathAsync?: () => Promise<string | false> }
@@ -450,6 +453,35 @@ async function buildBridgeRuntimeRequest(
       if (typeof directPath !== "string") return undefined;
       const normalizedPath = directPath.trim();
       return normalizedPath.startsWith("/") ? normalizedPath : undefined;
+    };
+
+    const normalizedFallbackItemId =
+      typeof fallbackItemId === "number" && Number.isFinite(fallbackItemId)
+        ? Math.floor(fallbackItemId)
+        : 0;
+
+    try {
+      if (normalizedId > 0) {
+        const direct = await readAttachmentPath(normalizedId);
+        if (direct) return direct;
+      }
+      if (normalizedFallbackItemId > 0) {
+        const parentItem = Zotero.Items.get(normalizedFallbackItemId);
+        if (parentItem?.isRegularItem?.()) {
+          const attachmentIds = parentItem.getAttachments?.() || [];
+          for (const attachmentId of attachmentIds) {
+            const attachment = Zotero.Items.get(attachmentId);
+            if (
+              attachment?.isAttachment?.() &&
+              attachment.attachmentContentType === "application/pdf"
+            ) {
+              const path = await readAttachmentPath(attachment.id);
+              if (path) return path;
+            }
+          }
+        }
+      }
+      return undefined;
     } catch {
       return undefined;
     }
@@ -469,6 +501,7 @@ async function buildBridgeRuntimeRequest(
           : undefined;
       const contextFilePath = await resolveAttachmentAbsolutePath(
         paper.contextItemId,
+        paper.itemId,
       );
       const context: BridgePaperContext = {
         itemId:
