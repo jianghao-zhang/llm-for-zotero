@@ -2043,12 +2043,12 @@ function summarizeRunForHuman(
   ].filter(Boolean);
   const summaryText = summaryBits.join("，");
   if (failed) {
-    return { label: `过程（失败，${summaryText}）`, running: false, failed: true };
+    return { label: `Process (failed, ${summaryText})`, running: false, failed: true };
   }
   if (completed) {
-    return { label: `过程（已完成，${summaryText}）`, running: false, failed: false };
+    return { label: `Process (completed, ${summaryText})`, running: false, failed: false };
   }
-  return { label: `过程（进行中，${summaryText}）`, running: true, failed: false };
+  return { label: `Process (running, ${summaryText})`, running: true, failed: false };
 }
 
 function compactAgentTraceEvents(
@@ -2391,11 +2391,11 @@ export function renderAgentTrace({
   processDetails.open = Boolean(pending) || runOverview.running || runOverview.failed;
   const processSummary = doc.createElement("summary");
   processSummary.className = "llm-agent-process-summary";
-  processSummary.textContent = processDetails.open ? "隐藏过程" : `查看${runOverview.label}`;
+  processSummary.textContent = processDetails.open ? "Hide process" : `View ${runOverview.label}`;
   processDetails.addEventListener("toggle", () => {
     processSummary.textContent = processDetails.open
-      ? "隐藏过程"
-      : `查看${runOverview.label}`;
+      ? "Hide process"
+      : `View ${runOverview.label}`;
   });
   processDetails.appendChild(processSummary);
 
@@ -2565,7 +2565,7 @@ export function renderAgentTrace({
   rawLogDetails.className = "llm-agent-rawlog-details";
   const rawLogSummary = doc.createElement("summary");
   rawLogSummary.className = "llm-agent-rawlog-summary";
-  rawLogSummary.textContent = "查看原始日志";
+  rawLogSummary.textContent = "View raw log";
   rawLogDetails.appendChild(rawLogSummary);
   const rawLogPre = doc.createElement("pre");
   rawLogPre.className = "llm-agent-rawlog-pre";
