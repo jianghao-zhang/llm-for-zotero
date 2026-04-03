@@ -46,6 +46,7 @@ export type AgentRuntimeLike = Pick<
     name: string,
     input: unknown,
     opts?: {
+      conversationKey?: number;
       libraryID?: number;
       confirmationMode?: ActionConfirmationMode;
       onProgress?: (event: ActionProgressEvent) => void;
@@ -149,6 +150,20 @@ type BridgePaperContext = {
   contextFilePath?: string;
 };
 
+type BridgeScopeType =
+  | "paper"
+  | "open"
+  | "folder"
+  | "tag"
+  | "tagset"
+  | "custom";
+
+type BridgeScope = {
+  scopeType: BridgeScopeType;
+  scopeId: string;
+  scopeLabel?: string;
+};
+
 type BridgeRuntimeRequest = {
   conversationKey: number;
   userText: string;
@@ -173,6 +188,121 @@ type BridgeRuntimeRequest = {
     noteText?: string;
   };
 };
+
+function normalizeScopeType(value: unknown): BridgeScopeType | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "paper":
+    case "open":
+    case "folder":
+    case "tag":
+    case "tagset":
+    case "custom":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function normalizeScopeId(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
+}
+
+function resolvePaperScopeFromRequest(request: AgentRuntimeRequest): BridgeScope | null {
+  const libraryID =
+    typeof request.libraryID === "number" && Number.isFinite(request.libraryID)
+      ? Math.floor(request.libraryID)
+      : undefined;
+
+  let paperItemId: number | undefined;
+  const fromActiveItem =
+    typeof request.activeItemId === "number" && Number.isFinite(request.activeItemId)
+      ? Math.floor(request.activeItemId)
+      : undefined;
+  if (fromActiveItem && fromActiveItem > 0) {
+    const item = Zotero.Items.get(fromActiveItem);
+    if (item?.isAttachment?.() && item.parentID) {
+      paperItemId = Math.floor(item.parentID);
+    } else if (item?.isRegularItem?.()) {
+      paperItemId = Math.floor(item.id);
+    }
+  }
+
+  if (!paperItemId || paperItemId <= 0) {
+    const allRefs = [
+      ...(Array.isArray(request.selectedPaperContexts)
+        ? request.selectedPaperContexts
+        : []),
+      ...(Array.isArray(request.fullTextPaperContexts)
+        ? request.fullTextPaperContexts
+        : []),
+      ...(Array.isArray(request.pinnedPaperContexts)
+        ? request.pinnedPaperContexts
+        : []),
+    ];
+    const firstRef = allRefs.find(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.itemId === "number" &&
+        Number.isFinite(entry.itemId),
+    );
+    if (firstRef?.itemId) {
+      paperItemId = Math.floor(firstRef.itemId);
+    }
+  }
+
+  if (!paperItemId || paperItemId <= 0) {
+    return null;
+  }
+
+  const titleItem = Zotero.Items.get(paperItemId);
+  const scopeLabel =
+    titleItem?.isRegularItem?.() && typeof titleItem.getField === "function"
+      ? String(titleItem.getField("title") || "").trim() || undefined
+      : undefined;
+
+  const scopeId = `${libraryID ?? 0}:${paperItemId}`;
+  return { scopeType: "paper", scopeId, scopeLabel };
+}
+
+function resolveBridgeScope(request: AgentRuntimeRequest): BridgeScope {
+  const explicitType = normalizeScopeType(
+    (request as unknown as { scopeType?: unknown }).scopeType,
+  );
+  const explicitId = normalizeScopeId(
+    (request as unknown as { scopeId?: unknown }).scopeId,
+  );
+  const explicitLabel =
+    typeof (request as unknown as { scopeLabel?: unknown }).scopeLabel === "string"
+      ? String((request as unknown as { scopeLabel?: unknown }).scopeLabel).trim() || undefined
+      : undefined;
+  if (explicitType && explicitId) {
+    return {
+      scopeType: explicitType,
+      scopeId: explicitId,
+      scopeLabel: explicitLabel,
+    };
+  }
+
+  const paperScope = resolvePaperScopeFromRequest(request);
+  if (paperScope) {
+    return paperScope;
+  }
+
+  const libraryID =
+    typeof request.libraryID === "number" && Number.isFinite(request.libraryID)
+      ? Math.floor(request.libraryID)
+      : 0;
+  return {
+    scopeType: "open",
+    scopeId: String(libraryID),
+    scopeLabel: "Open Chat",
+  };
+}
 
 function parseLine(raw: string): BridgeLine | null {
   const line = raw.trim();
@@ -245,18 +375,25 @@ async function runExternalBridgeTurn(
   params: RunTurnParams & {
     contextEnvelope?: ContextEnvelope;
     runtimeRequest?: BridgeRuntimeRequest;
+    scope?: BridgeScope;
   },
 ): Promise<AgentRuntimeOutcome> {
   const url = `${normalizeBaseUrl(baseUrl)}/run-turn`;
   const payload = {
     conversationKey: params.request.conversationKey,
     userText: params.request.userText,
+    scopeType: params.scope?.scopeType,
+    scopeId: params.scope?.scopeId,
+    scopeLabel: params.scope?.scopeLabel,
     runtimeRequest: params.runtimeRequest,
     metadata: {
       runType: "chat",
       activeItemId: params.request.activeItemId,
       libraryID: params.request.libraryID,
       contextEnvelope: params.contextEnvelope,
+      scopeType: params.scope?.scopeType,
+      scopeId: params.scope?.scopeId,
+      scopeLabel: params.scope?.scopeLabel,
     },
   };
 
@@ -666,6 +803,7 @@ async function runExternalBridgeAction(
     signal?: AbortSignal;
     onEvent?: (event: AgentEvent) => void | Promise<void>;
     onStart?: (runId: string) => void | Promise<void>;
+    metadata?: Record<string, unknown>;
   },
 ): Promise<AgentRuntimeOutcome> {
   const response = await fetch(`${normalizeBaseUrl(baseUrl)}/run-action`, {
@@ -677,6 +815,19 @@ async function runExternalBridgeAction(
       args: params.args,
       libraryID: params.libraryID,
       approved: Boolean(params.approved),
+      scopeType:
+        typeof params.metadata?.scopeType === "string"
+          ? params.metadata.scopeType
+          : undefined,
+      scopeId:
+        typeof params.metadata?.scopeId === "string"
+          ? params.metadata.scopeId
+          : undefined,
+      scopeLabel:
+        typeof params.metadata?.scopeLabel === "string"
+          ? params.metadata.scopeLabel
+          : undefined,
+      metadata: params.metadata,
     }),
     signal: params.signal,
   });
@@ -722,6 +873,7 @@ export function createExternalBackendBridgeRuntime(options: {
   let cacheExpiresAt = 0;
   let refreshInFlight: Promise<void> | null = null;
   const conversationContextSignature = new Map<number, string>();
+  const conversationScopeByKey = new Map<number, BridgeScope>();
   const TOOL_CACHE_TTL_MS = 60_000;
 
   const refreshExternalActions = async (force = false): Promise<void> => {
@@ -798,15 +950,26 @@ export function createExternalBackendBridgeRuntime(options: {
       }
       const tool = cachedTools.find((entry) => entry.name === toolName);
       const onProgress = opts.onProgress ?? (() => {});
+      const actionConversationKey =
+        typeof opts.conversationKey === "number" && Number.isFinite(opts.conversationKey)
+          ? Math.floor(opts.conversationKey)
+          : Date.now();
+      const actionScope = conversationScopeByKey.get(actionConversationKey);
 
       onProgress({ type: "step_start", step: `Run ${toolName}`, index: 1, total: 1 });
       const doRun = async (approved = false): Promise<ActionResult<unknown>> => {
         const outcome = await runExternalBridgeAction(bridgeUrl, {
-          conversationKey: Date.now(),
+          conversationKey: actionConversationKey,
           toolName,
           args: input,
           libraryID: opts.libraryID,
           approved,
+          metadata: {
+            runType: "action",
+            scopeType: actionScope?.scopeType,
+            scopeId: actionScope?.scopeId,
+            scopeLabel: actionScope?.scopeLabel,
+          },
           onEvent: async (event) => {
             if (event.type === "status") {
               onProgress({ type: "status", message: event.text });
@@ -861,6 +1024,8 @@ export function createExternalBackendBridgeRuntime(options: {
       }
       const contextEnvelope = buildContextEnvelope(params.request);
       const runtimeRequest = await buildBridgeRuntimeRequest(params.request);
+      const scope = resolveBridgeScope(params.request);
+      conversationScopeByKey.set(params.request.conversationKey, scope);
       const currentSignature = signatureForContextEnvelope(contextEnvelope);
       const previousSignature = conversationContextSignature.get(
         params.request.conversationKey,
@@ -876,6 +1041,7 @@ export function createExternalBackendBridgeRuntime(options: {
           ...params,
           contextEnvelope,
           runtimeRequest,
+          scope,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -2602,6 +2602,39 @@ function buildActiveNoteRuntimeContext(
   };
 }
 
+function resolveAgentScopeFromItem(item: Zotero.Item): Pick<
+  AgentRuntimeRequest,
+  "scopeType" | "scopeId" | "scopeLabel"
+> {
+  const libraryID =
+    typeof item.libraryID === "number" && Number.isFinite(item.libraryID)
+      ? Math.floor(item.libraryID)
+      : 0;
+  let paperItemId = 0;
+  if (item.isAttachment?.() && item.parentID) {
+    paperItemId = Math.floor(item.parentID);
+  } else if (item.isRegularItem?.()) {
+    paperItemId = Math.floor(item.id);
+  }
+  if (paperItemId > 0) {
+    const paperItem = Zotero.Items.get(paperItemId);
+    const scopeLabel =
+      paperItem?.isRegularItem?.() && typeof paperItem.getField === "function"
+        ? String(paperItem.getField("title") || "").trim() || undefined
+        : undefined;
+    return {
+      scopeType: "paper",
+      scopeId: `${libraryID}:${paperItemId}`,
+      scopeLabel,
+    };
+  }
+  return {
+    scopeType: "open",
+    scopeId: String(libraryID),
+    scopeLabel: "Open Chat",
+  };
+}
+
 async function enrichPaperContextsWithMineruCache(
   papers: PaperContextRef[] | undefined,
 ): Promise<PaperContextRef[] | undefined> {
@@ -2626,6 +2659,7 @@ async function buildAgentRuntimeRequest(
     enrichPaperContextsWithMineruCache(params.paperContexts),
     enrichPaperContextsWithMineruCache(params.fullTextPaperContexts),
   ]);
+  const scope = resolveAgentScopeFromItem(params.item);
   return {
     conversationKey: params.conversationKey,
     mode: "agent",
@@ -2650,6 +2684,9 @@ async function buildAgentRuntimeRequest(
     modelProviderLabel: params.effectiveRequestConfig.modelProviderLabel,
     libraryID: params.item.libraryID,
     activeNoteContext: buildActiveNoteRuntimeContext(params.item),
+    scopeType: scope.scopeType,
+    scopeId: scope.scopeId,
+    scopeLabel: scope.scopeLabel,
   };
 }
 

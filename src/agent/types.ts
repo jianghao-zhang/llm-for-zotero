@@ -28,6 +28,9 @@ export type AgentRequest = {
   providerProtocol?: ProviderProtocol;
   reasoning?: LLMReasoningConfig;
   advanced?: AdvancedModelParams;
+  scopeType?: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
+  scopeId?: string;
+  scopeLabel?: string;
 };
 
 export type AgentPendingActionButton = {

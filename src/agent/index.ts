@@ -240,6 +240,7 @@ export function getAgentApi() {
       name: string,
       input: unknown,
       opts: {
+        conversationKey?: number;
         libraryID?: number;
         confirmationMode?: import("./actions").ActionConfirmationMode;
         onProgress?: (event: import("./actions").ActionProgressEvent) => void;
