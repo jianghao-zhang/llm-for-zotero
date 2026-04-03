@@ -4031,6 +4031,8 @@ label.llm-search-results-item:hover {
     var(--fill-quinary)
   );
   padding: 12px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .llm-agent-queue-header {
@@ -4045,6 +4047,7 @@ label.llm-search-results-item:hover {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  width: 100%;
 }
 
 .llm-agent-queue-item {
@@ -4057,6 +4060,8 @@ label.llm-search-results-item:hover {
   border: 1px solid color-mix(in srgb, var(--stroke-secondary) 78%, transparent);
   border-radius: 14px;
   background: color-mix(in srgb, var(--material-background) 92%, var(--fill-quinary));
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .llm-agent-queue-item.llm-agent-queue-item-sending {
@@ -4066,6 +4071,8 @@ label.llm-search-results-item:hover {
     var(--material-background) 88%,
     var(--color-accent) 12%
   );
+}
+
 .llm-agent-queue-text {
   min-width: 0;
   font-size: var(--llm-fs-16);
@@ -4090,6 +4097,7 @@ label.llm-search-results-item:hover {
   padding: 8px 14px;
   cursor: pointer;
   white-space: nowrap;
+  justify-self: end;
 }
 
 .llm-agent-queue-delete-btn:hover:not(:disabled) {
