@@ -27,6 +27,9 @@ type AgentTraceSummaryRow = {
   text: string;
   /** Optional code block shown below the summary text (e.g. shell commands). */
   codeBlock?: string;
+  /** Optional raw payload shown in expandable details for fidelity/debugging. */
+  rawDetails?: string;
+  rawDetailsLabel?: string;
 };
 
 type AgentTraceDisplayItem =
@@ -127,6 +130,15 @@ function truncateAgentTraceText(value: unknown, max = 88): string {
   const normalized = sanitizeText(raw).replace(/\s+/g, " ").trim();
   if (normalized.length <= max) return normalized;
   return `${normalized.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+}
+
+function toPrettyJson(value: unknown): string | null {
+  if (value === undefined) return null;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function renderReviewTableField(
@@ -1848,28 +1860,23 @@ function buildAgentTraceToolChips(
 function summarizeAgentTraceToolCall(
   name: string,
   args: unknown,
-  request?: AgentTraceRequestSummary,
+  _request?: AgentTraceRequestSummary,
 ): AgentTraceSummaryRow {
   const label = toolLabelFromName(name);
-  const text =
-    resolveToolPresentationSummary(
-      getToolDefinition(name)?.presentation?.summaries?.onCall,
-      { label, args, request },
-    ) || `Using ${label}`;
+  const text = `Tool call: ${label}`;
 
-  // Show code block for shell commands and file I/O
   let codeBlock: string | undefined;
   const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-  if (name === "run_command" && typeof a.command === "string") {
+  if (typeof a.command === "string") {
     codeBlock = a.command;
-  } else if (name === "file_io" && typeof a.filePath === "string") {
-    codeBlock = `${a.action || "access"} ${a.filePath}`;
+  } else {
+    codeBlock = toPrettyJson(args) || undefined;
   }
 
   return {
     kind: "tool",
     icon: "→",
-    text: codeBlock ? label : text,
+    text,
     codeBlock,
   };
 }
@@ -1970,6 +1977,8 @@ function summarizeAgentTraceToolResult(
       kind: "skip",
       icon: "!",
       text,
+      rawDetails: toPrettyJson(content) || undefined,
+      rawDetailsLabel: "tool_result payload",
     };
   }
 
@@ -1989,22 +1998,10 @@ function summarizeAgentTraceToolResult(
   return {
     kind: isEmpty ? "skip" : "ok",
     icon: isEmpty ? "-" : "✓",
-    text,
+    text: `Tool result: ${label}${isEmpty ? " (empty)" : ""}`,
+    rawDetails: toPrettyJson(content) || undefined,
+    rawDetailsLabel: "tool_result payload",
   };
-}
-
-function isGenericAgentStatusText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return (
-    normalized === "running agent" ||
-    /^continuing agent \(\d+\/\d+\)$/.test(normalized)
-  );
-}
-
-function buildInitialAgentMessage(requestChips: AgentTraceChip[]): string {
-  return requestChips.length
-    ? "Checking the request against the attached context."
-    : "Checking the current request and Zotero context.";
 }
 
 function summarizeRunForHuman(
@@ -2013,25 +2010,28 @@ function summarizeRunForHuman(
   let toolCalls = 0;
   let failed = false;
   let completed = false;
+  let eventCount = 0;
   for (const entry of events) {
+    eventCount += 1;
     if (entry.payload.type === "tool_call") toolCalls += 1;
     if (entry.payload.type === "tool_error") failed = true;
     if (entry.payload.type === "fallback") failed = true;
     if (entry.payload.type === "final") completed = true;
   }
   if (failed) {
-    return { label: `过程（失败，工具调用 ${toolCalls} 次）`, running: false, failed: true };
+    return { label: `过程（失败，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: false, failed: true };
   }
   if (completed) {
-    return { label: `过程（已完成，工具调用 ${toolCalls} 次）`, running: false, failed: false };
+    return { label: `过程（已完成，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: false, failed: false };
   }
-  return { label: `过程（进行中，工具调用 ${toolCalls} 次）`, running: true, failed: false };
+  return { label: `过程（进行中，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: true, failed: false };
 }
 
 function compactAgentTraceEvents(
   events: AgentRunEventRecord[],
 ): AgentRunEventRecord[] {
   const compact: AgentRunEventRecord[] = [];
+  const HEARTBEAT_PROVIDER_TYPES = new Set(["tool_progress", "stream_event"]);
   for (const entry of events) {
     const previous = compact[compact.length - 1];
     if (
@@ -2063,6 +2063,28 @@ function compactAgentTraceEvents(
       };
       continue;
     }
+    if (
+      entry.payload.type === "status" &&
+      previous?.payload.type === "status" &&
+      readAgentTraceText(entry.payload.text) ===
+        readAgentTraceText(previous.payload.text)
+    ) {
+      compact[compact.length - 1] = entry;
+      continue;
+    }
+    if (
+      entry.payload.type === "provider_event" &&
+      previous?.payload.type === "provider_event" &&
+      entry.payload.providerType === previous.payload.providerType &&
+      HEARTBEAT_PROVIDER_TYPES.has(entry.payload.providerType)
+    ) {
+      const prevRaw = toPrettyJson(previous.payload.payload);
+      const nextRaw = toPrettyJson(entry.payload.payload);
+      if (prevRaw && nextRaw && prevRaw === nextRaw) {
+        compact[compact.length - 1] = entry;
+        continue;
+      }
+    }
     compact.push(entry);
   }
   return compact;
@@ -2077,39 +2099,40 @@ export function buildAgentTraceDisplayItems(
   const requestChips = buildAgentTraceRequestChips(userMessage);
   const requestSummary = buildAgentTraceRequestSummary(userMessage);
   const pendingActions = new Map<string, AgentPendingAction>();
-  let announcedWriting = false;
-  let lastMeaningfulStatus: string | null = null;
-
-  items.push({
-    type: "message",
-    tone: "neutral",
-    text: buildInitialAgentMessage(requestChips),
-  });
-  items.push({
-    type: "action",
-    row: {
-      kind: "plan",
-      icon: "↳",
-      text: requestChips.length
-        ? "Request and attached context received"
-        : "Request received",
-    },
-    chips: requestChips,
-  });
 
   for (let index = 0; index < compactedEvents.length; index += 1) {
     const entry = compactedEvents[index];
     switch (entry.payload.type) {
-      case "status": {
-        const statusText = readAgentTraceText(entry.payload.text);
-        if (
-          !statusText ||
-          isGenericAgentStatusText(statusText) ||
-          statusText === lastMeaningfulStatus
-        ) {
-          break;
+      case "provider_event": {
+        const providerType = readAgentTraceText(entry.payload.providerType) || "unknown";
+        const chips: AgentTraceChip[] = [];
+        const sessionId = readAgentTraceText(entry.payload.sessionId);
+        if (sessionId) {
+          chips.push({
+            icon: "#",
+            label: truncateAgentTraceText(sessionId, 18),
+            title: sessionId,
+          });
         }
-        lastMeaningfulStatus = statusText;
+        items.push({
+          type: "action",
+          row: {
+            kind: "plan",
+            icon: "·",
+            text: `provider_event: ${providerType}`,
+            rawDetails: toPrettyJson(entry.payload.payload) || undefined,
+            rawDetailsLabel: "provider payload",
+          },
+          chips: chips.length ? chips : undefined,
+        });
+        break;
+      }
+      case "status": {
+        const statusText =
+          readAgentTraceText(entry.payload.text) ||
+          readAgentTraceText((entry.payload as Record<string, unknown>).label) ||
+          readAgentTraceText((entry.payload as Record<string, unknown>).phase) ||
+          "status";
         items.push({
           type: "action",
           row: {
@@ -2224,20 +2247,16 @@ export function buildAgentTraceDisplayItems(
         break;
       }
       case "message_delta":
-        if (!announcedWriting) {
-          announcedWriting = true;
-          items.push({
-            type: "action",
-            row: {
-              kind: "plan",
-              icon: "✎",
-              text: "Drafting answer",
-            },
-          });
-        }
+        items.push({
+          type: "action",
+          row: {
+            kind: "plan",
+            icon: "✎",
+            text: `message_delta: ${truncateAgentTraceText(entry.payload.text, 140)}`,
+          },
+        });
         break;
       case "message_rollback": {
-        announcedWriting = false;
         const rollbackText = (entry.payload.text || "").trim();
         if (rollbackText) {
           items.push({
@@ -2254,7 +2273,7 @@ export function buildAgentTraceDisplayItems(
           row: {
             kind: "done",
             icon: "✓",
-            text: "Response ready",
+            text: "final",
           },
         });
         break;
@@ -2304,6 +2323,7 @@ export function renderAgentTrace({
     return wrap;
   }
   const processItems = buildAgentTraceDisplayItems(events, userMessage);
+  const requestChips = buildAgentTraceRequestChips(userMessage);
   const pending = getPendingConfirmation(events);
   const hasFinalResponse = events.some((entry) => entry.payload.type === "final");
   const runOverview = summarizeRunForHuman(events);
@@ -2319,6 +2339,37 @@ export function renderAgentTrace({
       : `查看${runOverview.label}`;
   });
   processDetails.appendChild(processSummary);
+
+  if (requestChips.length) {
+    const introWrap = doc.createElement("div");
+    introWrap.className = "llm-agent-process-action";
+    const introRow = doc.createElement("div");
+    introRow.className = "llm-at-row llm-at-row-plan";
+    const introIcon = doc.createElement("span");
+    introIcon.className = "llm-at-icon";
+    introIcon.textContent = "↳";
+    const introText = doc.createElement("span");
+    introText.className = "llm-at-text llm-at-plan-text";
+    introText.textContent = "Attached context";
+    introRow.append(introIcon, introText);
+    introWrap.appendChild(introRow);
+    const chips = doc.createElement("div");
+    chips.className = "llm-agent-process-chips";
+    for (const chip of requestChips) {
+      const chipEl = doc.createElement("div");
+      chipEl.className = "llm-agent-process-chip";
+      const chipIcon = doc.createElement("span");
+      chipIcon.className = "llm-agent-process-chip-icon";
+      chipIcon.textContent = chip.icon;
+      const chipLabel = doc.createElement("span");
+      chipLabel.className = "llm-agent-process-chip-label";
+      chipLabel.textContent = chip.label;
+      chipEl.append(chipIcon, chipLabel);
+      chips.appendChild(chipEl);
+    }
+    introWrap.appendChild(chips);
+    list.appendChild(introWrap);
+  }
 
   for (const itemEntry of processItems) {
     if (itemEntry.type === "message") {
@@ -2410,6 +2461,19 @@ export function renderAgentTrace({
       code.textContent = itemEntry.row.codeBlock;
       codeWrap.appendChild(code);
       actionWrap.appendChild(codeWrap);
+    }
+
+    if (itemEntry.row.rawDetails) {
+      const details = doc.createElement("details") as HTMLDetailsElement;
+      details.className = "llm-agent-rawlog-details";
+      const summary = doc.createElement("summary");
+      summary.className = "llm-agent-rawlog-summary";
+      summary.textContent = itemEntry.row.rawDetailsLabel || "raw payload";
+      const pre = doc.createElement("pre");
+      pre.className = "llm-agent-rawlog-pre";
+      pre.textContent = itemEntry.row.rawDetails;
+      details.append(summary, pre);
+      actionWrap.appendChild(details);
     }
 
     if (itemEntry.chips?.length) {

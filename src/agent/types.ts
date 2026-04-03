@@ -191,6 +191,13 @@ export type ToolSpec = {
 };
 
 export type AgentEvent =
+  | {
+      type: "provider_event";
+      providerType: string;
+      sessionId?: string;
+      payload: Record<string, unknown>;
+      ts: number;
+    }
   | { type: "status"; text: string }
   | {
       type: "reasoning";
