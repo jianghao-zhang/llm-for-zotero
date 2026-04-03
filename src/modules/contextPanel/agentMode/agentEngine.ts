@@ -296,6 +296,9 @@ export async function sendAgentTurn(
   deps.setPendingRequestId(thisRequestId);
   const initialConversationKey = deps.getConversationKey(item);
   deps.setRequestUIBusy(body, ui, initialConversationKey, "Preparing agent...");
+  if (ui.inputBox) {
+    ui.inputBox.disabled = false;
+  }
 
   const historyForRun = deps.chatHistory.get(conversationKey) || [];
   const shownQuestion = displayQuestion || question;
@@ -563,6 +566,9 @@ export async function retryAgentTurn(
   const thisRequestId = deps.nextRequestId();
   deps.setPendingRequestId(thisRequestId);
   deps.setRequestUIBusy(body, ui, conversationKey, "Preparing agent retry...");
+  if (ui.inputBox) {
+    ui.inputBox.disabled = false;
+  }
 
   const assistantMessage = retryPair.assistantMessage;
 

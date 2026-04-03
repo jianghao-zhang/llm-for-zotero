@@ -323,6 +323,7 @@ import {
   isZoteroItemDragEvent,
   parseZoteroItemDragData,
 } from "./setupHandlers/controllers/fileIntakeController";
+import { createAgentQueuedInputsController } from "./setupHandlers/controllers/agentQueuedInputsController";
 import { createSendFlowController } from "./setupHandlers/controllers/sendFlowController";
 import { createClearConversationController } from "./setupHandlers/controllers/clearConversationController";
 import { clearAllAgentToolCaches } from "../../agent/tools";
@@ -408,6 +409,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     actionPicker,
     actionPickerList,
     actionHitlPanel,
+    agentQueuePanel,
+    agentQueueList,
     responseMenu,
     responseMenuCopyBtn,
     responseMenuNoteBtn,
@@ -460,9 +463,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   // pendingRequestId is set at the very start of doSend/retry, so it covers
   // the full request lifecycle — not just streaming.
   if (pendingRequestId > 0) {
+    const runtimeModeAtSetup =
+      item && Number.isFinite(item.id) && item.id > 0
+        ? selectedRuntimeModeCache.get(item.id) || "chat"
+        : "chat";
     if (sendBtn) sendBtn.style.display = "none";
     if (cancelBtn) cancelBtn.style.display = "";
-    if (inputBox) inputBox.disabled = true;
+    if (inputBox) inputBox.disabled = runtimeModeAtSetup !== "agent";
     if (historyToggleBtn) {
       historyToggleBtn.disabled = true;
       historyToggleBtn.setAttribute("aria-disabled", "true");
@@ -8175,7 +8182,187 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       ztoolkit.log(message, err);
     },
   });
-  const executeSend = async () => {
+  type AgentQueueBodyState = Element & {
+    __llmAgentQueuedInputsController?: ReturnType<
+      typeof createAgentQueuedInputsController
+    >;
+    __llmAgentQueueDrainTimer?: number | null;
+  };
+  const queueBody = body as AgentQueueBodyState;
+  if (
+    typeof queueBody.__llmAgentQueueDrainTimer === "number" &&
+    panelWin
+  ) {
+    panelWin.clearTimeout(queueBody.__llmAgentQueueDrainTimer);
+    queueBody.__llmAgentQueueDrainTimer = null;
+  }
+  const agentQueuedInputs =
+    queueBody.__llmAgentQueuedInputsController ||
+    createAgentQueuedInputsController();
+  queueBody.__llmAgentQueuedInputsController = agentQueuedInputs;
+  let agentQueueDrainTimer = queueBody.__llmAgentQueueDrainTimer ?? null;
+
+  const renderAgentQueuedInputs = () => {
+    const liveRefs = getPanelDomRefs(body);
+    const liveAgentQueuePanel = liveRefs.agentQueuePanel;
+    const liveAgentQueueList = liveRefs.agentQueueList;
+    if (!liveAgentQueuePanel || !liveAgentQueueList) return;
+    const isAgent = getCurrentRuntimeMode() === "agent";
+    const queuedEntries = agentQueuedInputs.list();
+    if (!isAgent || !queuedEntries.length) {
+      liveAgentQueuePanel.style.display = "none";
+      liveAgentQueueList.textContent = "";
+      return;
+    }
+    liveAgentQueuePanel.style.display = "grid";
+    liveAgentQueueList.textContent = "";
+    for (const entry of queuedEntries) {
+      const row = panelDoc.createElement("div");
+      row.className = "llm-agent-queue-item";
+      if (entry.status === "sending") {
+        row.classList.add("llm-agent-queue-item-sending");
+      }
+
+      const text = panelDoc.createElement("div");
+      text.className = "llm-agent-queue-text";
+      text.textContent =
+        entry.status === "sending" ? `Sending: ${entry.text}` : entry.text;
+      text.title = entry.text;
+
+      const actions = panelDoc.createElement("div");
+      actions.className = "llm-agent-queue-actions";
+
+      const steerBtn = panelDoc.createElement("button");
+      steerBtn.className =
+        "llm-agent-queue-action-btn llm-agent-queue-steer-btn";
+      steerBtn.type = "button";
+      steerBtn.dataset.action = "steer";
+      steerBtn.dataset.queueId = String(entry.id);
+      steerBtn.textContent = "Steer";
+      steerBtn.disabled = entry.status === "sending";
+
+      const deleteBtn = panelDoc.createElement("button");
+      deleteBtn.className =
+        "llm-agent-queue-action-btn llm-agent-queue-delete-btn";
+      deleteBtn.type = "button";
+      deleteBtn.dataset.action = "delete";
+      deleteBtn.dataset.queueId = String(entry.id);
+      deleteBtn.textContent = "Delete";
+      deleteBtn.disabled = entry.status === "sending";
+
+      actions.append(steerBtn, deleteBtn);
+      row.append(text, actions);
+      liveAgentQueueList.appendChild(row);
+    }
+  };
+
+  const scheduleAgentQueueDrain = () => {
+    const win = body.ownerDocument?.defaultView;
+    if (!win) return;
+    if (agentQueueDrainTimer !== null) return;
+    agentQueueDrainTimer = win.setTimeout(async () => {
+      queueBody.__llmAgentQueueDrainTimer = null;
+      agentQueueDrainTimer = null;
+      if (getCurrentRuntimeMode() !== "agent") {
+        agentQueuedInputs.clear();
+        renderAgentQueuedInputs();
+        return;
+      }
+      if (currentAbortController) {
+        scheduleAgentQueueDrain();
+        return;
+      }
+      const liveRefs = getPanelDomRefs(body);
+      const liveInputBox = liveRefs.inputBox;
+      if (!agentQueuedInputs.size() || !liveInputBox) return;
+      const next = agentQueuedInputs.takeNextForSend();
+      if (!next?.text.trim()) return;
+      liveInputBox.value = next.text;
+      renderAgentQueuedInputs();
+      persistDraftInputForCurrentConversation();
+      try {
+        await executeSend({ fromQueue: true });
+      } finally {
+        agentQueuedInputs.remove(next.id);
+      }
+      renderAgentQueuedInputs();
+      if (agentQueuedInputs.size()) {
+        scheduleAgentQueueDrain();
+      }
+    }, 220);
+    queueBody.__llmAgentQueueDrainTimer = agentQueueDrainTimer;
+  };
+
+  const queueAgentSend = (text: string) => {
+    const enqueueResult = agentQueuedInputs.enqueue(text);
+    if (!enqueueResult.enqueued) {
+      if (status) setStatus(status, "Agent is running. Enter text to queue the next request.", "warning");
+      return;
+    }
+    if (inputBox) {
+      inputBox.value = "";
+      inputBox.style.height = "auto";
+      if (inputBox.scrollHeight) {
+        inputBox.style.height = `${inputBox.scrollHeight}px`;
+      }
+    }
+    renderAgentQueuedInputs();
+    persistDraftInputForCurrentConversation();
+    if (status) {
+      setStatus(
+        status,
+        `Agent is running. Queued ${agentQueuedInputs.size()} message(s).`,
+        "sending",
+      );
+    }
+    scheduleAgentQueueDrain();
+  };
+
+  if (agentQueueList) {
+    agentQueueList.addEventListener("click", (event: Event) => {
+      const target = event.target as HTMLElement | null;
+      const actionBtn = target?.closest(
+        ".llm-agent-queue-action-btn",
+      ) as HTMLButtonElement | null;
+      if (!actionBtn) return;
+      const id = Number(actionBtn.dataset.queueId || "");
+      if (!Number.isFinite(id) || id <= 0) return;
+      const action = (actionBtn.dataset.action || "").trim();
+      if (action === "delete") {
+        if (agentQueuedInputs.remove(id) && status) {
+          setStatus(status, "Queued follow-up removed.", "ready");
+        }
+        renderAgentQueuedInputs();
+        return;
+      }
+      if (action === "steer") {
+        const entry = agentQueuedInputs.list().find((candidate) => candidate.id === id);
+        if (entry) {
+          agentQueuedInputs.remove(id);
+          const liveRefs = getPanelDomRefs(body);
+          if (liveRefs.inputBox) {
+            liveRefs.inputBox.value = entry.text;
+            liveRefs.inputBox.focus({ preventScroll: true });
+          }
+          persistDraftInputForCurrentConversation();
+        }
+        if (entry && status) {
+          setStatus(status, "Queued follow-up moved back to the draft box.", "ready");
+        }
+        renderAgentQueuedInputs();
+      }
+    });
+  }
+
+  const executeSend = async (opts?: { fromQueue?: boolean }) => {
+    if (
+      !opts?.fromQueue &&
+      getCurrentRuntimeMode() === "agent" &&
+      Boolean(currentAbortController)
+    ) {
+      queueAgentSend(inputBox?.value || "");
+      return;
+    }
     // If the inline edit widget is active, route through editUserTurnAndRetry
     // instead of the normal send flow.
     if (inlineEditTarget && item) {
@@ -8446,6 +8633,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     persistDraftInputForCurrentConversation();
   };
 
+  renderAgentQueuedInputs();
+
   // Send button - use addEventListener
   sendBtn.addEventListener("click", (e: Event) => {
     e.preventDefault();
@@ -8461,6 +8650,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const nextMode: ChatRuntimeMode =
         getCurrentRuntimeMode() === "agent" ? "chat" : "agent";
       setCurrentRuntimeMode(nextMode);
+      if (nextMode === "chat" && agentQueuedInputs.size()) {
+        agentQueuedInputs.clear();
+      }
+      if (nextMode === "agent" && !currentAbortController) {
+        scheduleAgentQueueDrain();
+      }
+      renderAgentQueuedInputs();
       if (status) {
         setStatus(
           status,
@@ -10531,6 +10727,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         historyToggleBtn.disabled = false;
         historyToggleBtn.setAttribute("aria-disabled", "false");
       }
+      scheduleAgentQueueDrain();
     });
   }
 
