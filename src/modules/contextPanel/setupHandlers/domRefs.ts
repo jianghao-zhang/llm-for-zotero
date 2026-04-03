@@ -62,6 +62,8 @@ export type PanelDomRefs = {
   actionPicker: HTMLDivElement | null;
   actionPickerList: HTMLDivElement | null;
   actionHitlPanel: HTMLDivElement | null;
+  agentQueuePanel: HTMLDivElement | null;
+  agentQueueList: HTMLDivElement | null;
   responseMenu: HTMLDivElement | null;
   responseMenuCopyBtn: HTMLButtonElement | null;
   responseMenuNoteBtn: HTMLButtonElement | null;
@@ -248,6 +250,12 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLDivElement | null,
     actionHitlPanel: body.querySelector(
       "#llm-action-hitl-panel",
+    ) as HTMLDivElement | null,
+    agentQueuePanel: body.querySelector(
+      "#llm-agent-queue-panel",
+    ) as HTMLDivElement | null,
+    agentQueueList: body.querySelector(
+      "#llm-agent-queue-list",
     ) as HTMLDivElement | null,
     responseMenu: body.querySelector(
       "#llm-response-menu",

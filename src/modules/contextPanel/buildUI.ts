@@ -704,6 +704,25 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   actionHitlPanel.style.display = "none";
   composeArea.appendChild(actionHitlPanel);
 
+  const agentQueuePanel = createElement(doc, "div", "llm-agent-queue-panel", {
+    id: "llm-agent-queue-panel",
+  });
+  agentQueuePanel.style.display = "none";
+  const agentQueueHeader = createElement(
+    doc,
+    "div",
+    "llm-agent-queue-header",
+    {
+      id: "llm-agent-queue-header",
+      textContent: t("Queued follow-ups"),
+    },
+  );
+  const agentQueueList = createElement(doc, "div", "llm-agent-queue-list", {
+    id: "llm-agent-queue-list",
+  });
+  agentQueuePanel.append(agentQueueHeader, agentQueueList);
+  composeArea.appendChild(agentQueuePanel);
+
   const inputBox = createElement(doc, "textarea", "llm-input", {
     id: "llm-input",
     placeholder: hasItem
