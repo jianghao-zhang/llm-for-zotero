@@ -2037,9 +2037,9 @@ function summarizeRunForHuman(
   }
 
   const summaryBits = [
-    `工具调用 ${toolCalls}`,
-    `关键事件 ${keyEventCount}`,
-    errorCount > 0 ? `错误 ${errorCount}` : "",
+    `tool calls ${toolCalls}`,
+    `key events ${keyEventCount}`,
+    errorCount > 0 ? `errors ${errorCount}` : "",
   ].filter(Boolean);
   const summaryText = summaryBits.join("，");
   if (failed) {
@@ -2388,7 +2388,7 @@ export function renderAgentTrace({
   const runOverview = summarizeRunForHuman(events);
   const processDetails = doc.createElement("details") as HTMLDetailsElement;
   processDetails.className = "llm-agent-process-details";
-  processDetails.open = Boolean(pending) || runOverview.running || runOverview.failed;
+  processDetails.open = false;
   const processSummary = doc.createElement("summary");
   processSummary.className = "llm-agent-process-summary";
   processSummary.textContent = processDetails.open ? "Hide process" : `View ${runOverview.label}`;
