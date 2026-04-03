@@ -3375,10 +3375,10 @@ label.llm-search-results-item:hover {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
   flex-shrink: 0;
   min-width: 0;
-  padding: 8px;
+  padding: 7px;
   border-radius: 16px;
   border: 1px solid var(--stroke-secondary);
   background: var(--material-background);
@@ -4022,12 +4022,12 @@ label.llm-search-results-item:hover {
 
 .llm-agent-queue-panel {
   display: none;
-  gap: 4px;
-  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 88%, transparent);
-  border-radius: 14px;
+  gap: 2px;
+  border: 1px solid #d7d7d7;
+  border-radius: 10px;
   background: #f2f2f2;
-  padding: 4px 8px;
-  margin-bottom: -4px;
+  padding: 3px 6px;
+  margin-bottom: -2px;
   width: 100%;
   box-sizing: border-box;
 }
@@ -4039,30 +4039,30 @@ label.llm-search-results-item:hover {
 .llm-agent-queue-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  gap: 2px;
   width: 100%;
 }
 
 .llm-agent-queue-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
+  gap: 5px;
   align-items: center;
-  min-height: 28px;
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 92%, transparent);
-  border-radius: 8px;
-  background: #f2f2f2;
+  min-height: 23px;
+  padding: 1px 7px;
+  border: 1px solid #dcdcdc;
+  border-radius: 7px;
+  background: #ececec;
   box-shadow: none;
   width: 100%;
   box-sizing: border-box;
 }
 
 .llm-agent-queue-item.llm-agent-queue-item-sending {
-  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--stroke-secondary));
+  border-color: color-mix(in srgb, var(--color-accent) 52%, #d7d7d7);
   background: color-mix(
     in srgb,
-    #f2f2f2 84%,
+    #ececec 84%,
     var(--color-accent) 10%
   );
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 32%, transparent);
@@ -4082,15 +4082,15 @@ label.llm-search-results-item:hover {
 .llm-agent-queue-delete-btn {
   appearance: none;
   -moz-appearance: none;
-  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 90%, transparent);
+  border: 1px solid #cfd3da;
   border-radius: 999px;
-  background: #f2f2f2;
+  background: #f6f7f9;
   color: color-mix(in srgb, var(--fill-primary) 74%, var(--color-accent) 26%);
   font-size: var(--llm-fs-11);
   font-weight: 600;
   line-height: 1;
-  min-height: 22px;
-  padding: 2px 9px;
+  min-height: 20px;
+  padding: 1px 8px;
   cursor: pointer;
   white-space: nowrap;
   justify-self: end;
