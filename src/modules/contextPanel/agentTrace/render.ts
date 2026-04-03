@@ -2008,23 +2008,47 @@ function summarizeRunForHuman(
   events: AgentRunEventRecord[],
 ): { label: string; running: boolean; failed: boolean } {
   let toolCalls = 0;
+  let errorCount = 0;
+  let keyEventCount = 0;
   let failed = false;
   let completed = false;
-  let eventCount = 0;
   for (const entry of events) {
-    eventCount += 1;
-    if (entry.payload.type === "tool_call") toolCalls += 1;
-    if (entry.payload.type === "tool_error") failed = true;
-    if (entry.payload.type === "fallback") failed = true;
-    if (entry.payload.type === "final") completed = true;
+    switch (entry.payload.type) {
+      case "tool_call":
+        toolCalls += 1;
+        keyEventCount += 1;
+        break;
+      case "tool_result":
+      case "confirmation_required":
+      case "confirmation_resolved":
+      case "final":
+        keyEventCount += 1;
+        if (entry.payload.type === "final") completed = true;
+        break;
+      case "tool_error":
+      case "fallback":
+        keyEventCount += 1;
+        errorCount += 1;
+        failed = true;
+        break;
+      default:
+        break;
+    }
   }
+
+  const summaryBits = [
+    `工具调用 ${toolCalls}`,
+    `关键事件 ${keyEventCount}`,
+    errorCount > 0 ? `错误 ${errorCount}` : "",
+  ].filter(Boolean);
+  const summaryText = summaryBits.join("，");
   if (failed) {
-    return { label: `过程（失败，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: false, failed: true };
+    return { label: `过程（失败，${summaryText}）`, running: false, failed: true };
   }
   if (completed) {
-    return { label: `过程（已完成，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: false, failed: false };
+    return { label: `过程（已完成，${summaryText}）`, running: false, failed: false };
   }
-  return { label: `过程（进行中，事件 ${eventCount}，工具调用 ${toolCalls}）`, running: true, failed: false };
+  return { label: `过程（进行中，${summaryText}）`, running: true, failed: false };
 }
 
 function compactAgentTraceEvents(
@@ -2094,17 +2118,29 @@ export function buildAgentTraceDisplayItems(
   events: AgentRunEventRecord[],
   userMessage: Message | null | undefined,
 ): AgentTraceDisplayItem[] {
+  const providerEventCounts = new Map<string, number>();
+  for (const entry of events) {
+    if (entry.payload.type !== "provider_event") continue;
+    const providerType = readAgentTraceText(entry.payload.providerType) || "unknown";
+    providerEventCounts.set(providerType, (providerEventCounts.get(providerType) || 0) + 1);
+  }
+
   const items: AgentTraceDisplayItem[] = [];
   const compactedEvents = compactAgentTraceEvents(events);
   const requestChips = buildAgentTraceRequestChips(userMessage);
   const requestSummary = buildAgentTraceRequestSummary(userMessage);
   const pendingActions = new Map<string, AgentPendingAction>();
+  const noisyProviderTypes = new Set(["stream_event", "system", "assistant", "user"]);
+  const genericStatusTexts = new Set(["system", "assistant", "user"]);
 
   for (let index = 0; index < compactedEvents.length; index += 1) {
     const entry = compactedEvents[index];
     switch (entry.payload.type) {
       case "provider_event": {
         const providerType = readAgentTraceText(entry.payload.providerType) || "unknown";
+        if (noisyProviderTypes.has(providerType)) {
+          break;
+        }
         const chips: AgentTraceChip[] = [];
         const sessionId = readAgentTraceText(entry.payload.sessionId);
         if (sessionId) {
@@ -2133,6 +2169,9 @@ export function buildAgentTraceDisplayItems(
           readAgentTraceText((entry.payload as Record<string, unknown>).label) ||
           readAgentTraceText((entry.payload as Record<string, unknown>).phase) ||
           "status";
+        if (genericStatusTexts.has(statusText.toLowerCase())) {
+          break;
+        }
         items.push({
           type: "action",
           row: {
@@ -2247,14 +2286,7 @@ export function buildAgentTraceDisplayItems(
         break;
       }
       case "message_delta":
-        items.push({
-          type: "action",
-          row: {
-            kind: "plan",
-            icon: "✎",
-            text: `message_delta: ${truncateAgentTraceText(entry.payload.text, 140)}`,
-          },
-        });
+        // message_delta is high-frequency and usually redundant with final answer display
         break;
       case "message_rollback": {
         const rollbackText = (entry.payload.text || "").trim();
@@ -2290,6 +2322,33 @@ export function buildAgentTraceDisplayItems(
     }
   }
 
+  const streamCount = providerEventCounts.get("stream_event") || 0;
+  const systemCount = providerEventCounts.get("system") || 0;
+  const aggregatedPrefix: AgentTraceDisplayItem[] = [];
+  if (streamCount > 0) {
+    aggregatedPrefix.push({
+      type: "action",
+      row: {
+        kind: "plan",
+        icon: "·",
+        text: `Streaming updates ×${streamCount}`,
+      },
+    });
+  }
+  if (systemCount > 0) {
+    aggregatedPrefix.push({
+      type: "action",
+      row: {
+        kind: "plan",
+        icon: "·",
+        text: `System events ×${systemCount}`,
+      },
+    });
+  }
+
+  if (aggregatedPrefix.length > 0) {
+    return [...aggregatedPrefix, ...items];
+  }
   return items;
 }
 
