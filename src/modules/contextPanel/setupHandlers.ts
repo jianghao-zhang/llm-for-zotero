@@ -4796,54 +4796,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
 
     let targetConversationKey = 0;
-    let reuseReason: "active-draft" | "latest-draft" | null = null;
-
-    const currentCandidate = isGlobalMode()
-      ? getConversationKey(item)
-      : Number(activeGlobalConversationByLibrary.get(libraryID) || 0);
-    const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
-      ? Math.floor(currentCandidate)
-      : 0;
-    if (normalizedCurrentCandidate > 0) {
-      try {
-        const turnCount = await getGlobalConversationUserTurnCount(
-          normalizedCurrentCandidate,
-        );
-        if (turnCount === 0) {
-          targetConversationKey = normalizedCurrentCandidate;
-          reuseReason = "active-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to inspect active candidate for draft reuse",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      try {
-        const latestEmpty = await getLatestEmptyGlobalConversation(libraryID);
-        const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
-        if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
-          targetConversationKey = Math.floor(latestEmptyKey);
-          reuseReason = "latest-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to load latest empty global conversation",
-          err,
-        );
-      }
-    }
-
-    if (targetConversationKey <= 0) {
-      try {
-        targetConversationKey = await createGlobalConversation(libraryID);
-      } catch (err) {
-        ztoolkit.log("LLM: Failed to create new global conversation", err);
-      }
-      reuseReason = null;
+    try {
+      targetConversationKey = await createGlobalConversation(libraryID);
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to create new global conversation", err);
     }
     if (!targetConversationKey) {
       if (status) setStatus(status, t("Failed to create conversation"), "error");
@@ -4853,19 +4809,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     ztoolkit.log("LLM: + conversation action", {
       libraryID,
       targetConversationKey,
-      action: reuseReason ? "reuse" : "create",
-      reason: reuseReason || "new",
+      action: "create",
+      reason: "forced-new",
     });
     activeGlobalConversationByLibrary.set(libraryID, targetConversationKey);
     await switchGlobalConversation(targetConversationKey);
     if (status) {
-      setStatus(
-        status,
-        reuseReason
-          ? t("Reused existing new conversation")
-          : t("Started new conversation"),
-        "ready",
-      );
+      setStatus(status, t("Started new conversation"), "ready");
     }
     inputBox.focus({ preventScroll: true });
   };
@@ -4904,76 +4854,29 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       return;
     }
 
-    let targetConversationKey = 0;
-    let reuseReason: "active-draft" | "existing-draft" | null = null;
-
-    // Step 1: If the currently active conversation is already empty, reuse it.
-    const currentKey = Number(getConversationKey(item) || 0);
-    if (Number.isFinite(currentKey) && currentKey > 0) {
-      try {
-        const currentSummary = await getPaperConversation(currentKey);
-        if (currentSummary && currentSummary.userTurnCount === 0) {
-          targetConversationKey = currentKey;
-          reuseReason = "active-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to inspect active paper conversation for draft reuse",
-          err,
-        );
-      }
+    let createdSummary: Awaited<ReturnType<typeof createPaperConversation>> =
+      null;
+    try {
+      createdSummary = await createPaperConversation(libraryID, paperItemID);
+    } catch (err) {
+      ztoolkit.log("LLM: Failed to create new paper conversation", err);
     }
-
-    // Step 2: Look for any other existing empty conversation for this paper.
-    if (targetConversationKey <= 0) {
-      try {
-        const summaries = await listPaperConversations(libraryID, paperItemID, 50);
-        const emptyEntry = summaries.find(
-          (s) => s.userTurnCount === 0,
-        );
-        if (emptyEntry?.conversationKey) {
-          targetConversationKey = emptyEntry.conversationKey;
-          reuseReason = "existing-draft";
-        }
-      } catch (err) {
-        ztoolkit.log(
-          "LLM: Failed to list paper conversations for draft reuse",
-          err,
-        );
-      }
+    if (!createdSummary?.conversationKey) {
+      if (status) setStatus(status, t("Failed to create paper chat"), "error");
+      return;
     }
-
-    // Step 3: No empty draft found — create a genuinely new conversation.
-    if (targetConversationKey <= 0) {
-      let createdSummary: Awaited<ReturnType<typeof createPaperConversation>> =
-        null;
-      try {
-        createdSummary = await createPaperConversation(libraryID, paperItemID);
-      } catch (err) {
-        ztoolkit.log("LLM: Failed to create new paper conversation", err);
-      }
-      if (!createdSummary?.conversationKey) {
-        if (status) setStatus(status, t("Failed to create paper chat"), "error");
-        return;
-      }
-      targetConversationKey = createdSummary.conversationKey;
-      reuseReason = null;
-    }
+    const targetConversationKey = createdSummary.conversationKey;
 
     ztoolkit.log("LLM: + paper conversation action", {
       libraryID,
       paperItemID,
       targetConversationKey,
-      action: reuseReason ? "reuse" : "create",
-      reason: reuseReason || "new",
+      action: "create",
+      reason: "forced-new",
     });
     await switchPaperConversation(targetConversationKey);
     if (status) {
-      setStatus(
-        status,
-        reuseReason ? t("Reused existing new chat") : t("Started new paper chat"),
-        "ready",
-      );
+      setStatus(status, t("Started new paper chat"), "ready");
     }
     inputBox.focus({ preventScroll: true });
   };
