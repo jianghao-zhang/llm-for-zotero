@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Queue Designer</title>
+    <style>
+      :root {
+        --panel-bg: #f8fafc;
+        --panel-border: #d6dbe5;
+        --panel-radius: 14;
+        --panel-padding: 12;
+
+        --item-bg: #ffffff;
+        --item-border: #d9dfeb;
+        --item-radius: 10;
+        --item-padding-y: 8;
+        --item-padding-x: 10;
+
+        --list-gap: 8;
+        --text-size: 16;
+        --text-color: #1e2430;
+
+        --btn-bg: #f8fafc;
+        --btn-border: #cfd7e6;
+        --btn-color: #44506a;
+        --btn-radius: 8;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+        background: linear-gradient(140deg, #f3f6fb 0%, #edf1f7 100%);
+        color: #1f2937;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        min-height: 100vh;
+      }
+
+      .controls {
+        padding: 16px;
+        border-right: 1px solid #d8dde8;
+        background: #ffffffcc;
+        backdrop-filter: blur(4px);
+        overflow: auto;
+      }
+
+      .controls h1 { margin: 0 0 8px; font-size: 18px; }
+      .controls p { margin: 0 0 14px; font-size: 13px; color: #5c677b; }
+
+      .group {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+
+      .group h2 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: #334155;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .row label { font-size: 12px; color: #4b5563; }
+      .row output { min-width: 42px; text-align: right; font-size: 12px; color: #64748b; }
+      .row input[type="range"] { width: 100%; }
+      .row input[type="color"] {
+        width: 32px;
+        height: 24px;
+        border: none;
+        background: transparent;
+        padding: 0;
+      }
+
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      button {
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #334155;
+        border-radius: 8px;
+        padding: 8px 10px;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .stage { padding: 24px; overflow: auto; }
+
+      .mock-shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        min-height: 760px;
+        border: 1px solid #d8dde8;
+        border-radius: 16px;
+        background: #f1f3f6;
+        position: relative;
+        padding: 18px;
+      }
+
+      .queue-panel {
+        width: 100%;
+        background: var(--panel-bg);
+        border: 1px solid var(--panel-border);
+        border-radius: calc(var(--panel-radius) * 1px);
+        padding: calc(var(--panel-padding) * 1px);
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+        touch-action: none;
+      }
+
+      .queue-header {
+        font-size: 13px;
+        color: #5b6474;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      .queue-list {
+        display: grid;
+        gap: calc(var(--list-gap) * 1px);
+      }
+
+      .queue-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        background: var(--item-bg);
+        border: 1px solid var(--item-border);
+        border-radius: calc(var(--item-radius) * 1px);
+        padding: calc(var(--item-padding-y) * 1px) calc(var(--item-padding-x) * 1px);
+        position: relative;
+      }
+
+      .queue-item.sending::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        border: 1px dashed color-mix(in srgb, var(--item-border) 50%, #3b82f6 50%);
+        pointer-events: none;
+      }
+
+      .queue-text {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        color: var(--text-color);
+        font-size: calc(var(--text-size) * 1px);
+      }
+
+      .queue-delete {
+        border: 1px solid var(--btn-border);
+        background: var(--btn-bg);
+        color: var(--btn-color);
+        border-radius: calc(var(--btn-radius) * 1px);
+        padding: 4px 10px;
+        font-size: 12px;
+      }
+
+      .hint {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #475569;
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 8px;
+      }
+
+      #cssOut {
+        width: 100%;
+        min-height: 180px;
+        margin-top: 8px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        padding: 8px;
+        resize: vertical;
+      }
+
+      @media (max-width: 980px) {
+        .layout { grid-template-columns: 1fr; }
+        .controls { border-right: none; border-bottom: 1px solid #d8dde8; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="controls">
+        <h1>Queue UI Designer</h1>
+        <p>拖动 Queue 面板到想要位置，调参数后复制 CSS。</p>
+
+        <div class="group">
+          <h2>Panel</h2>
+          <div class="row"><label>Panel Radius</label><output id="o-panel-radius"></output></div>
+          <input data-var="--panel-radius" type="range" min="4" max="24" step="1" value="14" />
+          <div class="row"><label>Panel Padding</label><output id="o-panel-padding"></output></div>
+          <input data-var="--panel-padding" type="range" min="4" max="24" step="1" value="12" />
+          <div class="row"><label>Panel BG</label><input data-var="--panel-bg" type="color" value="#f8fafc" /></div>
+          <div class="row"><label>Panel Border</label><input data-var="--panel-border" type="color" value="#d6dbe5" /></div>
+        </div>
+
+        <div class="group">
+          <h2>Item</h2>
+          <div class="row"><label>List Gap</label><output id="o-list-gap"></output></div>
+          <input data-var="--list-gap" type="range" min="2" max="16" step="1" value="8" />
+          <div class="row"><label>Item Radius</label><output id="o-item-radius"></output></div>
+          <input data-var="--item-radius" type="range" min="4" max="18" step="1" value="10" />
+          <div class="row"><label>Item Vertical Padding</label><output id="o-item-padding-y"></output></div>
+          <input data-var="--item-padding-y" type="range" min="4" max="16" step="1" value="8" />
+          <div class="row"><label>Item Horizontal Padding</label><output id="o-item-padding-x"></output></div>
+          <input data-var="--item-padding-x" type="range" min="6" max="20" step="1" value="10" />
+          <div class="row"><label>Item BG</label><input data-var="--item-bg" type="color" value="#ffffff" /></div>
+          <div class="row"><label>Item Border</label><input data-var="--item-border" type="color" value="#d9dfeb" /></div>
+        </div>
+
+        <div class="group">
+          <h2>Text / Button</h2>
+          <div class="row"><label>Text Size</label><output id="o-text-size"></output></div>
+          <input data-var="--text-size" type="range" min="12" max="20" step="1" value="16" />
+          <div class="row"><label>Text Color</label><input data-var="--text-color" type="color" value="#1e2430" /></div>
+          <div class="row"><label>Button Radius</label><output id="o-btn-radius"></output></div>
+          <input data-var="--btn-radius" type="range" min="4" max="14" step="1" value="8" />
+          <div class="row"><label>Button BG</label><input data-var="--btn-bg" type="color" value="#f8fafc" /></div>
+          <div class="row"><label>Button Border</label><input data-var="--btn-border" type="color" value="#cfd7e6" /></div>
+          <div class="row"><label>Button Text</label><input data-var="--btn-color" type="color" value="#44506a" /></div>
+        </div>
+
+        <div class="actions">
+          <button id="resetBtn">Reset</button>
+          <button id="copyBtn">Copy CSS</button>
+        </div>
+
+        <textarea id="cssOut" readonly></textarea>
+
+        <div class="hint">建议先调：panel-bg / item-bg / item-border / btn-radius。</div>
+      </aside>
+
+      <main class="stage">
+        <div class="mock-shell" id="shell">
+          <div class="queue-panel" id="queuePanel">
+            <div class="queue-header">Queued follow-ups</div>
+            <div class="queue-list">
+              <div class="queue-item sending">
+                <div class="queue-text">Sending: 比较这篇论文和 ReAct 的差异，并给出三点可复现建议</div>
+                <button class="queue-delete">Delete</button>
+              </div>
+              <div class="queue-item">
+                <div class="queue-text">顺便把 related work 按 memory / planning / tool use 重排</div>
+                <button class="queue-delete">Delete</button>
+              </div>
+              <div class="queue-item">
+                <div class="queue-text">提取作者开源 repo 并列出主要模块入口</div>
+                <button class="queue-delete">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      const root = document.documentElement;
+      const controls = Array.from(document.querySelectorAll('[data-var]'));
+      const panel = document.getElementById('queuePanel');
+      const cssOut = document.getElementById('cssOut');
+      const copyBtn = document.getElementById('copyBtn');
+
+      const outputs = {
+        '--panel-radius': document.getElementById('o-panel-radius'),
+        '--panel-padding': document.getElementById('o-panel-padding'),
+        '--list-gap': document.getElementById('o-list-gap'),
+        '--item-radius': document.getElementById('o-item-radius'),
+        '--item-padding-y': document.getElementById('o-item-padding-y'),
+        '--item-padding-x': document.getElementById('o-item-padding-x'),
+        '--text-size': document.getElementById('o-text-size'),
+        '--btn-radius': document.getElementById('o-btn-radius')
+      };
+
+      const defaults = new Map();
+      controls.forEach((el) => defaults.set(el.dataset.var, el.value));
+
+      function setVar(name, value) {
+        root.style.setProperty(name, value);
+        if (outputs[name]) {
+          outputs[name].textContent = Number.isFinite(Number(value)) ? `${value}px` : value;
+        }
+      }
+
+      function refreshCss() {
+        const vars = [
+          '--panel-bg', '--panel-border', '--panel-radius', '--panel-padding',
+          '--list-gap', '--item-bg', '--item-border', '--item-radius', '--item-padding-y', '--item-padding-x',
+          '--text-size', '--text-color', '--btn-bg', '--btn-border', '--btn-color', '--btn-radius'
+        ];
+        const rows = vars.map((v) => `  ${v}: ${getComputedStyle(root).getPropertyValue(v).trim()};`).join('\n');
+        cssOut.value = `:root {\n${rows}\n}`;
+      }
+
+      controls.forEach((el) => {
+        setVar(el.dataset.var, el.value);
+        el.addEventListener('input', () => {
+          setVar(el.dataset.var, el.value);
+          refreshCss();
+        });
+      });
+
+      document.getElementById('resetBtn').addEventListener('click', () => {
+        controls.forEach((el) => {
+          el.value = defaults.get(el.dataset.var);
+          setVar(el.dataset.var, el.value);
+        });
+        panel.style.position = 'static';
+        panel.style.left = '';
+        panel.style.top = '';
+        panel.style.width = '100%';
+        refreshCss();
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(cssOut.value);
+          copyBtn.textContent = 'Copied';
+          setTimeout(() => { copyBtn.textContent = 'Copy CSS'; }, 900);
+        } catch {
+          copyBtn.textContent = 'Copy failed';
+          setTimeout(() => { copyBtn.textContent = 'Copy CSS'; }, 1200);
+        }
+      });
+
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let originX = 0;
+      let originY = 0;
+
+      panel.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) return;
+        dragging = true;
+        panel.setPointerCapture(e.pointerId);
+        const rect = panel.getBoundingClientRect();
+        const shellRect = document.getElementById('shell').getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        originX = rect.left - shellRect.left;
+        originY = rect.top - shellRect.top;
+        panel.style.position = 'absolute';
+        panel.style.left = `${originX}px`;
+        panel.style.top = `${originY}px`;
+        panel.style.width = `${Math.min(rect.width, shellRect.width - 24)}px`;
+      });
+
+      panel.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        panel.style.left = `${originX + e.clientX - startX}px`;
+        panel.style.top = `${originY + e.clientY - startY}px`;
+      });
+
+      panel.addEventListener('pointerup', (e) => {
+        dragging = false;
+        try { panel.releasePointerCapture(e.pointerId); } catch {}
+      });
+
+      refreshCss();
+    </script>
+  </body>
+</html>
