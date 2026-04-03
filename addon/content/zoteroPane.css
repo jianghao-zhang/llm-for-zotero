@@ -3500,18 +3500,33 @@ label.llm-search-results-item:hover {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-  background-image: url("icons/claudecode-color.svg");
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: contain;
+  background-color: var(--fill-secondary);
+  mask-image: url("icons/claudecode.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/claudecode.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
 }
 
 .llm-context-agent-toggle.llm-agent-toggle-claude .llm-agent-toggle-backend-icon {
   display: inline-flex;
 }
 
-.llm-context-agent-toggle.llm-agent-toggle-claude .llm-agent-toggle-label {
+.llm-context-agent-toggle.llm-agent-toggle-claude .llm-agent-toggle-indicator {
+  display: none;
+}
+
+.llm-context-agent-toggle.llm-agent-toggle-claude.llm-agent-toggle-enabled
+  .llm-agent-toggle-label {
   color: #d97757;
+}
+
+.llm-context-agent-toggle.llm-agent-toggle-claude.llm-agent-toggle-enabled
+  .llm-agent-toggle-backend-icon {
+  background-color: #d97757;
 }
 
 .llm-agent-toggle-indicator {
