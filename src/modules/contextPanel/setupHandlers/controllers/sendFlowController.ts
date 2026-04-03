@@ -135,9 +135,15 @@ type SendFlowControllerDeps = {
 };
 
 export function createSendFlowController(deps: SendFlowControllerDeps): {
-  doSend: () => Promise<void>;
+  doSend: (opts?: {
+    overrideText?: string;
+    preserveInputDraft?: boolean;
+  }) => Promise<void>;
 } {
-  const doSend = async () => {
+  const doSend = async (opts?: {
+    overrideText?: string;
+    preserveInputDraft?: boolean;
+  }) => {
     const item = deps.getItem();
     if (!item) return;
 
@@ -147,7 +153,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
 
     try {
     const textContextConversationKey = deps.getConversationKey(item);
-    const text = deps.inputBox.value.trim();
+    const text = (opts?.overrideText ?? deps.inputBox.value).trim();
     const selectedContexts = deps.getSelectedTextContextEntries(
       textContextConversationKey,
     );
@@ -414,7 +420,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         return;
       }
 
-      deps.inputBox.value = "";
+      if (!opts?.preserveInputDraft) {
+        deps.inputBox.value = "";
+      }
       deps.persistDraftInput();
       deps.retainPinnedImageState(item.id);
       if (hasPaperComposeState) {
@@ -437,7 +445,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       return;
     }
 
-    deps.inputBox.value = "";
+    if (!opts?.preserveInputDraft) {
+      deps.inputBox.value = "";
+    }
     deps.persistDraftInput();
     deps.retainPinnedImageState(item.id);
     if (selectedFiles.length) {
