@@ -336,6 +336,13 @@ function revealDirectory(path: string): boolean {
   }
 }
 
+function parentPath(path: string): string {
+  const trimmed = (path || "").replace(/[\\/]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx <= 0) return trimmed;
+  return trimmed.slice(0, idx);
+}
+
 function resolveCodexAuthPath(): string {
   const env = getProcess()?.env;
   const codexHome = env?.CODEX_HOME?.trim();
@@ -1737,23 +1744,27 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           ? sourceRaw
           : "zotero-specific";
       const runtimeRoot = joinPath(home, "Zotero", "agent-runtime");
-      const path =
+      const claudeDir =
         source === "user-level"
           ? joinPath(home, ".claude")
           : joinPath(runtimeRoot, ".claude");
+      const targetPath =
+        source === "user-level"
+          ? joinPath(claudeDir, "settings.json")
+          : joinPath(claudeDir, "settings.local.json");
       try {
         if (source !== "user-level") {
           await ensureDirectory(runtimeRoot, joinPath(home, "Zotero"));
         }
-        await ensureDirectory(path, source === "user-level" ? home : runtimeRoot);
+        await ensureDirectory(claudeDir, source === "user-level" ? home : runtimeRoot);
       } catch {
         // best-effort
       }
-      const opened = revealDirectory(path);
+      const opened = revealDirectory(targetPath) || revealDirectory(parentPath(targetPath));
       if (openZoteroClaudeConfigFolderStatus) {
         openZoteroClaudeConfigFolderStatus.textContent = opened
-          ? `Opened: ${path}`
-          : `Path: ${path}`;
+          ? `Opened: ${targetPath}`
+          : `Path: ${targetPath}`;
       }
     });
   }

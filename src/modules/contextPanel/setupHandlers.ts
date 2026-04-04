@@ -334,6 +334,20 @@ import { clearAllAgentToolCaches } from "../../agent/tools";
 /** Monotonic counter incremented every time setupHandlers rebuilds a panel. */
 let setupHandlersGeneration = 0;
 
+const CLAUDE_MODELS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CLAUDE_EFFORTS_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const CLAUDE_BRIDGE_FETCH_TIMEOUT_MS = 6_000;
+const CLAUDE_FETCH_FAILURE_COOLDOWN_MS = 30_000;
+let cachedClaudeRuntimeModelsGlobal: string[] = [];
+let claudeModelsCacheExpiresAtGlobal = 0;
+let claudeRuntimeModelsInFlightGlobal: Promise<string[]> | null = null;
+let claudeModelsFailureCooldownUntilGlobal = 0;
+const cachedClaudeRuntimeEffortsGlobal = new Map<
+  string,
+  { efforts: string[]; expiresAt: number }
+>();
+const claudeRuntimeEffortsInFlightGlobal = new Map<string, Promise<string[]>>();
+
 export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   const resolvedInitialState = resolveInitialPanelItemState(initialItem);
   let item = resolvedInitialState.item;
@@ -356,10 +370,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     modelBtn,
     modelSlot,
     modelMenu,
+    claudeModelBtn,
+    claudeModelSlot,
+    claudeModelMenu,
     reasoningBtn,
+    claudeReasoningBtn,
     runtimeModeBtn,
     reasoningSlot,
     reasoningMenu,
+    claudeReasoningSlot,
+    claudeReasoningMenu,
     actionsRow,
     actionsLeft,
     actionsRight,
@@ -525,44 +545,79 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const key = getConversationKey(item);
     return selectedRuntimeModeCache.get(key) || "chat";
   };
+  const invalidateClaudeRuntimeCapabilityCaches = () => {
+    cachedClaudeRuntimeModelsGlobal = [];
+    claudeModelsCacheExpiresAtGlobal = 0;
+    claudeRuntimeModelsInFlightGlobal = null;
+    claudeModelsFailureCooldownUntilGlobal = 0;
+    cachedClaudeRuntimeEffortsGlobal.clear();
+    claudeRuntimeEffortsInFlightGlobal.clear();
+  };
+
   const updateRuntimeModeButton = () => {
-    if (!runtimeModeBtn) return;
+    const liveRefs = getPanelDomRefs(body);
+    const liveRuntimeModeBtn = liveRefs.runtimeModeBtn || runtimeModeBtn;
+    const liveModelSlot = liveRefs.modelSlot || modelSlot;
+    const liveReasoningSlot = liveRefs.reasoningSlot || reasoningSlot;
+    const liveClaudeModelSlot = liveRefs.claudeModelSlot || claudeModelSlot;
+    const liveClaudeReasoningSlot =
+      liveRefs.claudeReasoningSlot || claudeReasoningSlot;
+    const livePanelRoot = liveRefs.panelRoot || panelRoot;
+    if (!liveRuntimeModeBtn) return;
     const agentFeatureEnabled = getAgentModeEnabled();
     // [webchat] Agent mode not available in webchat — hide toggle
     let webChatActive = false;
     try { webChatActive = isWebChatMode(); } catch { /* not ready */ }
     // Hide the entire toggle when agent feature is disabled or in webchat mode.
     const shouldHide = !agentFeatureEnabled || webChatActive;
-    runtimeModeBtn.style.display = shouldHide ? "none" : "";
+    liveRuntimeModeBtn.style.display = shouldHide ? "none" : "";
     if (shouldHide) {
       // Force chat mode when the feature is hidden so state stays consistent.
       if (item) selectedRuntimeModeCache.set(getConversationKey(item), "chat");
-      panelRoot.dataset.runtimeMode = "chat";
+      livePanelRoot.dataset.runtimeMode = "chat";
       return;
     }
     const mode = getCurrentRuntimeMode();
     const enabled = mode === "agent";
     const backendMode = getAgentBackendModePref();
     const isClaudeBridge = backendMode === "claude_bridge";
-    const label = runtimeModeBtn.querySelector(
+    const label = liveRuntimeModeBtn.querySelector(
       ".llm-agent-toggle-label",
     ) as HTMLSpanElement | null;
     if (label) {
       label.textContent = isClaudeBridge ? "Claude Code" : t("Agent (beta)");
     }
-    runtimeModeBtn.dataset.agentBackend = backendMode;
-    runtimeModeBtn.classList.toggle("llm-agent-toggle-claude", isClaudeBridge);
-    runtimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
-    runtimeModeBtn.dataset.mode = mode;
-    runtimeModeBtn.title = enabled
+    liveRuntimeModeBtn.dataset.agentBackend = backendMode;
+    liveRuntimeModeBtn.classList.toggle("llm-agent-toggle-claude", isClaudeBridge);
+    liveRuntimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
+    liveRuntimeModeBtn.dataset.mode = mode;
+    liveRuntimeModeBtn.title = enabled
       ? t("Agent mode ON. Click to switch to Chat mode")
       : t("Agent mode OFF. Click to switch to Agent mode");
-    runtimeModeBtn.setAttribute(
+    liveRuntimeModeBtn.setAttribute(
       "aria-label",
       mode === "agent" ? t("Switch to Chat mode") : t("Switch to Agent mode"),
     );
-    runtimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
-    panelRoot.dataset.runtimeMode = mode;
+    liveRuntimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
+    livePanelRoot.dataset.runtimeMode = mode;
+
+    const useClaudeActionButtons = isClaudeBridge && enabled;
+    if (liveModelSlot) {
+      liveModelSlot.style.display = useClaudeActionButtons ? "none" : "";
+      liveModelSlot.dataset.hiddenByRuntime = useClaudeActionButtons ? "true" : "false";
+    }
+    if (liveReasoningSlot) {
+      liveReasoningSlot.style.display = useClaudeActionButtons ? "none" : "";
+      liveReasoningSlot.dataset.hiddenByRuntime = useClaudeActionButtons ? "true" : "false";
+    }
+    if (liveClaudeModelSlot) {
+      liveClaudeModelSlot.style.display = useClaudeActionButtons ? "" : "none";
+      liveClaudeModelSlot.dataset.hiddenByRuntime = useClaudeActionButtons ? "false" : "true";
+    }
+    if (liveClaudeReasoningSlot) {
+      liveClaudeReasoningSlot.style.display = useClaudeActionButtons ? "" : "none";
+      liveClaudeReasoningSlot.dataset.hiddenByRuntime = useClaudeActionButtons ? "false" : "true";
+    }
   };
   const setCurrentRuntimeMode = (mode: ChatRuntimeMode) => {
     if (!item) return;
@@ -725,10 +780,41 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   // Keep the agent mode toggle in sync when the preference is changed in the
   // Preferences window (which runs in a separate window context).
   {
+    type AgentModeObserverBody = Element & {
+      __llmAgentPrefObserverId?: symbol;
+      __llmAgentBackendObserverId?: symbol;
+      __llmClaudeSourceObserverId?: symbol;
+    };
+    const observerBody = body as AgentModeObserverBody;
     const agentPrefKey = `${config.prefsPrefix}.enableAgentMode`;
     const agentBackendKey = `${config.prefsPrefix}.agentBackendMode`;
-    let observerId: symbol | undefined;
-    let backendObserverId: symbol | undefined;
+    const claudeSourceKey = `${config.prefsPrefix}.agentClaudeConfigSource`;
+    let observerId: symbol | undefined = observerBody.__llmAgentPrefObserverId;
+    let backendObserverId: symbol | undefined =
+      observerBody.__llmAgentBackendObserverId;
+    let claudeSourceObserverId: symbol | undefined =
+      observerBody.__llmClaudeSourceObserverId;
+    try {
+      if (observerId !== undefined)
+        (Zotero as any).Prefs.unregisterObserver(observerId);
+      if (backendObserverId !== undefined)
+        (Zotero as any).Prefs.unregisterObserver(backendObserverId);
+      if (claudeSourceObserverId !== undefined)
+        (Zotero as any).Prefs.unregisterObserver(claudeSourceObserverId);
+    } catch {
+      // best effort cleanup only
+    }
+    observerBody.__llmAgentPrefObserverId = undefined;
+    observerBody.__llmAgentBackendObserverId = undefined;
+    observerBody.__llmClaudeSourceObserverId = undefined;
+    const syncRuntimeActionVisibilityNow = () => {
+      updateRuntimeModeButton();
+      queueMicrotask(() => {
+        updateModelButton();
+        updateReasoningButton();
+        applyResponsiveActionButtonsLayout();
+      });
+    };
     const onAgentPrefChange = () => {
       if (!(body as Element).isConnected) {
         // Panel is gone – clean up the observer.
@@ -737,12 +823,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             (Zotero as any).Prefs.unregisterObserver(observerId);
           if (backendObserverId !== undefined)
             (Zotero as any).Prefs.unregisterObserver(backendObserverId);
+          if (claudeSourceObserverId !== undefined)
+            (Zotero as any).Prefs.unregisterObserver(claudeSourceObserverId);
+          observerBody.__llmAgentPrefObserverId = undefined;
+          observerBody.__llmAgentBackendObserverId = undefined;
+          observerBody.__llmClaudeSourceObserverId = undefined;
         } catch {
           // no-op
         }
         return;
       }
-      updateRuntimeModeButton();
+      syncRuntimeActionVisibilityNow();
     };
     try {
       observerId = (Zotero as any).Prefs.registerObserver(
@@ -750,11 +841,29 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         onAgentPrefChange,
         true,
       );
+      observerBody.__llmAgentPrefObserverId = observerId;
       backendObserverId = (Zotero as any).Prefs.registerObserver(
         agentBackendKey,
         onAgentPrefChange,
         true,
       );
+      observerBody.__llmAgentBackendObserverId = backendObserverId;
+      claudeSourceObserverId = (Zotero as any).Prefs.registerObserver(
+        claudeSourceKey,
+        () => {
+          if (!(body as Element).isConnected) return;
+          invalidateClaudeRuntimeCapabilityCaches();
+          void getAgentApi().refreshActions(true).catch((error: unknown) => {
+            ztoolkit.log(
+              "LLM Agent: Failed to refresh actions after config source change",
+              error,
+            );
+          });
+          syncRuntimeActionVisibilityNow();
+        },
+        true,
+      );
+      observerBody.__llmClaudeSourceObserverId = claudeSourceObserverId;
     } catch {
       // Zotero.Prefs.registerObserver not available – no live sync
     }
@@ -5408,8 +5517,272 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     });
   }
 
+  let cachedClaudeRuntimeModels = cachedClaudeRuntimeModelsGlobal;
+  const cachedClaudeRuntimeEfforts = cachedClaudeRuntimeEffortsGlobal;
+  const claudeRuntimeEffortsInFlight = claudeRuntimeEffortsInFlightGlobal;
+  const CLAUDE_MODEL_ALIAS_OPTIONS = ["opus", "sonnet", "haiku"] as const;
+
+  const normalizeClaudeEffortForReasoningLevel = (
+    effort: string,
+  ): LLMReasoningLevel => {
+    switch ((effort || "").trim().toLowerCase()) {
+      case "max":
+        return "xhigh";
+      case "high":
+        return "high";
+      case "medium":
+        return "medium";
+      case "low":
+        return "low";
+      case "default":
+      default:
+        return "default";
+    }
+  };
+
+  const normalizeReasoningLevelForClaudeEffort = (
+    level: ReasoningLevelSelection,
+  ): string => {
+    switch (level) {
+      case "xhigh":
+        return "max";
+      case "high":
+        return "high";
+      case "medium":
+        return "medium";
+      case "low":
+        return "low";
+      case "default":
+      default:
+        return "default";
+    }
+  };
+
+  const getClaudeRuntimeModelPref = (): string => {
+    const raw = getStringPref("agentClaudeRuntimeModel").trim().toLowerCase();
+    if (raw === "opus" || raw === "sonnet" || raw === "haiku") {
+      return raw;
+    }
+    return "sonnet";
+  };
+
+  const setClaudeRuntimeModelPref = (value: string): void => {
+    const normalizedRaw = (value || "").trim().toLowerCase();
+    const normalized =
+      normalizedRaw === "opus" || normalizedRaw === "sonnet" || normalizedRaw === "haiku"
+        ? normalizedRaw
+        : "sonnet";
+    try {
+      Zotero.Prefs.set(
+        `${config.prefsPrefix}.agentClaudeRuntimeModel`,
+        normalized,
+        true,
+      );
+    } catch (_error) {
+      // best effort only
+    }
+  };
+
+  const getClaudeRuntimeEffortPref = (): string => {
+    const raw = getStringPref("agentClaudeRuntimeEffort").trim().toLowerCase();
+    if (!raw) return "default";
+    if (raw === "low" || raw === "medium" || raw === "high" || raw === "max" || raw === "default") {
+      return raw;
+    }
+    return "default";
+  };
+
+  const setClaudeRuntimeEffortPref = (value: string): void => {
+    const normalized = (() => {
+      const next = (value || "").trim().toLowerCase();
+      if (next === "low" || next === "medium" || next === "high" || next === "max" || next === "default") {
+        return next;
+      }
+      return "default";
+    })();
+    try {
+      Zotero.Prefs.set(
+        `${config.prefsPrefix}.agentClaudeRuntimeEffort`,
+        normalized,
+        true,
+      );
+    } catch (_error) {
+      // best effort only
+    }
+  };
+
+  const shouldUseClaudeRuntimeModelMenu = (): boolean => {
+    return (
+      getAgentModeEnabled() &&
+      getAgentBackendModePref() === "claude_bridge" &&
+      getCurrentRuntimeMode() === "agent"
+    );
+  };
+
+  const getBridgeModelSettingSources = (): string => {
+    const sourcePref = getStringPref("agentClaudeConfigSource").trim();
+    return sourcePref === "user-level" ? "user" : "project,local";
+  };
+
+  const getBridgeBaseUrl = (): string => {
+    const configured = getStringPref("agentBackendBridgeUrl").trim();
+    if (configured) return configured.replace(/\/+$/, "");
+    return "http://127.0.0.1:18787";
+  };
+
+  const fetchClaudeRuntimeModels = async (): Promise<string[]> => {
+    // Keep the Claude-runtime picker deterministic and aligned with Claudian UX.
+    // We intentionally expose alias choices only, then let runtime map them.
+    cachedClaudeRuntimeModels = [...CLAUDE_MODEL_ALIAS_OPTIONS];
+    cachedClaudeRuntimeModelsGlobal = cachedClaudeRuntimeModels;
+    claudeModelsCacheExpiresAtGlobal = Date.now() + CLAUDE_MODELS_CACHE_TTL_MS;
+    return cachedClaudeRuntimeModels;
+  };
+
+  const fetchClaudeRuntimeEfforts = async (
+    model: string,
+    force = false,
+  ): Promise<string[]> => {
+    const normalizedModel = (model || "").trim().toLowerCase() || "default";
+    const cached = cachedClaudeRuntimeEfforts.get(normalizedModel);
+    if (!force && cached && Date.now() < cached.expiresAt) {
+      return cached.efforts;
+    }
+    const baseUrl = getBridgeBaseUrl();
+    if (!baseUrl) {
+      return cached?.efforts || ["default", "low", "medium", "high"];
+    }
+    if (!force) {
+      const inFlight = claudeRuntimeEffortsInFlight.get(normalizedModel);
+      if (inFlight) return inFlight;
+    }
+    const run = async (): Promise<string[]> => {
+      const sources = encodeURIComponent(getBridgeModelSettingSources());
+      const modelParam = encodeURIComponent(normalizedModel);
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(new Error("timeout")),
+        CLAUDE_BRIDGE_FETCH_TIMEOUT_MS,
+      );
+      try {
+        const response = await fetch(
+          `${baseUrl}/efforts?settingSources=${sources}&model=${modelParam}`,
+          {
+            method: "GET",
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) {
+          throw new Error(`Bridge HTTP ${response.status}`);
+        }
+        const json = await response.json() as { efforts?: unknown };
+        const rawEfforts = Array.isArray(json.efforts) ? json.efforts : [];
+        const efforts = Array.from(
+          new Set(
+            rawEfforts
+              .filter((entry): entry is string => typeof entry === "string")
+              .map((entry) => entry.trim().toLowerCase())
+              .filter(
+                (entry) =>
+                  entry === "default" ||
+                  entry === "low" ||
+                  entry === "medium" ||
+                  entry === "high" ||
+                  entry === "max",
+              ),
+          ),
+        );
+        const normalizedEfforts = efforts.length > 0
+          ? efforts
+          : ["default", "low", "medium", "high"];
+        cachedClaudeRuntimeEfforts.set(normalizedModel, {
+          efforts: normalizedEfforts,
+          expiresAt: Date.now() + CLAUDE_EFFORTS_CACHE_TTL_MS,
+        });
+        return normalizedEfforts;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const promise = run()
+      .catch((_error) => {
+        const fallback = cached?.efforts || ["default", "low", "medium", "high"];
+        cachedClaudeRuntimeEfforts.set(normalizedModel, {
+          efforts: fallback,
+          expiresAt: Date.now() + CLAUDE_FETCH_FAILURE_COOLDOWN_MS,
+        });
+        return cached?.efforts || ["default", "low", "medium", "high"];
+      })
+      .finally(() => {
+        claudeRuntimeEffortsInFlight.delete(normalizedModel);
+      });
+    claudeRuntimeEffortsInFlight.set(normalizedModel, promise);
+    return promise;
+  };
+
+  const prewarmClaudeRuntimeCapabilities = (): void => {
+    if (
+      !getAgentModeEnabled() ||
+      getAgentBackendModePref() !== "claude_bridge"
+    ) {
+      return;
+    }
+    void fetchClaudeRuntimeModels()
+      .then((models) => {
+        const selected = getClaudeRuntimeModelPref() || "sonnet";
+        const targetModel = models.includes(selected) ? selected : (models[0] || "sonnet");
+        return fetchClaudeRuntimeEfforts(targetModel, false).then(() => undefined);
+      })
+      .catch(() => {
+        // silent warmup: never block UI
+      });
+  };
+  prewarmClaudeRuntimeCapabilities();
+  void getAgentApi().refreshActions(false).catch((error: unknown) => {
+    ztoolkit.log("LLM Agent: initial action refresh failed", error);
+  });
+
+  const toClaudeRuntimeModelEntries = (models: string[]): RuntimeModelEntry[] => {
+    const normalized = Array.from(
+      new Set(
+        models
+          .map((entry) => entry.trim().toLowerCase())
+          .filter(
+            (entry) =>
+              entry === "opus" ||
+              entry === "sonnet" ||
+              entry === "haiku",
+          ),
+      ),
+    );
+    const finalModels = normalized.length
+      ? normalized
+      : [...CLAUDE_MODEL_ALIAS_OPTIONS];
+    return finalModels.map((model, index) => ({
+      entryId: `claude_runtime::${model}`,
+      groupId: "claude-runtime",
+      model,
+      apiBase: "",
+      apiKey: "",
+      authMode: "api_key",
+      providerProtocol: "anthropic_messages",
+      providerLabel: "Claude Code",
+      providerOrder: index,
+      displayModelLabel: model,
+      advanced: {
+        temperature: 0.7,
+        maxTokens: 8192,
+      },
+    }));
+  };
+
   const getModelChoices = () => {
-    const choices = getAvailableModelEntries();
+    const choices = shouldUseClaudeRuntimeModelMenu()
+      ? toClaudeRuntimeModelEntries(cachedClaudeRuntimeModels.length > 0
+        ? cachedClaudeRuntimeModels
+        : [...CLAUDE_MODEL_ALIAS_OPTIONS])
+      : getAvailableModelEntries();
     const groupedChoices: Array<{
       providerLabel: string;
       entries: RuntimeModelEntry[];
@@ -5435,13 +5808,24 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const getSelectedModelInfo = () => {
     const { choices, groupedChoices } = getModelChoices();
-    const selectedEntry = item ? getSelectedModelEntryForItem(item.id) : null;
+    const selectedEntry = shouldUseClaudeRuntimeModelMenu()
+      ? (() => {
+          const selectedModel = getClaudeRuntimeModelPref();
+          return (
+            choices.find((entry) => entry.model === selectedModel) ||
+            choices[0] ||
+            null
+          );
+        })()
+      : item
+        ? getSelectedModelEntryForItem(item.id)
+        : null;
     const currentModel =
       selectedEntry?.model ||
       choices[0]?.model ||
       getStringPref("modelPrimary") ||
       getStringPref("model") ||
-      "default";
+      "sonnet";
     const currentModelDisplay =
       selectedEntry?.displayModelLabel || currentModel;
     const currentModelHint = selectedEntry
@@ -5500,17 +5884,30 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   let layoutRetryScheduled = false;
   const applyResponsiveActionButtonsLayout = () => {
-    if (!modelBtn || !actionsLeft) return;
-    const modelLabel = modelBtn.dataset.modelLabel || "default";
-    const modelHint = modelBtn.dataset.modelHint || "";
+    if (!actionsLeft) return;
+    const useClaudeButtons = shouldUseClaudeRuntimeModelMenu();
+    const effectiveModelBtn =
+      useClaudeButtons && claudeModelBtn ? claudeModelBtn : modelBtn;
+    const effectiveModelSlot =
+      useClaudeButtons && claudeModelSlot ? claudeModelSlot : modelSlot;
+    const effectiveReasoningBtn =
+      useClaudeButtons && claudeReasoningBtn ? claudeReasoningBtn : reasoningBtn;
+    const effectiveReasoningSlot =
+      useClaudeButtons && claudeReasoningSlot ? claudeReasoningSlot : reasoningSlot;
+    if (!effectiveModelBtn) return;
+    const modelControlHidden =
+      effectiveModelSlot?.dataset.hiddenByRuntime === "true" ||
+      effectiveModelSlot?.style.display === "none";
+    const modelLabel = effectiveModelBtn.dataset.modelLabel || "default";
+    const modelHint = effectiveModelBtn.dataset.modelHint || "";
     const modelCanUseTwoLineWrap =
       [...(modelLabel || "").trim()].length >
       ACTION_LAYOUT_MODEL_WRAP_MIN_CHARS;
     const reasoningLabel =
-      reasoningBtn?.dataset.reasoningLabel ||
-      reasoningBtn?.textContent ||
+      effectiveReasoningBtn?.dataset.reasoningLabel ||
+      effectiveReasoningBtn?.textContent ||
       "off";
-    const reasoningHint = reasoningBtn?.dataset.reasoningHint || "";
+    const reasoningHint = effectiveReasoningBtn?.dataset.reasoningHint || "";
 
     const immediateAvailableWidth = (() => {
       const rowWidth = actionsRow?.clientWidth || 0;
@@ -5610,7 +6007,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         getComputedSizePx(style, "border-left-width") +
         getComputedSizePx(style, "border-right-width");
       const chevronAllowance =
-        button === modelBtn || button === reasoningBtn ? 16 : 0;
+        button === effectiveModelBtn || button === effectiveReasoningBtn
+          ? 16
+          : 0;
       return Math.ceil(
         wrappedTextWidth + paddingWidth + borderWidth + chevronAllowance,
       );
@@ -5674,22 +6073,27 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const sendSlot = sendBtn?.parentElement as HTMLElement | null;
 
     const getModelWidth = (mode: ModelLabelMode) => {
-      if (!modelBtn) return 0;
+      if (!effectiveModelBtn) return 0;
+      if (modelControlHidden) return 0;
       if (mode === "icon") return ACTION_LAYOUT_DROPDOWN_ICON_WIDTH_PX;
       const maxLines =
         mode === "full-wrap2" ? ACTION_LAYOUT_MODEL_FULL_MAX_LINES : 1;
       return getFullSlotRequiredWidth(
-        modelSlot,
-        modelBtn,
+        effectiveModelSlot,
+        effectiveModelBtn,
         modelLabel,
         maxLines,
       );
     };
 
     const getReasoningWidth = (mode: ActionLabelMode) => {
-      if (!reasoningBtn) return 0;
+      if (!effectiveReasoningBtn) return 0;
       return mode === "full"
-        ? getFullSlotRequiredWidth(reasoningSlot, reasoningBtn, reasoningLabel)
+        ? getFullSlotRequiredWidth(
+            effectiveReasoningSlot,
+            effectiveReasoningBtn,
+            reasoningLabel,
+          )
         : ACTION_LAYOUT_DROPDOWN_ICON_WIDTH_PX;
     };
 
@@ -5795,20 +6199,23 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       );
       setSendButtonLabel("full");
 
-      modelBtn.classList.toggle("llm-model-btn-collapsed", false);
-      modelSlot?.classList.toggle("llm-model-dropdown-collapsed", false);
-      modelBtn.classList.toggle("llm-model-btn-wrap-2line", false);
-      modelBtn.textContent = modelLabel;
-      modelBtn.title = modelHint;
+      effectiveModelBtn.classList.toggle("llm-model-btn-collapsed", false);
+      effectiveModelSlot?.classList.toggle("llm-model-dropdown-collapsed", false);
+      effectiveModelBtn.classList.toggle("llm-model-btn-wrap-2line", false);
+      effectiveModelBtn.textContent = modelLabel;
+      effectiveModelBtn.title = modelHint;
 
-      if (reasoningBtn) {
-        reasoningBtn.classList.toggle("llm-reasoning-btn-collapsed", false);
-        reasoningSlot?.classList.toggle(
+      if (effectiveReasoningBtn) {
+        effectiveReasoningBtn.classList.toggle(
+          "llm-reasoning-btn-collapsed",
+          false,
+        );
+        effectiveReasoningSlot?.classList.toggle(
           "llm-reasoning-dropdown-collapsed",
           false,
         );
-        reasoningBtn.textContent = reasoningLabel;
-        reasoningBtn.title = reasoningHint;
+        effectiveReasoningBtn.textContent = reasoningLabel;
+        effectiveReasoningBtn.title = reasoningHint;
       }
     };
 
@@ -5834,39 +6241,44 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       setSendButtonLabel(state.send);
 
       const modelCollapsed = state.model === "icon";
-      modelBtn.classList.toggle("llm-model-btn-collapsed", modelCollapsed);
-      modelSlot?.classList.toggle(
+      effectiveModelBtn.classList.toggle(
+        "llm-model-btn-collapsed",
+        modelCollapsed,
+      );
+      effectiveModelSlot?.classList.toggle(
         "llm-model-dropdown-collapsed",
         modelCollapsed,
       );
-      modelBtn.classList.toggle(
+      effectiveModelBtn.classList.toggle(
         "llm-model-btn-wrap-2line",
         state.model === "full-wrap2",
       );
       if (modelCollapsed) {
-        modelBtn.textContent = "";
-        modelBtn.title = modelHint ? `${modelLabel}\n${modelHint}` : modelLabel;
+        effectiveModelBtn.textContent = "";
+        effectiveModelBtn.title = modelHint
+          ? `${modelLabel}\n${modelHint}`
+          : modelLabel;
       } else {
-        modelBtn.textContent = modelLabel;
-        modelBtn.title = modelHint;
+        effectiveModelBtn.textContent = modelLabel;
+        effectiveModelBtn.title = modelHint;
       }
 
-      if (reasoningBtn) {
+      if (effectiveReasoningBtn) {
         const reasoningCollapsed = state.reasoning === "icon";
-        reasoningBtn.classList.toggle(
+        effectiveReasoningBtn.classList.toggle(
           "llm-reasoning-btn-collapsed",
           reasoningCollapsed,
         );
-        reasoningSlot?.classList.toggle(
+        effectiveReasoningSlot?.classList.toggle(
           "llm-reasoning-dropdown-collapsed",
           reasoningCollapsed,
         );
         if (!reasoningCollapsed) {
-          reasoningBtn.textContent = reasoningLabel;
-          reasoningBtn.title = reasoningHint;
+          effectiveReasoningBtn.textContent = reasoningLabel;
+          effectiveReasoningBtn.title = reasoningHint;
         } else {
-          reasoningBtn.textContent = REASONING_COMPACT_LABEL;
-          reasoningBtn.title = reasoningHint
+          effectiveReasoningBtn.textContent = REASONING_COMPACT_LABEL;
+          effectiveReasoningBtn.title = reasoningHint
             ? `${reasoningLabel}\n${reasoningHint}`
             : reasoningLabel;
         }
@@ -5949,17 +6361,48 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     applyState(iconOnlyState);
   };
 
+  const getActiveModelMenu = (): HTMLDivElement | null =>
+    shouldUseClaudeRuntimeModelMenu() ? (claudeModelMenu || modelMenu) : modelMenu;
+
+  const getActiveReasoningMenu = (): HTMLDivElement | null =>
+    shouldUseClaudeRuntimeModelMenu()
+      ? (claudeReasoningMenu || reasoningMenu)
+      : reasoningMenu;
+
+  const isAnyModelMenuOpen = (): boolean =>
+    Boolean(
+      (modelMenu && isFloatingMenuOpen(modelMenu)) ||
+        (claudeModelMenu && isFloatingMenuOpen(claudeModelMenu)),
+    );
+
+  const isAnyReasoningMenuOpen = (): boolean =>
+    Boolean(
+      (reasoningMenu && isFloatingMenuOpen(reasoningMenu)) ||
+        (claudeReasoningMenu && isFloatingMenuOpen(claudeReasoningMenu)),
+    );
+
   const updateModelButton = () => {
-    if (!item || !modelBtn) return;
+    const liveRefs = getPanelDomRefs(body);
+    const liveModelBtn = liveRefs.modelBtn || modelBtn;
+    const liveClaudeModelBtn = liveRefs.claudeModelBtn || claudeModelBtn;
+    if (!liveModelBtn) return;
+    const disabled = !item;
     withScrollGuard(chatBox, conversationKey, () => {
       const { choices, currentModel, currentModelDisplay, currentModelHint } =
         getSelectedModelInfo();
       const hasSecondary = choices.length > 1;
-      modelBtn.dataset.modelLabel = `${currentModelDisplay || currentModel || "default"}`;
-      modelBtn.dataset.modelHint = hasSecondary
+      liveModelBtn.dataset.modelLabel = `${currentModelDisplay || currentModel || "sonnet"}`;
+      liveModelBtn.dataset.modelHint = hasSecondary
         ? currentModelHint
         : currentModelHint || "Only one model is configured";
-      modelBtn.disabled = !item;
+      liveModelBtn.disabled = disabled;
+      if (liveClaudeModelBtn) {
+        liveClaudeModelBtn.dataset.modelLabel = liveModelBtn.dataset.modelLabel || "sonnet";
+        liveClaudeModelBtn.dataset.modelHint = liveModelBtn.dataset.modelHint || "";
+        liveClaudeModelBtn.disabled = disabled;
+        liveClaudeModelBtn.textContent = liveClaudeModelBtn.dataset.modelLabel || "sonnet";
+        liveClaudeModelBtn.title = liveClaudeModelBtn.dataset.modelHint || "";
+      }
       applyResponsiveActionButtonsLayout();
       updateImagePreviewPreservingScroll();
     });
@@ -6017,18 +6460,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   };
 
   const rebuildModelMenu = () => {
-    if (!item || !modelMenu) return;
+    const targetMenu = getActiveModelMenu();
+    if (!item || !targetMenu) return;
     const { groupedChoices, selectedEntryId } = getSelectedModelInfo();
 
-    modelMenu.innerHTML = "";
-    appendDropdownInstruction(modelMenu, t("Select model"), "llm-model-menu-hint");
+    targetMenu.innerHTML = "";
+    appendDropdownInstruction(targetMenu, t("Select model"), "llm-model-menu-hint");
     if (!groupedChoices.length) {
-      appendModelMenuEmptyState(modelMenu, t("No models configured yet."));
+      appendModelMenuEmptyState(targetMenu, t("No models configured yet."));
       return;
     }
 
     for (const group of groupedChoices) {
-      appendModelProviderSection(modelMenu, group.providerLabel);
+      appendModelProviderSection(targetMenu, group.providerLabel);
       for (const entry of group.entries) {
         const isSelected = entry.entryId === selectedEntryId;
         const option = createElement(
@@ -6038,8 +6482,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           {
             type: "button",
             textContent: isSelected
-              ? `\u2713 ${entry.displayModelLabel || "default"}`
-              : entry.displayModelLabel || "default",
+              ? `\u2713 ${entry.displayModelLabel || "sonnet"}`
+              : entry.displayModelLabel || "sonnet",
             title: `${entry.providerLabel} · ${entry.model}`,
           },
         );
@@ -6055,43 +6499,50 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             previousNonWebchatModelId = selectedEntryId || null;
           }
 
-          setSelectedModelEntryForItem(item.id, entry.entryId);
-          setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
-          setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+          const usingClaudeModelMenu = shouldUseClaudeRuntimeModelMenu();
+          if (usingClaudeModelMenu) {
+            setClaudeRuntimeModelPref(entry.model || "sonnet");
+          } else {
+            setSelectedModelEntryForItem(item.id, entry.entryId);
+          }
+          closeModelMenu();
+          closeReasoningMenu();
 
-          // Auto-correct PDF mode for models that don't support it (e.g. Copilot,
-          // non-qwen-long Qwen models).  Downgrade to text/mineru so the user
-          // doesn't end up with a broken send.
-          const newPdfSupport = getModelPdfSupport(
-            entry.model, entry.providerProtocol, entry.authMode, entry.apiBase,
-          );
-          const shouldDowngrade =
-            newPdfSupport === "none" ||
-            (newPdfSupport === "upload" &&
-              (entry.apiBase || "").toLowerCase().includes("dashscope") &&
-              !/^qwen-long(?:[.-]|$)/i.test(entry.model));
-          if (shouldDowngrade) {
-            const papers = normalizePaperContextEntries(
-              selectedPaperContextCache.get(item.id) || [],
+          if (!usingClaudeModelMenu) {
+            // Auto-correct PDF mode for models that don't support it (e.g. Copilot,
+            // non-qwen-long Qwen models).  Downgrade to text/mineru so the user
+            // doesn't end up with a broken send.
+            const newPdfSupport = getModelPdfSupport(
+              entry.model, entry.providerProtocol, entry.authMode, entry.apiBase,
             );
-            let didDowngrade = false;
-            for (const pc of papers) {
-              if (resolvePaperContentSourceMode(item.id, pc) === "pdf") {
-                const mineruAvailable = isPaperContextMineru(pc);
-                setPaperContentSourceOverride(
-                  item.id, pc, mineruAvailable ? "mineru" : "text",
-                );
-                didDowngrade = true;
+            const shouldDowngrade =
+              newPdfSupport === "none" ||
+              (newPdfSupport === "upload" &&
+                (entry.apiBase || "").toLowerCase().includes("dashscope") &&
+                !/^qwen-long(?:[.-]|$)/i.test(entry.model));
+            if (shouldDowngrade) {
+              const papers = normalizePaperContextEntries(
+                selectedPaperContextCache.get(item.id) || [],
+              );
+              let didDowngrade = false;
+              for (const pc of papers) {
+                if (resolvePaperContentSourceMode(item.id, pc) === "pdf") {
+                  const mineruAvailable = isPaperContextMineru(pc);
+                  setPaperContentSourceOverride(
+                    item.id, pc, mineruAvailable ? "mineru" : "text",
+                  );
+                  didDowngrade = true;
+                }
               }
-            }
-            if (didDowngrade) {
-              updatePaperPreviewPreservingScroll();
-              if (status) {
-                setStatus(
-                  status,
-                  t("PDF mode is not supported by this model. Switched to Text/MD mode."),
-                  "warning",
-                );
+              if (didDowngrade) {
+                updatePaperPreviewPreservingScroll();
+                if (status) {
+                  setStatus(
+                    status,
+                    t("PDF mode is not supported by this model. Switched to Text/MD mode."),
+                    "warning",
+                  );
+                }
               }
             }
           }
@@ -6141,10 +6592,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
           updateModelButton();
           updateReasoningButton();
+          if (usingClaudeModelMenu) {
+            const selectedModel = (entry.model || "sonnet").trim().toLowerCase() || "sonnet";
+            void fetchClaudeRuntimeEfforts(selectedModel, false).then(() => {
+              updateReasoningButton();
+              if (isAnyReasoningMenuOpen()) {
+                rebuildReasoningMenu();
+              }
+            });
+          }
         };
         option.addEventListener("pointerdown", applyModelSelection);
         option.addEventListener("click", applyModelSelection);
-        modelMenu.appendChild(option);
+        targetMenu.appendChild(option);
       }
     }
   };
@@ -6190,8 +6650,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           {
             type: "button",
             textContent: isSelected
-              ? `\u2713 ${entry.displayModelLabel || "default"}`
-              : entry.displayModelLabel || "default",
+              ? `\u2713 ${entry.displayModelLabel || "sonnet"}`
+              : entry.displayModelLabel || "sonnet",
             title: `${entry.providerLabel} · ${entry.model}`,
           },
         );
@@ -6233,6 +6693,34 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         options: [] as ReasoningOption[],
         enabledLevels: [] as LLMReasoningLevel[],
         selectedLevel: "none" as ReasoningLevelSelection,
+      };
+    }
+    if (shouldUseClaudeRuntimeModelMenu()) {
+      const { currentModel } = getSelectedModelInfo();
+      const cacheKey = (currentModel || "").trim().toLowerCase() || "sonnet";
+      const effortSet = cachedClaudeRuntimeEfforts.get(cacheKey);
+      const efforts = effortSet?.efforts?.length
+        ? effortSet.efforts
+        : ["default", "low", "medium", "high"];
+      const options: ReasoningOption[] = efforts.map((effort) => ({
+        level: normalizeClaudeEffortForReasoningLevel(effort),
+        enabled: true,
+        label: effort,
+      }));
+      const enabledLevels = options.map((option) => option.level);
+      let selectedLevel = normalizeClaudeEffortForReasoningLevel(
+        getClaudeRuntimeEffortPref(),
+      ) as ReasoningLevelSelection;
+      if (!enabledLevels.includes(selectedLevel as LLMReasoningLevel)) {
+        selectedLevel = enabledLevels[0] || "default";
+      }
+      selectedReasoningCache.set(item.id, selectedLevel);
+      return {
+        provider: "anthropic" as const,
+        currentModel,
+        options,
+        enabledLevels,
+        selectedLevel,
       };
     }
     const { currentModel } = getSelectedModelInfo();
@@ -6361,7 +6849,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   };
 
   const updateReasoningButton = () => {
-    if (!item || !reasoningBtn) return;
+    const liveRefs = getPanelDomRefs(body);
+    const liveReasoningBtn = liveRefs.reasoningBtn || reasoningBtn;
+    const liveClaudeReasoningBtn =
+      liveRefs.claudeReasoningBtn || claudeReasoningBtn;
+    if (!liveReasoningBtn) return;
+    const disabled = !item;
     withScrollGuard(chatBox, conversationKey, () => {
       // [webchat] Hide reasoning dropdown — users control thinking mode on chatgpt.com
       if (isWebChatMode()) {
@@ -6385,33 +6878,41 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const active =
         available && isReasoningDisplayLabelActive(resolvedReasoningLabel);
       const reasoningLabel = resolvedReasoningLabel;
-      reasoningBtn.disabled = !item;
-      reasoningBtn.classList.toggle(
+      liveReasoningBtn.disabled = disabled;
+      liveReasoningBtn.classList.toggle(
         "llm-reasoning-btn-unavailable",
         !available,
       );
-      reasoningBtn.classList.toggle("llm-reasoning-btn-active", active);
-      reasoningBtn.style.background = "";
-      reasoningBtn.style.borderColor = "";
-      reasoningBtn.style.color = "";
+      liveReasoningBtn.classList.toggle("llm-reasoning-btn-active", active);
+      liveReasoningBtn.style.background = "";
+      liveReasoningBtn.style.borderColor = "";
+      liveReasoningBtn.style.color = "";
       const reasoningHint = "Click to adjust reasoning level";
-      reasoningBtn.dataset.reasoningLabel = reasoningLabel;
-      reasoningBtn.dataset.reasoningHint = reasoningHint;
+      liveReasoningBtn.dataset.reasoningLabel = reasoningLabel;
+      liveReasoningBtn.dataset.reasoningHint = reasoningHint;
+      if (liveClaudeReasoningBtn) {
+        liveClaudeReasoningBtn.disabled = disabled;
+        liveClaudeReasoningBtn.dataset.reasoningLabel = reasoningLabel;
+        liveClaudeReasoningBtn.dataset.reasoningHint = reasoningHint;
+        liveClaudeReasoningBtn.textContent = reasoningLabel;
+        liveClaudeReasoningBtn.title = reasoningHint;
+      }
       applyResponsiveActionButtonsLayout();
     });
   };
 
   const rebuildReasoningMenu = () => {
-    if (!item || !reasoningMenu) return;
+    const targetMenu = getActiveReasoningMenu();
+    if (!item || !targetMenu) return;
     const { provider, currentModel, options, selectedLevel, enabledLevels } =
       getReasoningState();
-    reasoningMenu.innerHTML = "";
+    targetMenu.innerHTML = "";
 
     // [webchat] Show dedicated ChatGPT mode options
     if (isWebChatMode()) {
-      reasoningMenu.innerHTML = "";
+      targetMenu.innerHTML = "";
       appendDropdownInstruction(
-        reasoningMenu,
+        targetMenu,
         "ChatGPT mode",
         "llm-reasoning-menu-section",
       );
@@ -6435,18 +6936,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           selectedReasoningCache.clear();
           selectedReasoningCache.set(item.id, mode.level as any);
           setLastUsedReasoningLevel(mode.level as any);
-          setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+          setFloatingMenuOpen(targetMenu, REASONING_MENU_OPEN_CLASS, false);
           updateReasoningButton();
         };
         option.addEventListener("pointerdown", applyMode);
         option.addEventListener("click", applyMode);
-        reasoningMenu.appendChild(option);
+        targetMenu.appendChild(option);
       }
       return;
     }
 
+
     appendDropdownInstruction(
-      reasoningMenu,
+      targetMenu,
       t("Reasoning level"),
       "llm-reasoning-menu-section",
     );
@@ -6460,20 +6962,23 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           textContent: "\u2713 off",
         },
       );
-      const applyOffSelection = (e: Event) => {
+        const applyOffSelection = (e: Event) => {
         if (!isPrimaryPointerEvent(e)) return;
         e.preventDefault();
         e.stopPropagation();
-        if (!item) return;
-        selectedReasoningCache.clear();
-        selectedReasoningCache.set(item.id, "none");
-        setLastUsedReasoningLevel("none");
-        setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
-        updateReasoningButton();
+          if (!item) return;
+          selectedReasoningCache.clear();
+          selectedReasoningCache.set(item.id, "none");
+          if (shouldUseClaudeRuntimeModelMenu()) {
+            setClaudeRuntimeEffortPref("default");
+          }
+          setLastUsedReasoningLevel("none");
+          closeReasoningMenu();
+          updateReasoningButton();
       };
       offOption.addEventListener("pointerdown", applyOffSelection);
       offOption.addEventListener("click", applyOffSelection);
-      reasoningMenu.appendChild(offOption);
+      targetMenu.appendChild(offOption);
       return;
     }
     for (const optionState of options) {
@@ -6503,8 +7008,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           if (!item) return;
           selectedReasoningCache.clear();
           selectedReasoningCache.set(item.id, level);
+          if (shouldUseClaudeRuntimeModelMenu()) {
+            setClaudeRuntimeEffortPref(
+              normalizeReasoningLevelForClaudeEffort(level),
+            );
+          }
           setLastUsedReasoningLevel(level);
-          setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+          closeReasoningMenu();
           updateReasoningButton();
         };
         option.addEventListener("pointerdown", applyReasoningSelection);
@@ -6513,17 +7023,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         option.disabled = true;
         option.classList.add("llm-reasoning-option-disabled");
       }
-      reasoningMenu.appendChild(option);
+      targetMenu.appendChild(option);
     }
   };
 
   const syncModelFromPrefs = () => {
     updateModelButton();
     updateReasoningButton();
-    if (isFloatingMenuOpen(modelMenu)) {
+    if (isAnyModelMenuOpen()) {
       rebuildModelMenu();
     }
-    if (isFloatingMenuOpen(reasoningMenu)) {
+    if (isAnyReasoningMenuOpen()) {
       rebuildReasoningMenu();
     }
   };
@@ -6949,6 +7459,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const getSelectedProfile = () => {
     if (!item) return null;
+    if (shouldUseClaudeRuntimeModelMenu()) {
+      const selectedModel = getSelectedModelInfo().currentModel || "sonnet";
+      return {
+        entryId: `claude_runtime::${selectedModel}`,
+        model: selectedModel,
+        apiBase: "",
+        apiKey: "",
+        providerLabel: "Claude Code",
+        authMode: "api_key" as const,
+        providerProtocol: "anthropic_messages" as const,
+      };
+    }
     return getSelectedModelEntryForItem(item.id);
   };
 
@@ -6961,6 +7483,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const getSelectedReasoning = (): LLMReasoningConfig | undefined => {
     if (!item) return undefined;
+    if (shouldUseClaudeRuntimeModelMenu()) {
+      return {
+        provider: "anthropic",
+        level: normalizeClaudeEffortForReasoningLevel(
+          getClaudeRuntimeEffortPref(),
+        ),
+      };
+    }
     const { provider, enabledLevels, selectedLevel } = getReasoningState();
     if (provider === "unsupported" || selectedLevel === "none")
       return undefined;
@@ -7146,6 +7676,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   type ActionPickerItem = { name: string; description: string; inputSchema: object };
   let actionPickerItems: ActionPickerItem[] = [];
   let actionPickerActiveIndex = 0;
+  let slashActionsRefreshInFlight = false;
+  let slashActionsLastRefreshAt = 0;
+  const SLASH_ACTIONS_REFRESH_COOLDOWN_MS = 10_000;
   const isActionPickerOpen = () =>
     Boolean(actionPicker && actionPicker.style.display !== "none");
   const closeActionPicker = () => {
@@ -7211,17 +7744,32 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (getCurrentRuntimeMode() === "agent") {
       const query = token.query.toLowerCase().trim();
       renderAgentActionsInSlashMenu(query);
-      const maybeRefresh = (getAgentApi() as unknown as { refreshActions?: () => Promise<void> }).refreshActions;
-      if (typeof maybeRefresh === "function") {
-        void maybeRefresh().then(() => {
-          if (getCurrentRuntimeMode() !== "agent") return;
-          if (!getActiveActionToken()) return;
-          renderAgentActionsInSlashMenu(query);
-          if (isFloatingMenuOpen(slashMenu)) {
-            slashMenuActiveIndex = 0;
-            updateSlashMenuSelection();
-          }
-        });
+      const maybeRefresh = (getAgentApi() as unknown as { refreshActions?: (force?: boolean) => Promise<void> }).refreshActions;
+      const shouldRefreshNow =
+        typeof maybeRefresh === "function" &&
+        !shouldUseClaudeRuntimeModelMenu() &&
+        !slashActionsRefreshInFlight &&
+        Date.now() - slashActionsLastRefreshAt >=
+          SLASH_ACTIONS_REFRESH_COOLDOWN_MS;
+      if (shouldRefreshNow) {
+        slashActionsRefreshInFlight = true;
+        slashActionsLastRefreshAt = Date.now();
+        void maybeRefresh(false)
+          .then(() => {
+            if (getCurrentRuntimeMode() !== "agent") return;
+            if (!getActiveActionToken()) return;
+            renderAgentActionsInSlashMenu(query);
+            if (isFloatingMenuOpen(slashMenu)) {
+              slashMenuActiveIndex = 0;
+              updateSlashMenuSelection();
+            }
+          })
+          .catch((error) => {
+            ztoolkit.log("LLM Agent: Failed to refresh slash actions", error);
+          })
+          .finally(() => {
+            slashActionsRefreshInFlight = false;
+          });
       }
     }
     if (!isFloatingMenuOpen(slashMenu)) {
@@ -9201,6 +9749,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const nextMode: ChatRuntimeMode =
         getCurrentRuntimeMode() === "agent" ? "chat" : "agent";
       setCurrentRuntimeMode(nextMode);
+      updateModelButton();
+      updateReasoningButton();
+      applyResponsiveActionButtonsLayout();
       if (nextMode === "chat" && agentQueuedInputs.size()) {
         agentQueuedInputs.clear();
       }
@@ -9928,9 +10479,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     });
   }
 
-  const openModelMenu = () => {
-    if (!modelMenu || !modelBtn) return;
-    if ((modelBtn as HTMLButtonElement).disabled) return;
+  const openModelMenu = async (anchorBtn?: HTMLButtonElement | null) => {
+    const targetMenu = getActiveModelMenu();
+    const defaultAnchor = shouldUseClaudeRuntimeModelMenu()
+      ? (claudeModelBtn || modelBtn)
+      : modelBtn;
+    if (!targetMenu || !defaultAnchor) return;
+    const anchor = anchorBtn || defaultAnchor;
+    if (!anchor) return;
     closeSlashMenu();
     closeRetryModelMenu();
     closeReasoningMenu();
@@ -9938,21 +10494,45 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     closeHistoryNewMenu();
     closeHistoryMenu();
     updateModelButton();
+    if (
+      shouldUseClaudeRuntimeModelMenu() &&
+      cachedClaudeRuntimeModelsGlobal.length === 0 &&
+      !claudeRuntimeModelsInFlightGlobal
+    ) {
+      void fetchClaudeRuntimeModels().then(() => {
+        updateModelButton();
+        if (isAnyModelMenuOpen()) {
+          rebuildModelMenu();
+          positionFloatingMenu(body, targetMenu, anchor);
+        }
+      });
+    }
     rebuildModelMenu();
-    if (!modelMenu.childElementCount) {
+    if (!targetMenu.childElementCount) {
       closeModelMenu();
       return;
     }
-    positionFloatingMenu(body, modelMenu, modelBtn);
-    setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, true);
+    positionFloatingMenu(body, targetMenu, anchor);
+    setFloatingMenuOpen(targetMenu, MODEL_MENU_OPEN_CLASS, true);
   };
 
   const closeModelMenu = () => {
-    setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
+    if (modelMenu) {
+      setFloatingMenuOpen(modelMenu, MODEL_MENU_OPEN_CLASS, false);
+    }
+    if (claudeModelMenu) {
+      setFloatingMenuOpen(claudeModelMenu, MODEL_MENU_OPEN_CLASS, false);
+    }
   };
 
-  const openReasoningMenu = () => {
-    if (!reasoningMenu || !reasoningBtn) return;
+  const openReasoningMenu = async (anchorBtn?: HTMLButtonElement | null) => {
+    const targetMenu = getActiveReasoningMenu();
+    const defaultAnchor = shouldUseClaudeRuntimeModelMenu()
+      ? (claudeReasoningBtn || reasoningBtn)
+      : reasoningBtn;
+    if (!targetMenu || !defaultAnchor) return;
+    const anchor = anchorBtn || defaultAnchor;
+    if (!anchor) return;
     closeSlashMenu();
     closeRetryModelMenu();
     closeModelMenu();
@@ -9960,17 +10540,36 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     closeHistoryNewMenu();
     closeHistoryMenu();
     updateReasoningButton();
+    if (shouldUseClaudeRuntimeModelMenu()) {
+      const selectedModel =
+        (getSelectedModelInfo().currentModel || "sonnet").trim().toLowerCase() || "sonnet";
+      const hasCached = cachedClaudeRuntimeEffortsGlobal.has(selectedModel);
+      if (!hasCached && !claudeRuntimeEffortsInFlightGlobal.get(selectedModel)) {
+        void fetchClaudeRuntimeEfforts(selectedModel, false).then(() => {
+          updateReasoningButton();
+          if (isAnyReasoningMenuOpen()) {
+            rebuildReasoningMenu();
+            positionFloatingMenu(body, targetMenu, anchor);
+          }
+        });
+      }
+    }
     rebuildReasoningMenu();
-    if (!reasoningMenu.childElementCount) {
+    if (!targetMenu.childElementCount) {
       closeReasoningMenu();
       return;
     }
-    positionFloatingMenu(body, reasoningMenu, reasoningBtn);
-    setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, true);
+    positionFloatingMenu(body, targetMenu, anchor);
+    setFloatingMenuOpen(targetMenu, REASONING_MENU_OPEN_CLASS, true);
   };
 
   const closeReasoningMenu = () => {
-    setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+    if (reasoningMenu) {
+      setFloatingMenuOpen(reasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+    }
+    if (claudeReasoningMenu) {
+      setFloatingMenuOpen(claudeReasoningMenu, REASONING_MENU_OPEN_CLASS, false);
+    }
   };
 
   const openRetryModelMenu = (anchor: HTMLButtonElement) => {
@@ -10197,9 +10796,21 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     modelBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || !modelMenu || (modelBtn as HTMLButtonElement).disabled) return;
-      if (!isFloatingMenuOpen(modelMenu)) {
-        openModelMenu();
+      if (!item) return;
+      if (!isAnyModelMenuOpen()) {
+        void openModelMenu();
+      } else {
+        closeModelMenu();
+      }
+    });
+  }
+  if (claudeModelBtn) {
+    claudeModelBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      if (!isAnyModelMenuOpen()) {
+        void openModelMenu(claudeModelBtn);
       } else {
         closeModelMenu();
       }
@@ -10210,9 +10821,21 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     reasoningBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || !reasoningMenu || reasoningBtn.disabled) return;
-      if (!isFloatingMenuOpen(reasoningMenu)) {
-        openReasoningMenu();
+      if (!item || reasoningBtn.disabled) return;
+      if (!isAnyReasoningMenuOpen()) {
+        void openReasoningMenu();
+      } else {
+        closeReasoningMenu();
+      }
+    });
+  }
+  if (claudeReasoningBtn) {
+    claudeReasoningBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item || claudeReasoningBtn.disabled) return;
+      if (!isAnyReasoningMenuOpen()) {
+        void openReasoningMenu(claudeReasoningBtn);
       } else {
         closeReasoningMenu();
       }
@@ -10228,10 +10851,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     doc.addEventListener("mousedown", (e: Event) => {
       const me = e as MouseEvent;
       const modelMenus = Array.from(
-        doc.querySelectorAll("#llm-model-menu"),
+        doc.querySelectorAll("#llm-model-menu, #llm-claude-model-menu"),
       ) as HTMLDivElement[];
       const reasoningMenus = Array.from(
-        doc.querySelectorAll("#llm-reasoning-menu"),
+        doc.querySelectorAll("#llm-reasoning-menu, #llm-claude-reasoning-menu"),
       ) as HTMLDivElement[];
       const target = e.target as Node | null;
       const retryButtonTarget = isElementNode(target)
@@ -10267,9 +10890,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         const modelButtonEl = panelRoot?.querySelector(
           "#llm-model-toggle",
         ) as HTMLButtonElement | null;
+        const claudeModelButtonEl = panelRoot?.querySelector(
+          "#llm-claude-model-toggle",
+        ) as HTMLButtonElement | null;
         if (
           !target ||
-          (!modelMenuEl.contains(target) && !modelButtonEl?.contains(target))
+          (!modelMenuEl.contains(target) &&
+            !modelButtonEl?.contains(target) &&
+            !claudeModelButtonEl?.contains(target))
         ) {
           setFloatingMenuOpen(modelMenuEl, MODEL_MENU_OPEN_CLASS, false);
         }
@@ -10280,10 +10908,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         const reasoningButtonEl = panelRoot?.querySelector(
           "#llm-reasoning-toggle",
         ) as HTMLButtonElement | null;
+        const claudeReasoningButtonEl = panelRoot?.querySelector(
+          "#llm-claude-reasoning-toggle",
+        ) as HTMLButtonElement | null;
         if (
           !target ||
           (!reasoningMenuEl.contains(target) &&
-            !reasoningButtonEl?.contains(target))
+            !reasoningButtonEl?.contains(target) &&
+            !claudeReasoningButtonEl?.contains(target))
         ) {
           setFloatingMenuOpen(
             reasoningMenuEl,

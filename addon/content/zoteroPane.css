@@ -1971,6 +1971,20 @@
   margin-bottom: 6px;
 }
 
+.llm-agent-receipt {
+  display: block;
+  margin: 0 0 8px 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-11);
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
 /* Message Meta */
 .llm-message-meta {
   --llm-meta-action-gap: 8px;

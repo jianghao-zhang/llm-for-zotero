@@ -89,6 +89,96 @@ type ReconstructedRetryPayload = {
   fullTextPaperContexts: PaperContextRef[];
 };
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeEffortLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "max" ||
+    normalized === "default"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function stripEffortSuffix(modelName: string): string {
+  return modelName.replace(/\s+\(effort:\s*[^)]+\)\s*$/i, "").trim();
+}
+
+function composeClaudeModelDisplay(model: string, effort?: string): string {
+  const normalizedModel = stripEffortSuffix(model);
+  const normalizedEffort = normalizeEffortLabel(effort);
+  if (!normalizedModel) return "";
+  if (!normalizedEffort || normalizedEffort === "default") {
+    return normalizedModel;
+  }
+  return `${normalizedModel} (effort: ${normalizedEffort})`;
+}
+
+function extractClaudeProviderRuntimeInfo(event: AgentEvent): {
+  model?: string;
+  effort?: string;
+} {
+  if (event.type !== "provider_event") return {};
+  const providerType = (event.providerType || "").trim().toLowerCase();
+  const payload = asRecord(event.payload);
+  let model: string | undefined;
+  let effort: string | undefined;
+
+  if (providerType === "runtime_config") {
+    const directEffort = normalizeEffortLabel(payload.resolvedEffort);
+    if (directEffort) effort = directEffort;
+  }
+
+  // assistant event
+  if (providerType === "assistant") {
+    const message = asRecord(payload.message);
+    const value = message.model;
+    if (typeof value === "string" && value.trim()) model = value.trim();
+    const effortValue = normalizeEffortLabel(message.effort);
+    if (effortValue) effort = effortValue;
+  }
+
+  // stream_event -> message_start
+  if (providerType === "stream_event") {
+    const streamEvent = asRecord(payload.event);
+    const message = asRecord(streamEvent.message);
+    const value = message.model;
+    if (typeof value === "string" && value.trim()) model = value.trim();
+    const effortValue = normalizeEffortLabel(message.effort);
+    if (effortValue) effort = effortValue;
+  }
+
+  // result event may carry modelUsage map
+  if (providerType === "result") {
+    const directModel = payload.model;
+    if (typeof directModel === "string" && directModel.trim()) {
+      model = directModel.trim();
+    }
+    const modelUsage = asRecord(payload.modelUsage);
+    const modelKeys = Object.keys(modelUsage).filter(Boolean);
+    if (!model && modelKeys.length > 0) model = modelKeys[0];
+    const effortValue = normalizeEffortLabel(payload.effort);
+    if (effortValue) effort = effortValue;
+  }
+
+  const normalizedModel = model ? stripEffortSuffix(model) : undefined;
+  if (!normalizedModel && !effort) return {};
+  return {
+    model: normalizedModel,
+    effort,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // AgentEngineDeps — all external dependencies injected by chat.ts
 // ---------------------------------------------------------------------------
@@ -411,6 +501,8 @@ export async function sendAgentTurn(
     await persistAssistantOnce();
     setStatusSafely("Cancelled", "ready");
   };
+  let resolvedClaudeModel = stripEffortSuffix(assistantMessage.modelName || "");
+  let resolvedClaudeEffort: string | undefined;
 
   try {
     const AbortControllerCtor = deps.getAbortController();
@@ -457,6 +549,20 @@ export async function sendAgentTurn(
       onEvent: async (event) => {
         if (assistantMessage.agentRunId) {
           pushTraceEvent(assistantMessage.agentRunId, event);
+        }
+        const claudeRuntimeInfo = extractClaudeProviderRuntimeInfo(event);
+        if (claudeRuntimeInfo.model) {
+          resolvedClaudeModel = claudeRuntimeInfo.model;
+        }
+        if (claudeRuntimeInfo.effort) {
+          resolvedClaudeEffort = claudeRuntimeInfo.effort;
+        }
+        if (resolvedClaudeModel) {
+          assistantMessage.modelName = composeClaudeModelDisplay(
+            resolvedClaudeModel,
+            resolvedClaudeEffort,
+          );
+          assistantMessage.modelProviderLabel = "Claude Code";
         }
         switch (event.type) {
           case "status":
@@ -663,6 +769,8 @@ export async function retryAgentTurn(
   };
 
   const agentRuntime = deps.getAgentRuntime();
+  let resolvedClaudeModel = stripEffortSuffix(assistantMessage.modelName || "");
+  let resolvedClaudeEffort: string | undefined;
   try {
     const AbortControllerCtor = deps.getAbortController();
     deps.setCurrentAbortController(
@@ -708,6 +816,20 @@ export async function retryAgentTurn(
       onEvent: async (event) => {
         if (assistantMessage.agentRunId) {
           pushTraceEvent(assistantMessage.agentRunId, event);
+        }
+        const claudeRuntimeInfo = extractClaudeProviderRuntimeInfo(event);
+        if (claudeRuntimeInfo.model) {
+          resolvedClaudeModel = claudeRuntimeInfo.model;
+        }
+        if (claudeRuntimeInfo.effort) {
+          resolvedClaudeEffort = claudeRuntimeInfo.effort;
+        }
+        if (resolvedClaudeModel) {
+          assistantMessage.modelName = composeClaudeModelDisplay(
+            resolvedClaudeModel,
+            resolvedClaudeEffort,
+          );
+          assistantMessage.modelProviderLabel = "Claude Code";
         }
         switch (event.type) {
           case "status":

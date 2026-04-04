@@ -398,6 +398,19 @@ async function runExternalBridgeTurn(
   },
 ): Promise<AgentRuntimeOutcome> {
   const url = `${normalizeBaseUrl(baseUrl)}/run-turn`;
+  const reasoningLevel =
+    typeof params.request.reasoning?.level === "string"
+      ? params.request.reasoning.level
+      : "";
+  const effort =
+    reasoningLevel === "xhigh"
+      ? "max"
+      : reasoningLevel === "high" ||
+          reasoningLevel === "medium" ||
+          reasoningLevel === "low" ||
+          reasoningLevel === "default"
+        ? reasoningLevel
+        : undefined;
   const payload = {
     conversationKey: params.request.conversationKey,
     userText: params.request.userText,
@@ -409,6 +422,12 @@ async function runExternalBridgeTurn(
       runType: "chat",
       claudeConfigSource: getClaudeConfigSourcePref(),
       claudeSettingSources: getClaudeSettingSourcesByPref(),
+      model:
+        typeof params.request.model === "string" &&
+        params.request.model.trim().toLowerCase() !== "default"
+          ? params.request.model.trim()
+          : undefined,
+      effort,
       activeItemId: params.request.activeItemId,
       libraryID: params.request.libraryID,
       contextEnvelope: params.contextEnvelope,
@@ -777,7 +796,8 @@ function signatureForContextEnvelope(envelope: ContextEnvelope): string {
 }
 
 async function fetchExternalTools(baseUrl: string): Promise<ExternalToolDescriptor[]> {
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/tools`, {
+  const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
+  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/tools?settingSources=${sources}`, {
     method: "GET",
     headers: { Accept: "application/json" },
   });
@@ -896,13 +916,28 @@ export function createExternalBackendBridgeRuntime(options: {
   const conversationContextSignature = new Map<number, string>();
   const conversationScopeByKey = new Map<number, BridgeScope>();
   const TOOL_CACHE_TTL_MS = 60_000;
+  let lastToolConfigKey = "";
+
+  const resolveToolConfigKey = (): string => {
+    const bridgeUrl = normalizeBaseUrl(getBridgeUrl());
+    const source = getClaudeConfigSourcePref();
+    return `${bridgeUrl}|${source}`;
+  };
 
   const refreshExternalActions = async (force = false): Promise<void> => {
     const bridgeUrl = normalizeBaseUrl(getBridgeUrl());
     if (!bridgeUrl) {
       cachedTools = [];
       cacheExpiresAt = 0;
+      lastToolConfigKey = "";
       return;
+    }
+    const configKey = resolveToolConfigKey();
+    if (configKey !== lastToolConfigKey) {
+      force = true;
+      cachedTools = [];
+      cacheExpiresAt = 0;
+      lastToolConfigKey = configKey;
     }
     if (!force && Date.now() < cacheExpiresAt && cachedTools.length > 0) {
       return;
@@ -948,6 +983,9 @@ export function createExternalBackendBridgeRuntime(options: {
       };
     },
     listExternalActionsSync: () => {
+      if (!normalizeBaseUrl(getBridgeUrl())) {
+        return [];
+      }
       return cachedTools.map((tool) => ({
         name: toExternalActionName(tool.name),
         description: tool.description,

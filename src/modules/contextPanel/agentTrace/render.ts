@@ -2142,13 +2142,6 @@ export function buildAgentTraceDisplayItems(
   userMessage: Message | null | undefined,
   verbosity: AgentTraceVerbosity = "compact",
 ): AgentTraceDisplayItem[] {
-  const providerEventCounts = new Map<string, number>();
-  for (const entry of events) {
-    if (entry.payload.type !== "provider_event") continue;
-    const providerType = readAgentTraceText(entry.payload.providerType) || "unknown";
-    providerEventCounts.set(providerType, (providerEventCounts.get(providerType) || 0) + 1);
-  }
-
   const items: AgentTraceDisplayItem[] = [];
   const compactedEvents =
     verbosity === "raw" ? events : compactAgentTraceEvents(events);
@@ -2161,6 +2154,7 @@ export function buildAgentTraceDisplayItems(
       : verbosity === "verbose"
         ? new Set(["stream_event"])
         : new Set<string>();
+  const showProviderEvents = verbosity !== "compact";
   const genericStatusTexts =
     verbosity === "compact"
       ? new Set(["system", "assistant", "user"])
@@ -2170,6 +2164,9 @@ export function buildAgentTraceDisplayItems(
     const entry = compactedEvents[index];
     switch (entry.payload.type) {
       case "provider_event": {
+        if (!showProviderEvents) {
+          break;
+        }
         const providerType = readAgentTraceText(entry.payload.providerType) || "unknown";
         if (noisyProviderTypes.has(providerType)) {
           break;
@@ -2365,38 +2362,6 @@ export function buildAgentTraceDisplayItems(
         });
         break;
     }
-  }
-
-  if (verbosity !== "compact") {
-    return items;
-  }
-
-  const streamCount = providerEventCounts.get("stream_event") || 0;
-  const systemCount = providerEventCounts.get("system") || 0;
-  const aggregatedPrefix: AgentTraceDisplayItem[] = [];
-  if (streamCount > 0) {
-    aggregatedPrefix.push({
-      type: "action",
-      row: {
-        kind: "plan",
-        icon: "·",
-        text: `Streaming updates ×${streamCount}`,
-      },
-    });
-  }
-  if (systemCount > 0) {
-    aggregatedPrefix.push({
-      type: "action",
-      row: {
-        kind: "plan",
-        icon: "·",
-        text: `System events ×${systemCount}`,
-      },
-    });
-  }
-
-  if (aggregatedPrefix.length > 0) {
-    return [...aggregatedPrefix, ...items];
   }
   return items;
 }

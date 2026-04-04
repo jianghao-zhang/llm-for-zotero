@@ -215,6 +215,26 @@ function setHistoryControlsDisabled(body: Element, disabled: boolean): void {
   }
 }
 
+function extractAgentReceiptCounts(
+  safeText: string,
+): {
+  markdownBody: string;
+  papers: number;
+  files: number;
+  images: number;
+} | null {
+  const receiptMatch = safeText.match(
+    /^RECEIVED\s+papers=(\d+),\s*attachments=(\d+),\s*screenshots=(\d+)\.\s*/i,
+  );
+  if (!receiptMatch) return null;
+  return {
+    markdownBody: safeText.slice(receiptMatch[0].length),
+    papers: Number(receiptMatch[1] || 0),
+    files: Number(receiptMatch[2] || 0),
+    images: Number(receiptMatch[3] || 0),
+  };
+}
+
 function resolveMultimodalRetryHint(
   errorMessage: string,
   imageCount: number,
@@ -930,6 +950,9 @@ function formatDisplayModelName(
   const normalizedModel = (modelName || "").trim();
   if (!normalizedModel) return "";
   const provider = (modelProviderLabel || "").trim().toLowerCase();
+  if (provider === "claude code") {
+    return `Claude Code: ${normalizedModel}`;
+  }
   if (provider.includes("(codex auth)")) {
     return `codex/${normalizedModel}`;
   }
@@ -4127,6 +4150,25 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
         try {
+          const receiptInfo = extractAgentReceiptCounts(safeText);
+          const markdownBody = receiptInfo ? receiptInfo.markdownBody : safeText;
+          if (receiptInfo) {
+            const selectedTexts = previousUserMessage
+              ? getMessageSelectedTexts(previousUserMessage)
+              : [];
+            const selectedTextSources = normalizeSelectedTextSources(
+              previousUserMessage?.selectedTextSources || [],
+              selectedTexts.length,
+            );
+            const quotedTextCount = selectedTextSources.filter(
+              (source) => source === "model",
+            ).length;
+            const receiptLine = doc.createElement("div") as HTMLDivElement;
+            receiptLine.className = "llm-agent-receipt";
+            receiptLine.textContent =
+              `CONTEXT papers=${receiptInfo.papers}, files=${receiptInfo.files}, images=${receiptInfo.images}, selected_text=${selectedTexts.length}, quoted_text=${quotedTextCount}.`;
+            bubble.appendChild(receiptLine);
+          }
           // Build image resolver for MinerU figures (if applicable)
           const contextSource = resolveContextSourceItem(item);
           const ctxItem = contextSource.contextItem;
@@ -4134,7 +4176,15 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           const resolveImage = pdfCtx?.sourceType === "mineru" && ctxItem
             ? buildImageResolver(ctxItem.id)
             : undefined;
-          bubble.innerHTML = renderMarkdown(safeText, { resolveImage });
+          const rendered = renderMarkdown(markdownBody, { resolveImage });
+          if (receiptInfo) {
+            const answerBody = doc.createElement("div") as HTMLDivElement;
+            answerBody.className = "llm-agent-answer-body";
+            answerBody.innerHTML = rendered;
+            bubble.appendChild(answerBody);
+          } else {
+            bubble.innerHTML = rendered;
+          }
         } catch (err) {
           ztoolkit.log("LLM render error:", err);
           bubble.textContent = safeText;

@@ -806,6 +806,24 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   });
 
   const {
+    slot: claudeModelDropdown,
+    button: claudeModelBtn,
+    menu: claudeModelMenu,
+  } = createActionDropdown(doc, {
+    slotId: "llm-claude-model-dropdown",
+    slotClassName: "llm-model-dropdown llm-claude-runtime-only",
+    buttonId: "llm-claude-model-toggle",
+    buttonClassName:
+      "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-model-btn",
+    buttonText: "Model: ...",
+    menuId: "llm-claude-model-menu",
+    menuClassName: "llm-model-menu",
+    disabled: !hasItem,
+  });
+  claudeModelDropdown.style.display = "none";
+  claudeModelMenu.style.display = "none";
+
+  const {
     slot: reasoningDropdown,
     button: reasoningBtn,
     menu: reasoningMenu,
@@ -820,6 +838,24 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     menuClassName: "llm-reasoning-menu",
     disabled: !hasItem,
   });
+
+  const {
+    slot: claudeReasoningDropdown,
+    button: claudeReasoningBtn,
+    menu: claudeReasoningMenu,
+  } = createActionDropdown(doc, {
+    slotId: "llm-claude-reasoning-dropdown",
+    slotClassName: "llm-reasoning-dropdown llm-claude-runtime-only",
+    buttonId: "llm-claude-reasoning-toggle",
+    buttonClassName:
+      "llm-shortcut-btn llm-action-btn llm-action-btn-secondary llm-reasoning-btn",
+    buttonText: t("Reasoning"),
+    menuId: "llm-claude-reasoning-menu",
+    menuClassName: "llm-reasoning-menu",
+    disabled: !hasItem,
+  });
+  claudeReasoningDropdown.style.display = "none";
+  claudeReasoningMenu.style.display = "none";
 
   const sendBtn = createElement(
     doc,
@@ -864,7 +900,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     selectTextSlot,
     screenshotSlot,
     modelDropdown,
+    claudeModelDropdown,
     reasoningDropdown,
+    claudeReasoningDropdown,
   );
   actionsRight.append(sendSlot);
   actionsRow.append(actionsLeft, actionsRight);

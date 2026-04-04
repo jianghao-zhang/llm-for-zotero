@@ -235,9 +235,9 @@ export function getAgentApi() {
       return [...externalActions, ...localActions];
     },
 
-    refreshActions: async () => {
+    refreshActions: async (force = false) => {
       if (runtimeBridge?.refreshExternalActions) {
-        await runtimeBridge.refreshExternalActions();
+        await runtimeBridge.refreshExternalActions(force);
       }
     },
 

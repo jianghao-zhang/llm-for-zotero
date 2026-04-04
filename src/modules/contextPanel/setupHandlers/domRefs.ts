@@ -6,10 +6,16 @@ export type PanelDomRefs = {
   modelBtn: HTMLButtonElement | null;
   modelSlot: HTMLDivElement | null;
   modelMenu: HTMLDivElement | null;
+  claudeModelBtn: HTMLButtonElement | null;
+  claudeModelSlot: HTMLDivElement | null;
+  claudeModelMenu: HTMLDivElement | null;
   reasoningBtn: HTMLButtonElement | null;
+  claudeReasoningBtn: HTMLButtonElement | null;
   runtimeModeBtn: HTMLButtonElement | null;
   reasoningSlot: HTMLDivElement | null;
   reasoningMenu: HTMLDivElement | null;
+  claudeReasoningSlot: HTMLDivElement | null;
+  claudeReasoningMenu: HTMLDivElement | null;
   actionsRow: HTMLDivElement | null;
   actionsLeft: HTMLDivElement | null;
   actionsRight: HTMLDivElement | null;
@@ -95,8 +101,20 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
       "#llm-model-dropdown",
     ) as HTMLDivElement | null,
     modelMenu: body.querySelector("#llm-model-menu") as HTMLDivElement | null,
+    claudeModelBtn: body.querySelector(
+      "#llm-claude-model-toggle",
+    ) as HTMLButtonElement | null,
+    claudeModelSlot: body.querySelector(
+      "#llm-claude-model-dropdown",
+    ) as HTMLDivElement | null,
+    claudeModelMenu: body.querySelector(
+      "#llm-claude-model-menu",
+    ) as HTMLDivElement | null,
     reasoningBtn: body.querySelector(
       "#llm-reasoning-toggle",
+    ) as HTMLButtonElement | null,
+    claudeReasoningBtn: body.querySelector(
+      "#llm-claude-reasoning-toggle",
     ) as HTMLButtonElement | null,
     runtimeModeBtn: body.querySelector(
       "#llm-runtime-mode-toggle",
@@ -106,6 +124,12 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     ) as HTMLDivElement | null,
     reasoningMenu: body.querySelector(
       "#llm-reasoning-menu",
+    ) as HTMLDivElement | null,
+    claudeReasoningSlot: body.querySelector(
+      "#llm-claude-reasoning-dropdown",
+    ) as HTMLDivElement | null,
+    claudeReasoningMenu: body.querySelector(
+      "#llm-claude-reasoning-menu",
     ) as HTMLDivElement | null,
     actionsRow: body.querySelector(".llm-actions") as HTMLDivElement | null,
     actionsLeft: body.querySelector(
