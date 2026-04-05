@@ -5809,6 +5809,45 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   const shellEscape = (value: string): string =>
     `'${(value || "").replace(/'/g, `'\\''`)}'`;
 
+  type TerminalProbeStep = {
+    step: string;
+    ok: boolean;
+    message: string;
+    exitCode?: number;
+    stderr?: string;
+  };
+
+  type TerminalLaunchResult = {
+    ok: boolean;
+    code: string;
+    message: string;
+    steps: TerminalProbeStep[];
+  };
+
+  const compactText = (value: string, max = 180): string => {
+    const normalized = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!normalized) return "";
+    return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+  };
+
+  const readPipeText = async (pipe: unknown): Promise<string> => {
+    const target = pipe as { readString?: () => Promise<string> } | null;
+    if (!target || typeof target.readString !== "function") return "";
+    let out = "";
+    try {
+      while (true) {
+        const chunk = await target.readString();
+        if (!chunk) break;
+        out += chunk;
+      }
+    } catch {
+      // ignore pipe read failures
+    }
+    return out;
+  };
+
   const pathBasename = (value: string): string =>
     (value || "")
       .split("/")
@@ -5817,6 +5856,79 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const isDirectoryPath = (value: string): boolean =>
     /\/$/.test(value.trim()) || /\.app$/i.test(value.trim());
+
+  const executeSubprocessStep = async (params: {
+    step: string;
+    command: string;
+    args?: string[];
+  }): Promise<TerminalProbeStep> => {
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (!Subprocess || typeof Subprocess.call !== "function") {
+        return {
+          step: params.step,
+          ok: false,
+          message: "Subprocess unavailable",
+        };
+      }
+      const proc = await Subprocess.call({
+        command: params.command,
+        arguments: params.args || [],
+        stderr: "pipe",
+      });
+      const procLike = proc as
+        | {
+            wait?: () => Promise<{ exitCode?: number }>;
+            stderr?: unknown;
+          }
+        | undefined;
+      if (!procLike || typeof procLike.wait !== "function") {
+        return {
+          step: params.step,
+          ok: true,
+          message: "OK",
+        };
+      }
+      const [waitResult, stderrText] = await Promise.all([
+        procLike.wait(),
+        readPipeText(procLike.stderr),
+      ]);
+      const exitCode =
+        waitResult && typeof waitResult.exitCode === "number"
+          ? waitResult.exitCode
+          : 0;
+      if (exitCode !== 0) {
+        return {
+          step: params.step,
+          ok: false,
+          message: `exit ${exitCode}`,
+          exitCode,
+          stderr: compactText(stderrText),
+        };
+      }
+      return {
+        step: params.step,
+        ok: true,
+        message: "OK",
+        exitCode,
+        stderr: compactText(stderrText),
+      };
+    } catch (error) {
+      return {
+        step: params.step,
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
 
   const directoryExists = async (path: string): Promise<boolean> => {
     const normalized = (path || "").trim();
@@ -5843,95 +5955,152 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
   };
 
-  const runCommandInMacTerminal = async (command: string): Promise<boolean> => {
-    let openedApp = false;
-    try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") return false;
-      // First make sure Terminal.app is launched.
-      await Subprocess.call({
-        command: "/usr/bin/open",
-        arguments: ["-a", "Terminal"],
-        stderr: "pipe",
-      });
-      openedApp = true;
-      await Subprocess.call({
-        command: "/usr/bin/osascript",
-        arguments: [
-          "-e",
-          "on run argv",
-          "-e",
-          "set cmd to item 1 of argv",
-          "-e",
-          'tell application "Terminal" to activate',
-          "-e",
-          'tell application "Terminal" to do script cmd',
-          "-e",
-          "end run",
-          command,
-        ],
-        stderr: "pipe",
-      });
-      return true;
-    } catch {
-      // If script injection fails but Terminal is at least opened, treat as opened.
-      return openedApp;
+  const runCommandInMacTerminal = async (
+    command: string,
+  ): Promise<TerminalLaunchResult> => {
+    const steps: TerminalProbeStep[] = [];
+    const probeA: TerminalProbeStep = {
+      step: "A",
+      ok: Boolean(
+        ztoolkit.getGlobal("Subprocess") &&
+          typeof (ztoolkit.getGlobal("Subprocess") as { call?: unknown }).call ===
+            "function",
+      ),
+      message: "Subprocess availability check",
+    };
+    steps.push(probeA);
+    if (!probeA.ok) {
+      return {
+        ok: false,
+        code: "A",
+        message: "Terminal probe A failed: Subprocess unavailable",
+        steps,
+      };
     }
+
+    const probeB = await executeSubprocessStep({
+      step: "B",
+      command: "/usr/bin/open",
+      args: ["-a", "Terminal"],
+    });
+    steps.push(probeB);
+    if (!probeB.ok) {
+      return {
+        ok: false,
+        code: "B",
+        message: `Terminal probe B failed: ${probeB.message}${probeB.stderr ? ` (${probeB.stderr})` : ""}`,
+        steps,
+      };
+    }
+
+    const probeC = await executeSubprocessStep({
+      step: "C",
+      command: "/usr/bin/osascript",
+      args: ["-e", 'tell application "Terminal" to activate'],
+    });
+    steps.push(probeC);
+    if (!probeC.ok) {
+      return {
+        ok: false,
+        code: "C",
+        message: `Terminal probe C failed: ${probeC.message}${probeC.stderr ? ` (${probeC.stderr})` : ""}`,
+        steps,
+      };
+    }
+
+    const probeD = await executeSubprocessStep({
+      step: "D",
+      command: "/usr/bin/osascript",
+      args: [
+        "-e",
+        "on run argv",
+        "-e",
+        "set cmd to item 1 of argv",
+        "-e",
+        'tell application "Terminal" to activate',
+        "-e",
+        'tell application "Terminal" to do script cmd',
+        "-e",
+        "end run",
+        command,
+      ],
+    });
+    steps.push(probeD);
+    if (!probeD.ok) {
+      return {
+        ok: false,
+        code: "D",
+        message: `Terminal probe D failed: ${probeD.message}${probeD.stderr ? ` (${probeD.stderr})` : ""}`,
+        steps,
+      };
+    }
+
+    return {
+      ok: true,
+      code: "OK",
+      message: "Terminal launched with command",
+      steps,
+    };
   };
 
-  const runCommandInITerm = async (command: string): Promise<boolean> => {
-    try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") return false;
-      await Subprocess.call({
-        command: "/usr/bin/osascript",
-        arguments: [
-          "-e",
-          "on run argv",
-          "-e",
-          "set cmd to item 1 of argv",
-          "-e",
-          'tell application "iTerm"',
-          "-e",
-          "activate",
-          "-e",
-          "create window with default profile command cmd",
-          "-e",
-          "end tell",
-          "-e",
-          "end run",
-          command,
-        ],
-        stderr: "pipe",
-      });
-      return true;
-    } catch {
-      return false;
-    }
+  const runCommandInITerm = async (
+    command: string,
+    steps: TerminalProbeStep[],
+  ): Promise<boolean> => {
+    const probe = await executeSubprocessStep({
+      step: "F",
+      command: "/usr/bin/osascript",
+      args: [
+        "-e",
+        "on run argv",
+        "-e",
+        "set cmd to item 1 of argv",
+        "-e",
+        'tell application "iTerm"',
+        "-e",
+        "activate",
+        "-e",
+        "create window with default profile command cmd",
+        "-e",
+        "end tell",
+        "-e",
+        "end run",
+        command,
+      ],
+    });
+    steps.push(probe);
+    return probe.ok;
   };
 
   const runCommandInCustomTerminal = async (
     terminalPath: string,
     command: string,
-  ): Promise<boolean> => {
+  ): Promise<TerminalLaunchResult> => {
     const normalized = terminalPath.trim();
-    if (!normalized) return false;
+    const steps: TerminalProbeStep[] = [];
+    if (!normalized) {
+      return {
+        ok: false,
+        code: "E",
+        message: "Terminal probe E failed: empty terminal path",
+        steps,
+      };
+    }
+    const exists = await directoryExists(normalized);
+    const probeE: TerminalProbeStep = {
+      step: "E",
+      ok: exists,
+      message: exists ? "Custom terminal path exists" : "Custom terminal path missing",
+    };
+    steps.push(probeE);
+    if (!probeE.ok) {
+      return {
+        ok: false,
+        code: "E",
+        message: `Terminal probe E failed: ${normalized} not found`,
+        steps,
+      };
+    }
     const terminalName = pathBasename(normalized).toLowerCase().replace(/\.app$/, "");
     try {
       const Subprocess = ztoolkit.getGlobal("Subprocess") as
@@ -5943,28 +6112,63 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             }) => Promise<unknown>;
           }
         | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      if (!Subprocess || typeof Subprocess.call !== "function") {
+        return {
+          ok: false,
+          code: "A",
+          message: "Terminal probe A failed: Subprocess unavailable",
+          steps,
+        };
+      }
       if (terminalName.includes("terminal")) {
-        return runCommandInMacTerminal(command);
+        const result = await runCommandInMacTerminal(command);
+        return {
+          ...result,
+          steps: [...steps, ...result.steps],
+        };
       }
       if (terminalName.includes("iterm")) {
-        return runCommandInITerm(command);
+        const ok = await runCommandInITerm(command, steps);
+        return {
+          ok,
+          code: ok ? "OK" : "F",
+          message: ok
+            ? "Custom iTerm launched with command"
+            : `Terminal probe F failed: ${(steps[steps.length - 1]?.message || "unknown error")}`,
+          steps,
+        };
       }
       if (isDirectoryPath(normalized)) {
-        await Subprocess.call({
+        const probe = await executeSubprocessStep({
+          step: "F",
           command: "/usr/bin/open",
-          arguments: ["-a", normalized, "--args", "-e", "zsh", "-lc", command],
-          stderr: "pipe",
+          args: ["-a", normalized, "--args", "-e", "zsh", "-lc", command],
         });
-        return true;
+        steps.push(probe);
+        return {
+          ok: probe.ok,
+          code: probe.ok ? "OK" : "F",
+          message: probe.ok
+            ? "Custom terminal launched with command"
+            : `Terminal probe F failed: ${probe.message}${probe.stderr ? ` (${probe.stderr})` : ""}`,
+          steps,
+        };
       }
       if (terminalName.includes("wezterm")) {
-        await Subprocess.call({
+        const probe = await executeSubprocessStep({
+          step: "F",
           command: normalized,
-          arguments: ["start", "--", "zsh", "-lc", command],
-          stderr: "pipe",
+          args: ["start", "--", "zsh", "-lc", command],
         });
-        return true;
+        steps.push(probe);
+        return {
+          ok: probe.ok,
+          code: probe.ok ? "OK" : "F",
+          message: probe.ok
+            ? "Custom terminal launched with command"
+            : `Terminal probe F failed: ${probe.message}${probe.stderr ? ` (${probe.stderr})` : ""}`,
+          steps,
+        };
       }
       if (
         terminalName.includes("ghostty") ||
@@ -5972,39 +6176,77 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         terminalName.includes("alacritty") ||
         terminalName.includes("rio")
       ) {
-        await Subprocess.call({
+        const probe = await executeSubprocessStep({
+          step: "F",
           command: normalized,
-          arguments: ["-e", "zsh", "-lc", command],
-          stderr: "pipe",
+          args: ["-e", "zsh", "-lc", command],
         });
-        return true;
+        steps.push(probe);
+        return {
+          ok: probe.ok,
+          code: probe.ok ? "OK" : "F",
+          message: probe.ok
+            ? "Custom terminal launched with command"
+            : `Terminal probe F failed: ${probe.message}${probe.stderr ? ` (${probe.stderr})` : ""}`,
+          steps,
+        };
       }
-      await Subprocess.call({
+      const probe = await executeSubprocessStep({
+        step: "F",
         command: normalized,
-        arguments: ["zsh", "-lc", command],
-        stderr: "pipe",
+        args: ["zsh", "-lc", command],
       });
-      return true;
-    } catch {
-      return false;
+      steps.push(probe);
+      return {
+        ok: probe.ok,
+        code: probe.ok ? "OK" : "F",
+        message: probe.ok
+          ? "Custom terminal launched with command"
+          : `Terminal probe F failed: ${probe.message}${probe.stderr ? ` (${probe.stderr})` : ""}`,
+        steps,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: "F",
+        message: `Terminal probe F failed: ${error instanceof Error ? error.message : String(error)}`,
+        steps,
+      };
     }
   };
 
   const openClaudeInTerminalAtDirectory = async (
     cwd: string,
     mode: "safe" | "yolo",
-  ): Promise<boolean> => {
+  ): Promise<TerminalLaunchResult> => {
     const normalized = (cwd || "").trim();
-    if (!normalized) return false;
+    if (!normalized) {
+      return {
+        ok: false,
+        code: "PATH",
+        message: "Current session folder unavailable",
+        steps: [],
+      };
+    }
     const command = `cd ${shellEscape(normalized)} && claude${
       mode === "yolo" ? " --dangerously-skip-permissions" : ""
     }`;
     const customPath = getClaudeTerminalPathPref();
     if (customPath) {
-      const ok = await runCommandInCustomTerminal(customPath, command);
-      if (ok) return true;
+      const customResult = await runCommandInCustomTerminal(customPath, command);
+      if (customResult.ok) return customResult;
+      ztoolkit.log(
+        `LLM: custom terminal launch failed ${JSON.stringify(customResult)}`,
+      );
+      // Fall back to system terminal only after reporting custom-path branch failure.
     }
-    return runCommandInMacTerminal(command);
+    const systemResult = await runCommandInMacTerminal(command);
+    if (!systemResult.ok) {
+      ztoolkit.log(
+        `LLM: system terminal launch failed ${JSON.stringify(systemResult)}`,
+      );
+    }
+    return systemResult;
   };
 
   const resolvePreferredSessionFolder = async (cwd: string): Promise<string> => {
@@ -11504,15 +11746,26 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             return;
           }
           await ensureDirectoryExists(cwd);
-          const opened = await openClaudeInTerminalAtDirectory(
+          const terminalResult = await openClaudeInTerminalAtDirectory(
             cwd,
             getClaudePermissionModePref(),
           );
           if (status) {
             setStatus(
               status,
-              opened ? `Opened terminal at: ${cwd}` : `Terminal open failed: ${cwd}`,
+              terminalResult.ok
+                ? `Opened terminal at: ${cwd}`
+                : `${terminalResult.message} [${terminalResult.code}]`,
               "ready",
+            );
+          }
+          if (!terminalResult.ok) {
+            ztoolkit.log(
+              `LLM: terminal probe detail ${JSON.stringify({
+                cwd,
+                mode: getClaudePermissionModePref(),
+                result: terminalResult,
+              })}`,
             );
           }
         } catch (error) {
