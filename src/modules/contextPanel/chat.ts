@@ -95,6 +95,7 @@ import {
   getSelectedTextSourceIcon,
   resolvePromptText,
 } from "./textUtils";
+import { getCopyableBlockText } from "./copyBlocks";
 import {
   normalizeSelectedTextNoteContexts,
   normalizeSelectedTextPaperContexts as normalizeSelectedTextPaperContextEntries,
@@ -1060,33 +1061,6 @@ export async function copyRenderedMarkdownToClipboard(
 
   // Fallback: copy raw markdown as plain text.
   await copyTextToClipboard(body, safeText);
-}
-
-function getCopyableBlockText(block: Element): string {
-  const htmlEl = block as HTMLElement;
-  if (block.matches("pre")) {
-    return htmlEl.innerText || htmlEl.textContent || "";
-  }
-  if (block.matches("table")) {
-    const rows = Array.from(
-      block.querySelectorAll("tr"),
-    ) as HTMLTableRowElement[];
-    return rows
-      .map((row) => {
-        const cells = Array.from(
-          row.querySelectorAll("th, td"),
-        ) as HTMLElement[];
-        return cells
-          .map((cell) => sanitizeText((cell.textContent || "").trim()))
-          .join("\t");
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  if (block.matches(".katex-display")) {
-    return htmlEl.innerText || htmlEl.textContent || "";
-  }
-  return htmlEl.innerText || htmlEl.textContent || "";
 }
 
 function attachCopyButtonsToRichBlocks(
