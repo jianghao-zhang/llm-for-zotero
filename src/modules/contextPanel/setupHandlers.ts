@@ -6349,11 +6349,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         steps: [],
       };
     }
-    const resumePart =
-      typeof providerSessionId === "string" && providerSessionId.trim().length > 0
-        ? ` --resume ${shellEscape(providerSessionId.trim())}`
-        : "";
-    const command = `cd ${shellEscape(normalized)} && claude${resumePart}${
+    const sessionId =
+      typeof providerSessionId === "string" ? providerSessionId.trim() : "";
+    if (!sessionId) {
+      return {
+        ok: false,
+        code: "SID",
+        message: "Missing provider session id",
+        steps: [],
+      };
+    }
+    const command = `cd ${shellEscape(normalized)} && claude --resume ${shellEscape(sessionId)}${
       mode === "yolo" ? " --dangerously-skip-permissions" : ""
     }`;
     const customPath = getClaudeTerminalPathPref();

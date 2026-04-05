@@ -173,6 +173,7 @@ type BridgeScope = {
 export type ExternalBridgeSessionInfo = {
   originalConversationKey: string;
   scopedConversationKey: string;
+  providerSessionId?: string;
   scopeType?: BridgeScopeType;
   scopeId?: string;
   scopeLabel?: string;
