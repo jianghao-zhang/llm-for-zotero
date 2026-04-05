@@ -3563,27 +3563,13 @@ label.llm-search-results-item:hover {
 }
 
 .llm-session-action-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  min-width: 24px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0;
-  border-radius: 999px;
-  border: 1px solid var(--stroke-secondary);
-  background: var(--material-background);
-  color: var(--fill-secondary);
-  cursor: pointer;
-  user-select: none;
-  box-sizing: border-box;
+  opacity: 0.7;
 }
 
 .llm-session-action-btn::before {
   content: "";
-  width: 13px;
-  height: 13px;
+  width: 16px;
+  height: 16px;
   display: block;
   pointer-events: none;
 }
@@ -3597,13 +3583,7 @@ label.llm-search-results-item:hover {
 }
 
 .llm-session-action-btn:hover {
-  color: var(--fill-primary);
-  border-color: var(--stroke-primary);
-}
-
-.llm-session-action-btn:focus-visible {
-  outline: 1px solid var(--color-accent);
-  outline-offset: 1px;
+  opacity: 1;
 }
 
 .llm-context-previews > #llm-selected-context-list {
@@ -3646,7 +3626,7 @@ label.llm-search-results-item:hover {
 
 .llm-header-actions > #llm-session-folder-btn,
 .llm-header-actions > #llm-session-terminal-btn {
-  opacity: 0.78;
+  margin: 0;
 }
 
 .llm-compose-area {

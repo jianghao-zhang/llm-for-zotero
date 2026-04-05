@@ -5761,6 +5761,33 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return false;
   };
 
+  const openDirectory = async (path: string): Promise<boolean> => {
+    const normalized = (path || "").trim();
+    if (!normalized) return false;
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (Subprocess && typeof Subprocess.call === "function") {
+        await Subprocess.call({
+          command: "/usr/bin/open",
+          arguments: [normalized],
+          stderr: "pipe",
+        });
+        return true;
+      }
+    } catch {
+      // ignore and fall through
+    }
+    return revealDirectory(normalized);
+  };
+
   const ensureDirectoryExists = async (path: string): Promise<boolean> => {
     const normalized = (path || "").trim();
     if (!normalized) return false;
@@ -11140,7 +11167,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             return;
           }
           await ensureDirectoryExists(cwd);
-          const opened = revealDirectory(cwd);
+          const opened = await openDirectory(cwd);
           if (status) {
             setStatus(
               status,
