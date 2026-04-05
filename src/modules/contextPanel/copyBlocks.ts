@@ -48,6 +48,32 @@ function cloneAndClean(node: Element): Element {
   return cloned;
 }
 
+function cloneTableCellForMarkdown(cell: Element): Element {
+  const cloned = cell.cloneNode(true) as Element;
+  const removableNodes = Array.from(
+    cloned.querySelectorAll(".llm-rich-block-copy-btn"),
+  ) as Element[];
+  for (const removableNode of removableNodes) {
+    removableNode.remove();
+  }
+  const katexNodes = Array.from(cloned.querySelectorAll(".katex")) as Element[];
+  for (const katexEl of katexNodes) {
+    const latex = extractKatexLatex(katexEl).trim();
+    const replacement = latex ? `$${latex}$` : extractNodeText(katexEl);
+    const ownerDoc = katexEl.ownerDocument;
+    if (!ownerDoc) {
+      katexEl.remove();
+      continue;
+    }
+    katexEl.replaceWith(ownerDoc.createTextNode(replacement || ""));
+  }
+  const leftoverMathMl = Array.from(cloned.querySelectorAll(".katex-mathml")) as Element[];
+  for (const mathMlNode of leftoverMathMl) {
+    mathMlNode.remove();
+  }
+  return cloned;
+}
+
 export function buildMarkdownTableFromRows(rows: string[][]): string {
   if (!rows.length) return "";
   const columnCount = Math.max(...rows.map((row) => row.length));
@@ -71,7 +97,7 @@ function extractTableMarkdown(table: Element): string {
   const matrix = rows
     .map((row) =>
       (Array.from(row.querySelectorAll("th, td")) as Element[]).map((cell) => {
-        const cleanedCell = cloneAndClean(cell);
+        const cleanedCell = cloneTableCellForMarkdown(cell);
         return extractNodeText(cleanedCell);
       }),
     )
@@ -80,10 +106,15 @@ function extractTableMarkdown(table: Element): string {
 }
 
 function extractFormulaText(block: Element): string {
-  const cleaned = cloneAndClean(block);
-  const latex = extractKatexLatex(cleaned);
-  const normalizedLatex = latex.trim();
+  const katexRoots = Array.from(block.querySelectorAll(".katex")) as Element[];
+  const latexChunks = katexRoots
+    .map((root) => extractKatexLatex(root).trim())
+    .filter(Boolean);
+  const normalizedLatex = latexChunks.join("\n\n").trim();
   if (normalizedLatex) return formatDisplayLatex(normalizedLatex);
+  const directLatex = extractKatexLatex(block).trim();
+  if (directLatex) return formatDisplayLatex(directLatex);
+  const cleaned = cloneAndClean(block);
   const fallback = extractNodeText(cleaned);
   if (!fallback) return "";
   return formatDisplayLatex(fallback);
@@ -91,10 +122,8 @@ function extractFormulaText(block: Element): string {
 
 export function getCopyableBlockText(block: Element): string {
   if (block.matches("pre")) {
-    const codeEl = (block.querySelector(":scope > code") ||
-      block) as HTMLElement;
-    const codeClone = cloneAndClean(codeEl);
-    return sanitizeText((codeClone.textContent || "").replace(/\s+$/, ""));
+    const codeEl = (block.querySelector(":scope > code") || block) as HTMLElement;
+    return codeEl.textContent || "";
   }
   if (block.matches("table")) {
     return extractTableMarkdown(block);
