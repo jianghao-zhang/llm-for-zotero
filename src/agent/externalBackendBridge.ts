@@ -224,6 +224,10 @@ function getClaudeSettingSourcesByPref(): Array<"user" | "project" | "local"> {
     : ["project", "local"];
 }
 
+function getClaudeSettingSourcesCsvByPref(): string {
+  return getClaudeSettingSourcesByPref().join(",");
+}
+
 function getAgentPermissionModePref(): "safe" | "yolo" {
   try {
     const raw = Zotero.Prefs.get(
@@ -482,6 +486,7 @@ async function runExternalBridgeTurn(
       runType: "chat",
       claudeConfigSource: getClaudeConfigSourcePref(),
       claudeSettingSources: getClaudeSettingSourcesByPref(),
+      settingSources: getClaudeSettingSourcesCsvByPref(),
       permissionMode: getAgentPermissionModePref(),
       model:
         typeof params.request.model === "string" &&
@@ -1180,6 +1185,7 @@ export function createExternalBackendBridgeRuntime(options: {
             runType: "action",
             claudeConfigSource: getClaudeConfigSourcePref(),
             claudeSettingSources: getClaudeSettingSourcesByPref(),
+            settingSources: getClaudeSettingSourcesCsvByPref(),
             permissionMode: getAgentPermissionModePref(),
             scopeType: actionScope?.scopeType,
             scopeId: actionScope?.scopeId,

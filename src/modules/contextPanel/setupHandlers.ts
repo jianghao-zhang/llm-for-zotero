@@ -6359,7 +6359,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         steps: [],
       };
     }
-    const command = `cd ${shellEscape(normalized)} && claude --resume ${shellEscape(sessionId)} --init${
+    const settingSourcesArg = getBridgeModelSettingSources();
+    const command = `cd ${shellEscape(normalized)} && claude --resume ${shellEscape(sessionId)} --init --setting-sources ${shellEscape(
+      settingSourcesArg,
+    )}${
       mode === "yolo" ? " --dangerously-skip-permissions" : ""
     }`;
     const customPath = getClaudeTerminalPathPref();
