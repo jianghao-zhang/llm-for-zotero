@@ -2894,6 +2894,9 @@ function buildAgentEngineDeps(): AgentEngineDeps {
     requestId: string,
     action: import("../../agent/types").AgentPendingAction,
   ): void => {
+    // Keep a single confirmation surface in UI: inline card only.
+    // The debug modal caused duplicate dialogs for the same request.
+    const ENABLE_DEBUG_CONFIRM_MODAL = false;
     const ownerDoc = body.ownerDocument;
     const { chatBox } = getPanelRequestUI(body);
     if (!ownerDoc || !chatBox) return;
@@ -2908,7 +2911,9 @@ function buildAgentEngineDeps(): AgentEngineDeps {
     );
     chatBox.appendChild(wrapper);
     chatBox.scrollTop = chatBox.scrollHeight;
-    showDebugConfirmationModal(body, requestId, action);
+    if (ENABLE_DEBUG_CONFIRM_MODAL) {
+      showDebugConfirmationModal(body, requestId, action);
+    }
   };
 
   const hidePendingConfirmationCard = (body: Element): void => {
