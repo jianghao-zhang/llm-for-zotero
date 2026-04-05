@@ -340,6 +340,63 @@
               ></html:span>
             </html:div>
 
+            <html:div style="display: flex; flex-direction: column; gap: 6px;">
+              <html:label
+                for="__addonRef__-agent-terminal-path"
+                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);"
+              >
+                Default Terminal App Path
+              </html:label>
+              <html:div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                <html:input
+                  id="__addonRef__-agent-terminal-path"
+                  type="text"
+                  placeholder="/Applications/Ghostty.app (empty = system Terminal)"
+                  style="
+                    width: min(520px, 100%);
+                    padding: 5px 8px;
+                    font-size: 12px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    border-radius: 6px;
+                    background: Field;
+                    color: FieldText;
+                  "
+                />
+                <html:button
+                  id="__addonRef__-agent-terminal-path-save"
+                  style="
+                    padding: 4px 10px;
+                    font-size: 12px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    border-radius: 6px;
+                    background: color-mix(in srgb, var(--color-accent, #2563eb) 10%, transparent);
+                    color: var(--fill-primary, inherit);
+                    cursor: pointer;
+                  "
+                >
+                  Save
+                </html:button>
+                <html:button
+                  id="__addonRef__-agent-terminal-path-reset"
+                  style="
+                    padding: 4px 10px;
+                    font-size: 12px;
+                    border: 1px solid var(--stroke-secondary, #c8c8c8);
+                    border-radius: 6px;
+                    background: transparent;
+                    color: var(--fill-primary, inherit);
+                    cursor: pointer;
+                  "
+                >
+                  Reset
+                </html:button>
+              </html:div>
+              <html:span
+                id="__addonRef__-agent-terminal-path-status"
+                style="font-size: 11px; color: var(--fill-secondary, #888);"
+              ></html:span>
+            </html:div>
+
             <html:div style="display: flex; flex-direction: column; gap: 4px;">
               <html:label
                 for="__addonRef__-agent-claude-config-source"

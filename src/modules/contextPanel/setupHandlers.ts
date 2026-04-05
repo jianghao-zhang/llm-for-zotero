@@ -11849,21 +11849,6 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     });
   }
   if (sessionTerminalBtn) {
-    sessionTerminalBtn.addEventListener("contextmenu", (e: Event) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!shouldUseClaudeRuntimeModelMenu()) return;
-      ensureTerminalPathMenu();
-      if (!terminalPathMenuEl || !terminalPathMenuInputEl) return;
-      const mouse = e as MouseEvent;
-      const panelRect = panelRoot.getBoundingClientRect();
-      terminalPathMenuEl.style.left = `${Math.max(8, mouse.clientX - panelRect.left)}px`;
-      terminalPathMenuEl.style.top = `${Math.max(8, mouse.clientY - panelRect.top)}px`;
-      terminalPathMenuInputEl.value = getClaudeTerminalPathPref();
-      terminalPathMenuEl.style.display = "inline-flex";
-      terminalPathMenuInputEl.focus();
-      terminalPathMenuInputEl.select();
-    });
     sessionTerminalBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();

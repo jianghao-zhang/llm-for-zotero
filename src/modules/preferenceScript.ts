@@ -628,6 +628,18 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const openZoteroClaudeConfigFolderStatus = doc.querySelector(
     `#${config.addonRef}-open-zotero-claude-config-folder-status`,
   ) as HTMLSpanElement | null;
+  const agentTerminalPathInput = doc.querySelector(
+    `#${config.addonRef}-agent-terminal-path`,
+  ) as HTMLInputElement | null;
+  const agentTerminalPathSaveBtn = doc.querySelector(
+    `#${config.addonRef}-agent-terminal-path-save`,
+  ) as HTMLButtonElement | null;
+  const agentTerminalPathResetBtn = doc.querySelector(
+    `#${config.addonRef}-agent-terminal-path-reset`,
+  ) as HTMLButtonElement | null;
+  const agentTerminalPathStatus = doc.querySelector(
+    `#${config.addonRef}-agent-terminal-path-status`,
+  ) as HTMLSpanElement | null;
   const agentClaudeConfigSourceSelect = doc.querySelector(
     `#${config.addonRef}-agent-claude-config-source`,
   ) as HTMLSelectElement | null;
@@ -1660,6 +1672,39 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     agentBridgeUrlInput.value = saved;
     agentBridgeUrlInput.addEventListener("input", () => {
       Zotero.Prefs.set(key, agentBridgeUrlInput.value.trim(), true);
+    });
+  }
+
+  if (agentTerminalPathInput) {
+    const key = `${config.prefsPrefix}.agentClaudeTerminalPath`;
+    const readCurrent = () => {
+      const saved = (Zotero.Prefs.get(key, true) as string) || "";
+      agentTerminalPathInput.value = typeof saved === "string" ? saved : "";
+    };
+    readCurrent();
+    const updateStatus = (text: string) => {
+      if (agentTerminalPathStatus) {
+        agentTerminalPathStatus.textContent = text;
+      }
+    };
+    const saveTerminalPath = () => {
+      const next = agentTerminalPathInput.value.trim();
+      Zotero.Prefs.set(key, next, true);
+      updateStatus(next ? `Saved: ${next}` : "Using system Terminal");
+    };
+    agentTerminalPathSaveBtn?.addEventListener("click", () => {
+      saveTerminalPath();
+    });
+    agentTerminalPathResetBtn?.addEventListener("click", () => {
+      Zotero.Prefs.set(key, "", true);
+      readCurrent();
+      updateStatus("Reset to system Terminal");
+    });
+    agentTerminalPathInput.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveTerminalPath();
+      }
     });
   }
 
