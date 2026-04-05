@@ -5783,15 +5783,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const normalized = (path || "").trim();
     if (!normalized) return false;
     try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
+      const Subprocess = getSubprocessCompat();
       if (Subprocess && typeof Subprocess.call === "function") {
         await Subprocess.call({
           command: "/usr/bin/open",
@@ -5808,6 +5800,108 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const shellEscape = (value: string): string =>
     `'${(value || "").replace(/'/g, `'\\''`)}'`;
+
+  const getSubprocessCompat = ():
+    | {
+        call?: (args: {
+          command: string;
+          arguments?: string[];
+          stderr?: string;
+        }) => Promise<unknown>;
+      }
+    | null => {
+    const fromToolkit = ztoolkit.getGlobal("Subprocess") as
+      | {
+          call?: (args: {
+            command: string;
+            arguments?: string[];
+            stderr?: string;
+          }) => Promise<unknown>;
+        }
+      | undefined;
+    if (fromToolkit?.call) return fromToolkit;
+    try {
+      const CU = (globalThis as { ChromeUtils?: any }).ChromeUtils;
+      if (CU?.importESModule) {
+        try {
+          const mod = CU.importESModule("resource://gre/modules/Subprocess.sys.mjs");
+          const loaded = (mod?.Subprocess || mod?.default || mod) as
+            | {
+                call?: (args: {
+                  command: string;
+                  arguments?: string[];
+                  stderr?: string;
+                }) => Promise<unknown>;
+              }
+            | undefined;
+          if (loaded?.call) return loaded;
+        } catch {
+          // fallback below
+        }
+      }
+      if (CU?.import) {
+        try {
+          const mod = CU.import("resource://gre/modules/Subprocess.jsm");
+          const loaded = (mod?.Subprocess || mod) as
+            | {
+                call?: (args: {
+                  command: string;
+                  arguments?: string[];
+                  stderr?: string;
+                }) => Promise<unknown>;
+              }
+            | undefined;
+          if (loaded?.call) return loaded;
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const runNsIProcessSync = (
+    command: string,
+    args: string[],
+  ): { ok: boolean; exitCode: number; message: string } => {
+    try {
+      const ComponentsRef = (globalThis as any).Components;
+      if (!ComponentsRef?.classes || !ComponentsRef?.interfaces) {
+        return { ok: false, exitCode: -1, message: "nsIProcess unavailable" };
+      }
+      const file = ComponentsRef.classes["@mozilla.org/file/local;1"].createInstance(
+        ComponentsRef.interfaces.nsIFile,
+      );
+      file.initWithPath(command);
+      if (typeof file.exists === "function" && !file.exists()) {
+        return {
+          ok: false,
+          exitCode: -1,
+          message: `command not found: ${command}`,
+        };
+      }
+      const process = ComponentsRef.classes["@mozilla.org/process/util;1"].createInstance(
+        ComponentsRef.interfaces.nsIProcess,
+      );
+      process.init(file);
+      process.run(true, args, args.length);
+      const exitCode =
+        typeof process.exitValue === "number" ? process.exitValue : 0;
+      return {
+        ok: exitCode === 0,
+        exitCode,
+        message: exitCode === 0 ? "OK" : `exit ${exitCode}`,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        exitCode: -1,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
 
   type TerminalProbeStep = {
     step: string;
@@ -5863,63 +5957,66 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     args?: string[];
   }): Promise<TerminalProbeStep> => {
     try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") {
-        return {
-          step: params.step,
-          ok: false,
-          message: "Subprocess unavailable",
-        };
-      }
-      const proc = await Subprocess.call({
-        command: params.command,
-        arguments: params.args || [],
-        stderr: "pipe",
-      });
-      const procLike = proc as
-        | {
-            wait?: () => Promise<{ exitCode?: number }>;
-            stderr?: unknown;
-          }
-        | undefined;
-      if (!procLike || typeof procLike.wait !== "function") {
+      const args = params.args || [];
+      const Subprocess = getSubprocessCompat();
+      if (Subprocess && typeof Subprocess.call === "function") {
+        const proc = await Subprocess.call({
+          command: params.command,
+          arguments: args,
+          stderr: "pipe",
+        });
+        const procLike = proc as
+          | {
+              wait?: () => Promise<{ exitCode?: number }>;
+              stderr?: unknown;
+            }
+          | undefined;
+        if (!procLike || typeof procLike.wait !== "function") {
+          return {
+            step: params.step,
+            ok: true,
+            message: "OK",
+          };
+        }
+        const [waitResult, stderrText] = await Promise.all([
+          procLike.wait(),
+          readPipeText(procLike.stderr),
+        ]);
+        const exitCode =
+          waitResult && typeof waitResult.exitCode === "number"
+            ? waitResult.exitCode
+            : 0;
+        if (exitCode !== 0) {
+          return {
+            step: params.step,
+            ok: false,
+            message: `exit ${exitCode}`,
+            exitCode,
+            stderr: compactText(stderrText),
+          };
+        }
         return {
           step: params.step,
           ok: true,
           message: "OK",
+          exitCode,
+          stderr: compactText(stderrText),
         };
       }
-      const [waitResult, stderrText] = await Promise.all([
-        procLike.wait(),
-        readPipeText(procLike.stderr),
-      ]);
-      const exitCode =
-        waitResult && typeof waitResult.exitCode === "number"
-          ? waitResult.exitCode
-          : 0;
-      if (exitCode !== 0) {
+      const fallback = runNsIProcessSync(params.command, args);
+      if (!fallback.ok) {
         return {
           step: params.step,
           ok: false,
-          message: `exit ${exitCode}`,
-          exitCode,
-          stderr: compactText(stderrText),
+          message: fallback.message,
+          exitCode: fallback.exitCode,
         };
       }
       return {
         step: params.step,
         ok: true,
-        message: "OK",
-        exitCode,
-        stderr: compactText(stderrText),
+        message: "OK (nsIProcess fallback)",
+        exitCode: fallback.exitCode,
       };
     } catch (error) {
       return {
@@ -5934,22 +6031,20 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const normalized = (path || "").trim();
     if (!normalized) return false;
     try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") return false;
-      await Subprocess.call({
+      const file = Zotero.File.pathToFile(normalized);
+      if (file && typeof file.exists === "function" && file.exists()) {
+        return true;
+      }
+    } catch {
+      // fall through to shell checks
+    }
+    try {
+      const probe = await executeSubprocessStep({
+        step: "E",
         command: "/bin/test",
-        arguments: ["-d", normalized],
-        stderr: "pipe",
+        args: ["-d", normalized],
       });
-      return true;
+      return probe.ok;
     } catch {
       return false;
     }
@@ -5959,21 +6054,26 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     command: string,
   ): Promise<TerminalLaunchResult> => {
     const steps: TerminalProbeStep[] = [];
+    const hasSubprocess = Boolean(getSubprocessCompat()?.call);
+    const hasNsIProcess = Boolean(
+      (globalThis as any).Components?.classes &&
+        (globalThis as any).Components?.interfaces,
+    );
     const probeA: TerminalProbeStep = {
       step: "A",
-      ok: Boolean(
-        ztoolkit.getGlobal("Subprocess") &&
-          typeof (ztoolkit.getGlobal("Subprocess") as { call?: unknown }).call ===
-            "function",
-      ),
-      message: "Subprocess availability check",
+      ok: hasSubprocess || hasNsIProcess,
+      message: hasSubprocess
+        ? "Subprocess available"
+        : hasNsIProcess
+          ? "Subprocess unavailable; nsIProcess fallback available"
+          : "No process executor available",
     };
     steps.push(probeA);
     if (!probeA.ok) {
       return {
         ok: false,
         code: "A",
-        message: "Terminal probe A failed: Subprocess unavailable",
+        message: "Terminal probe A failed: no process executor available",
         steps,
       };
     }
@@ -6103,23 +6203,6 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
     const terminalName = pathBasename(normalized).toLowerCase().replace(/\.app$/, "");
     try {
-      const Subprocess = ztoolkit.getGlobal("Subprocess") as
-        | {
-            call?: (args: {
-              command: string;
-              arguments?: string[];
-              stderr?: string;
-            }) => Promise<unknown>;
-          }
-        | undefined;
-      if (!Subprocess || typeof Subprocess.call !== "function") {
-        return {
-          ok: false,
-          code: "A",
-          message: "Terminal probe A failed: Subprocess unavailable",
-          steps,
-        };
-      }
       if (terminalName.includes("terminal")) {
         const result = await runCommandInMacTerminal(command);
         return {
