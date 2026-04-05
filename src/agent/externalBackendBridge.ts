@@ -23,7 +23,16 @@ export type RunTurnParams = {
 type ResolveExternalConfirmation = (
   requestId: string,
   resolution: AgentConfirmationResolution,
-) => Promise<void>;
+) => Promise<{
+  ok: boolean;
+  requestId: string;
+  httpStatus: number;
+  accepted: boolean;
+  source?: string;
+  pendingPermissionCount?: number;
+  recentPendingRequestIds?: string[];
+  errorMessage?: string;
+}>;
 
 export type AgentRuntimeLike = Pick<
   AgentRuntime,
@@ -533,6 +542,38 @@ async function runExternalBridgeTurn(
           params.registerPendingConfirmation?.(requestId, (resolution) => {
             void params
               .resolveExternalConfirmation?.(requestId, resolution)
+              .then(async (result) => {
+                if (!result) return;
+                if (debugModeEnabled) {
+                  await params.onEvent?.({
+                    type: "provider_event",
+                    providerType: "confirmation_sync",
+                    sessionId: undefined,
+                    ts: Date.now(),
+                    payload: {
+                      requestId: result.requestId,
+                      httpStatus: result.httpStatus,
+                      accepted: result.accepted,
+                      source: result.source,
+                      pendingPermissionCount: result.pendingPermissionCount,
+                      recentPendingRequestIds: result.recentPendingRequestIds,
+                      errorMessage: result.errorMessage,
+                    },
+                  });
+                  await params.onEvent?.({
+                    type: "status",
+                    text: `confirm ${result.requestId} -> POST /resolve-confirmation -> HTTP ${result.httpStatus} -> accepted=${result.accepted}`,
+                  });
+                }
+                if (!result.ok || !result.accepted) {
+                  await params.onEvent?.({
+                    type: "status",
+                    text: `Confirmation sync failed for ${requestId}: ${result.errorMessage || "not accepted by backend"}`,
+                  });
+                  // Re-register so the user can retry approval instead of getting stuck.
+                  registerResolver();
+                }
+              })
               .catch(async (error) => {
                 await params.onEvent?.({
                   type: "status",
@@ -1290,13 +1331,35 @@ export function createExternalBackendBridgeRuntime(options: {
                 data: resolution.data,
               }),
             });
-            if (!response.ok) {
-              const bodyText = await response.text().catch(() => "");
-              const suffix = bodyText ? `: ${bodyText}` : "";
-              throw new Error(
-                `resolve-confirmation failed (${response.status}) for ${requestId}${suffix}`,
-              );
-            }
+            const payload = (await response.json().catch(() => ({}))) as Record<
+              string,
+              unknown
+            >;
+            const accepted = Boolean(payload.ok);
+            return {
+              ok: response.ok && accepted,
+              requestId,
+              httpStatus: response.status,
+              accepted,
+              source: typeof payload.source === "string" ? payload.source : undefined,
+              pendingPermissionCount:
+                typeof payload.pendingPermissionCount === "number"
+                  ? payload.pendingPermissionCount
+                  : undefined,
+              recentPendingRequestIds: Array.isArray(payload.recentPendingRequestIds)
+                ? payload.recentPendingRequestIds
+                    .filter((x): x is string => typeof x === "string")
+                    .slice(0, 5)
+                : undefined,
+              errorMessage:
+                typeof payload.error === "string"
+                  ? payload.error
+                  : !response.ok
+                    ? `resolve-confirmation failed (${response.status})`
+                    : accepted
+                      ? undefined
+                      : "backend returned ok=false",
+            };
           },
         });
       } catch (error) {

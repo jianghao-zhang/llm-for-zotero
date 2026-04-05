@@ -1,6 +1,7 @@
 import { getAgentRuntime } from "../../../agent";
 import { renderMarkdown } from "../../../utils/markdown";
 import type {
+  AgentConfirmationResolution,
   AgentPendingAction,
   AgentPendingField,
   AgentRunEventRecord,
@@ -1215,6 +1216,11 @@ export function renderPendingActionCard(
     card.appendChild(description);
   }
 
+  const feedback = doc.createElement("div");
+  feedback.className = "llm-agent-hitl-feedback";
+  feedback.hidden = true;
+  card.appendChild(feedback);
+
   const normalizedActions = normalizePendingActions(pending.action);
   const buttonLayout = getPendingActionButtonLayout(pending.action);
   let activeActionId = normalizedActions.defaultActionId;
@@ -1530,11 +1536,10 @@ export function renderPendingActionCard(
       return hasScopedVisibility || hasScopedRequirement;
     });
   const handleExecute = () => {
-    setButtonsDisabled(true);
     const payload = Object.fromEntries(
       fieldAccessors.map((accessor) => [accessor.id, accessor.getValue()]),
     );
-    getAgentRuntime().resolveConfirmation(pending.requestId, {
+    submitResolution({
       approved: activeActionId !== normalizedActions.cancelActionId,
       actionId: activeActionId,
       data: payload,
@@ -1602,6 +1607,28 @@ export function renderPendingActionCard(
         button.disabled = true;
       }
     }
+  };
+  const showFeedback = (text: string) => {
+    feedback.hidden = false;
+    feedback.textContent = text;
+  };
+  const clearFeedback = () => {
+    feedback.hidden = true;
+    feedback.textContent = "";
+  };
+  const submitResolution = (resolution: AgentConfirmationResolution): boolean => {
+    clearFeedback();
+    setButtonsDisabled(true);
+    const accepted = getAgentRuntime().resolveConfirmation(
+      pending.requestId,
+      resolution,
+    );
+    if (!accepted) {
+      setButtonsDisabled(false);
+      showFeedback(`stale confirmation card: ${pending.requestId}`);
+      return false;
+    }
+    return true;
   };
   const isAccessorValidForAction = (
     accessor: (typeof fieldAccessors)[number],
@@ -1694,8 +1721,7 @@ export function renderPendingActionCard(
     cancelButton.textContent =
       normalizedActions.cancelAction.label || pending.action.cancelLabel || "Cancel";
     cancelButton.addEventListener("click", () => {
-      setButtonsDisabled(true);
-      getAgentRuntime().resolveConfirmation(pending.requestId, {
+      submitResolution({
         approved: false,
         actionId: normalizedActions.cancelActionId,
       });

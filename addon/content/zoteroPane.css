@@ -2544,6 +2544,12 @@ label.llm-search-results-item:hover {
   color: var(--fill-secondary);
 }
 
+.llm-agent-hitl-feedback {
+  font-size: var(--llm-fs-10);
+  color: var(--color-accent);
+  line-height: 1.4;
+}
+
 .llm-agent-hitl-label {
   font-size: var(--llm-fs-10);
   color: var(--fill-tertiary);
@@ -3635,14 +3641,6 @@ label.llm-search-results-item:hover {
 .llm-header-actions > #llm-session-folder-btn,
 .llm-header-actions > #llm-session-terminal-btn {
   margin: 0;
-}
-
-.llm-header-actions > #llm-session-folder-btn {
-  order: 0;
-}
-
-.llm-header-actions > #llm-session-terminal-btn {
-  order: 1;
 }
 
 .llm-header-actions > #llm-settings {
