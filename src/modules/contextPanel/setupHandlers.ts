@@ -5844,6 +5844,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   };
 
   const runCommandInMacTerminal = async (command: string): Promise<boolean> => {
+    let openedApp = false;
     try {
       const Subprocess = ztoolkit.getGlobal("Subprocess") as
         | {
@@ -5855,6 +5856,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           }
         | undefined;
       if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      // First make sure Terminal.app is launched.
+      await Subprocess.call({
+        command: "/usr/bin/open",
+        arguments: ["-a", "Terminal"],
+        stderr: "pipe",
+      });
+      openedApp = true;
       await Subprocess.call({
         command: "/usr/bin/osascript",
         arguments: [
@@ -5874,7 +5882,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       });
       return true;
     } catch {
-      return false;
+      // If script injection fails but Terminal is at least opened, treat as opened.
+      return openedApp;
     }
   };
 
@@ -5995,9 +6004,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       const ok = await runCommandInCustomTerminal(customPath, command);
       if (ok) return true;
     }
-    const opened = await runCommandInMacTerminal(command);
-    if (opened) return true;
-    return openTerminalAtDirectory(normalized);
+    return runCommandInMacTerminal(command);
   };
 
   const resolvePreferredSessionFolder = async (cwd: string): Promise<string> => {
