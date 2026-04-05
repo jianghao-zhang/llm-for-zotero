@@ -3563,6 +3563,13 @@ label.llm-search-results-item:hover {
 }
 
 .llm-session-action-btn {
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent !important;
   opacity: 0.7;
 }
 
@@ -3584,6 +3591,7 @@ label.llm-search-results-item:hover {
 
 .llm-session-action-btn:hover {
   opacity: 1;
+  background: transparent !important;
 }
 
 .llm-context-previews > #llm-selected-context-list {
@@ -3627,6 +3635,26 @@ label.llm-search-results-item:hover {
 .llm-header-actions > #llm-session-folder-btn,
 .llm-header-actions > #llm-session-terminal-btn {
   margin: 0;
+}
+
+.llm-header-actions > #llm-session-folder-btn {
+  order: 0;
+}
+
+.llm-header-actions > #llm-session-terminal-btn {
+  order: 1;
+}
+
+.llm-header-actions > #llm-settings {
+  order: 2;
+}
+
+.llm-header-actions > #llm-export {
+  order: 3;
+}
+
+.llm-header-actions > #llm-clear {
+  order: 4;
 }
 
 .llm-compose-area {

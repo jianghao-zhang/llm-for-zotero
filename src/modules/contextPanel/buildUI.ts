@@ -282,7 +282,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     type: "button",
     textContent: t("Clear"),
   });
-  headerActions.append(sessionTerminalBtn, sessionFolderBtn, settingsBtn, exportBtn, clearBtn);
+  headerActions.append(sessionFolderBtn, sessionTerminalBtn, settingsBtn, exportBtn, clearBtn);
   headerTop.appendChild(headerActions);
   header.appendChild(headerTop);
   const historyMenu = createElement(doc, "div", "llm-history-menu", {

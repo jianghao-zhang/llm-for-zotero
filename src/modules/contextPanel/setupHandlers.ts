@@ -563,6 +563,22 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return raw === "yolo" ? "yolo" : "safe";
   };
 
+  const getClaudeTerminalPathPref = (): string => {
+    return getStringPref("agentClaudeTerminalPath").trim();
+  };
+
+  const setClaudeTerminalPathPref = (path: string): void => {
+    try {
+      Zotero.Prefs.set(
+        `${config.prefsPrefix}.agentClaudeTerminalPath`,
+        path.trim(),
+        true,
+      );
+    } catch {
+      // best effort
+    }
+  };
+
   const setClaudePermissionModePref = (mode: "safe" | "yolo") => {
     Zotero.Prefs.set(
       `${config.prefsPrefix}.agentPermissionMode`,
@@ -5788,6 +5804,216 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return revealDirectory(normalized);
   };
 
+  const shellEscape = (value: string): string =>
+    `'${(value || "").replace(/'/g, `'\\''`)}'`;
+
+  const pathBasename = (value: string): string =>
+    (value || "")
+      .split("/")
+      .filter(Boolean)
+      .pop() || "";
+
+  const isDirectoryPath = (value: string): boolean =>
+    /\/$/.test(value.trim()) || /\.app$/i.test(value.trim());
+
+  const directoryExists = async (path: string): Promise<boolean> => {
+    const normalized = (path || "").trim();
+    if (!normalized) return false;
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      await Subprocess.call({
+        command: "/bin/test",
+        arguments: ["-d", normalized],
+        stderr: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const runCommandInMacTerminal = async (command: string): Promise<boolean> => {
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      await Subprocess.call({
+        command: "/usr/bin/osascript",
+        arguments: [
+          "-e",
+          "on run argv",
+          "-e",
+          "set cmd to item 1 of argv",
+          "-e",
+          'tell application "Terminal" to activate',
+          "-e",
+          'tell application "Terminal" to do script cmd',
+          "-e",
+          "end run",
+          command,
+        ],
+        stderr: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const runCommandInITerm = async (command: string): Promise<boolean> => {
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      await Subprocess.call({
+        command: "/usr/bin/osascript",
+        arguments: [
+          "-e",
+          "on run argv",
+          "-e",
+          "set cmd to item 1 of argv",
+          "-e",
+          'tell application "iTerm"',
+          "-e",
+          "activate",
+          "-e",
+          "create window with default profile command cmd",
+          "-e",
+          "end tell",
+          "-e",
+          "end run",
+          command,
+        ],
+        stderr: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const runCommandInCustomTerminal = async (
+    terminalPath: string,
+    command: string,
+  ): Promise<boolean> => {
+    const normalized = terminalPath.trim();
+    if (!normalized) return false;
+    const terminalName = pathBasename(normalized).toLowerCase().replace(/\.app$/, "");
+    try {
+      const Subprocess = ztoolkit.getGlobal("Subprocess") as
+        | {
+            call?: (args: {
+              command: string;
+              arguments?: string[];
+              stderr?: string;
+            }) => Promise<unknown>;
+          }
+        | undefined;
+      if (!Subprocess || typeof Subprocess.call !== "function") return false;
+      if (terminalName.includes("terminal")) {
+        return runCommandInMacTerminal(command);
+      }
+      if (terminalName.includes("iterm")) {
+        return runCommandInITerm(command);
+      }
+      if (isDirectoryPath(normalized)) {
+        await Subprocess.call({
+          command: "/usr/bin/open",
+          arguments: ["-a", normalized, "--args", "-e", "zsh", "-lc", command],
+          stderr: "pipe",
+        });
+        return true;
+      }
+      if (terminalName.includes("wezterm")) {
+        await Subprocess.call({
+          command: normalized,
+          arguments: ["start", "--", "zsh", "-lc", command],
+          stderr: "pipe",
+        });
+        return true;
+      }
+      if (
+        terminalName.includes("ghostty") ||
+        terminalName.includes("kitty") ||
+        terminalName.includes("alacritty") ||
+        terminalName.includes("rio")
+      ) {
+        await Subprocess.call({
+          command: normalized,
+          arguments: ["-e", "zsh", "-lc", command],
+          stderr: "pipe",
+        });
+        return true;
+      }
+      await Subprocess.call({
+        command: normalized,
+        arguments: ["zsh", "-lc", command],
+        stderr: "pipe",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const openClaudeInTerminalAtDirectory = async (
+    cwd: string,
+    mode: "safe" | "yolo",
+  ): Promise<boolean> => {
+    const normalized = (cwd || "").trim();
+    if (!normalized) return false;
+    const command = `cd ${shellEscape(normalized)} && claude${
+      mode === "yolo" ? " --dangerously-skip-permissions" : ""
+    }`;
+    const customPath = getClaudeTerminalPathPref();
+    if (customPath) {
+      const ok = await runCommandInCustomTerminal(customPath, command);
+      if (ok) return true;
+    }
+    const opened = await runCommandInMacTerminal(command);
+    if (opened) return true;
+    return openTerminalAtDirectory(normalized);
+  };
+
+  const resolvePreferredSessionFolder = async (cwd: string): Promise<string> => {
+    const normalized = (cwd || "").trim();
+    if (!normalized) return "";
+    const candidates = [
+      `${normalized}/workspace`,
+      `${normalized}/files`,
+      `${normalized}/.claude`,
+    ];
+    for (const candidate of candidates) {
+      if (await directoryExists(candidate)) {
+        return candidate;
+      }
+    }
+    return normalized;
+  };
+
   const ensureDirectoryExists = async (path: string): Promise<boolean> => {
     const normalized = (path || "").trim();
     if (!normalized) return false;
@@ -5826,6 +6052,57 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       // continue to fallback
     }
     return true;
+  };
+
+  let terminalPathMenuEl: HTMLDivElement | null = null;
+  let terminalPathMenuInputEl: HTMLInputElement | null = null;
+  const closeTerminalPathMenu = () => {
+    if (terminalPathMenuEl) terminalPathMenuEl.style.display = "none";
+  };
+  const ensureTerminalPathMenu = () => {
+    if (terminalPathMenuEl && terminalPathMenuInputEl) return;
+    const doc = body.ownerDocument;
+    if (!doc) return;
+    const menu = doc.createElement("div");
+    menu.className = "llm-terminal-path-menu";
+    menu.style.display = "none";
+    const input = doc.createElement("input");
+    input.type = "text";
+    input.className = "llm-terminal-path-input";
+    input.placeholder = "/path/to/terminal (empty = system Terminal)";
+    const saveBtn = doc.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "llm-terminal-path-save";
+    saveBtn.textContent = "Save";
+    saveBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setClaudeTerminalPathPref(input.value || "");
+      if (status) {
+        const v = (input.value || "").trim();
+        setStatus(
+          status,
+          v
+            ? `Saved terminal path: ${v}`
+            : "Terminal reset to system default",
+          "ready",
+        );
+      }
+      closeTerminalPathMenu();
+    });
+    input.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveBtn.click();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeTerminalPathMenu();
+      }
+    });
+    menu.append(input, saveBtn);
+    panelRoot.appendChild(menu);
+    terminalPathMenuEl = menu;
+    terminalPathMenuInputEl = input;
   };
 
   const openTerminalAtDirectory = async (path: string): Promise<boolean> => {
@@ -11167,11 +11444,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             return;
           }
           await ensureDirectoryExists(cwd);
-          const opened = await openDirectory(cwd);
+          const folderToOpen = await resolvePreferredSessionFolder(cwd);
+          const opened = await openDirectory(folderToOpen);
           if (status) {
             setStatus(
               status,
-              opened ? `Opened session folder: ${cwd}` : `Session folder: ${cwd}`,
+              opened
+                ? `Opened session folder: ${folderToOpen}`
+                : `Session folder: ${folderToOpen}`,
               "ready",
             );
           }
@@ -11183,9 +11463,25 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     });
   }
   if (sessionTerminalBtn) {
+    sessionTerminalBtn.addEventListener("contextmenu", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!shouldUseClaudeRuntimeModelMenu()) return;
+      ensureTerminalPathMenu();
+      if (!terminalPathMenuEl || !terminalPathMenuInputEl) return;
+      const mouse = e as MouseEvent;
+      const panelRect = panelRoot.getBoundingClientRect();
+      terminalPathMenuEl.style.left = `${Math.max(8, mouse.clientX - panelRect.left)}px`;
+      terminalPathMenuEl.style.top = `${Math.max(8, mouse.clientY - panelRect.top)}px`;
+      terminalPathMenuInputEl.value = getClaudeTerminalPathPref();
+      terminalPathMenuEl.style.display = "inline-flex";
+      terminalPathMenuInputEl.focus();
+      terminalPathMenuInputEl.select();
+    });
     sessionTerminalBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      closeTerminalPathMenu();
       void (async () => {
         if (!shouldUseClaudeRuntimeModelMenu()) return;
         try {
@@ -11196,7 +11492,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
             return;
           }
           await ensureDirectoryExists(cwd);
-          const opened = await openTerminalAtDirectory(cwd);
+          const opened = await openClaudeInTerminalAtDirectory(
+            cwd,
+            getClaudePermissionModePref(),
+          );
           if (status) {
             setStatus(
               status,
@@ -11219,6 +11518,15 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       .__llmModelMenuDismiss
   ) {
     doc.addEventListener("mousedown", (e: Event) => {
+      if (
+        terminalPathMenuEl &&
+        terminalPathMenuEl.style.display !== "none" &&
+        e.target instanceof Node &&
+        !terminalPathMenuEl.contains(e.target as Node) &&
+        !(sessionTerminalBtn && sessionTerminalBtn.contains(e.target as Node))
+      ) {
+        closeTerminalPathMenu();
+      }
       const me = e as MouseEvent;
       const modelMenus = Array.from(
         doc.querySelectorAll("#llm-model-menu, #llm-claude-model-menu"),
