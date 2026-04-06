@@ -3589,7 +3589,6 @@ label.llm-search-results-item:hover {
 
 .llm-session-folder-btn::before {
   background: url("icons/action-folder-icons8.svg") center/contain no-repeat;
-  filter: brightness(1.3);
 }
 
 .llm-session-terminal-btn::before {
