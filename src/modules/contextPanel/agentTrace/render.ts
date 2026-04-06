@@ -20,6 +20,7 @@ import {
 import {
   agentProcessExpandedCache,
   agentReasoningExpandedCache,
+  type AgentTraceUiState,
 } from "../agentState";
 import { buildTextDiffPreview } from "./diffPreview";
 import { getBoolPref, getStringPref } from "../prefHelpers";
@@ -64,7 +65,7 @@ type RenderAgentTraceParams = {
   doc: Document;
   message: Message;
   userMessage?: Message | null;
-  events: AgentRunEventRecord[];
+  traceState?: AgentTraceUiState | null;
   onTraceMissing?: () => void;
 };
 
@@ -2445,29 +2446,80 @@ export function renderAgentTrace({
   doc,
   message,
   userMessage,
-  events,
+  traceState,
   onTraceMissing,
 }: RenderAgentTraceParams): HTMLElement | null {
   const runId = message.agentRunId?.trim();
   if (!runId) return null;
+  const events = traceState?.events || [];
+  const traceStatus = traceState?.status || "loading";
   const wrap = doc.createElement("div");
   wrap.className = "llm-agent-activity";
   const list = doc.createElement("div");
   list.className = "llm-agent-activity-list";
 
   if (!events.length) {
-    onTraceMissing?.();
-    const loadingRow = doc.createElement("div");
-    loadingRow.className = "llm-at-row llm-at-row-plan";
-    const loadingIcon = doc.createElement("span");
-    loadingIcon.className = "llm-at-icon";
-    loadingIcon.textContent = "...";
-    const loadingText = doc.createElement("span");
-    loadingText.className = "llm-at-text llm-at-plan-text";
-    loadingText.textContent = "Loading agent activity...";
-    loadingRow.append(loadingIcon, loadingText);
-    list.appendChild(loadingRow);
-    wrap.appendChild(list);
+    if (traceStatus === "loading" && onTraceMissing) {
+      onTraceMissing();
+      const loadingRow = doc.createElement("div");
+      loadingRow.className = "llm-at-row llm-at-row-plan";
+      const loadingIcon = doc.createElement("span");
+      loadingIcon.className = "llm-at-icon";
+      loadingIcon.textContent = "...";
+      const loadingText = doc.createElement("span");
+      loadingText.className = "llm-at-text llm-at-plan-text";
+      loadingText.textContent = "Loading agent activity...";
+      loadingRow.append(loadingIcon, loadingText);
+      list.appendChild(loadingRow);
+      wrap.appendChild(list);
+      return wrap;
+    }
+    const includeConfirmationSummary = isDebugPermissionUiEnabled(
+      getAgentTraceVerbosityPref(),
+    );
+    const keyEvents = message.streaming ? 0 : 1;
+    const summaryBits = [
+      "tool calls 0",
+      `key events ${keyEvents}`,
+      includeConfirmationSummary ? "confirm 0/0" : "",
+    ].filter(Boolean);
+    const processLabel = message.streaming
+      ? `Process (running, ${summaryBits.join(", ")})`
+      : `Process (completed, ${summaryBits.join(", ")})`;
+    const processDetails = doc.createElement("details") as HTMLDetailsElement;
+    processDetails.className = "llm-agent-process-details";
+    const cachedProcessOpen = agentProcessExpandedCache.get(runId);
+    processDetails.open =
+      typeof cachedProcessOpen === "boolean"
+        ? cachedProcessOpen
+        : !getBoolPref("agentProcessCollapseByDefault", true);
+    const processSummary = doc.createElement("summary");
+    processSummary.className = "llm-agent-process-summary";
+    processSummary.textContent = processDetails.open
+      ? "Hide process"
+      : `View ${processLabel}`;
+    processDetails.addEventListener("toggle", () => {
+      agentProcessExpandedCache.set(runId, processDetails.open);
+      processSummary.textContent = processDetails.open
+        ? "Hide process"
+        : `View ${processLabel}`;
+    });
+    processDetails.appendChild(processSummary);
+    const emptyRow = doc.createElement("div");
+    emptyRow.className = "llm-at-row llm-at-row-plan";
+    const emptyIcon = doc.createElement("span");
+    emptyIcon.className = "llm-at-icon";
+    emptyIcon.textContent = "·";
+    const emptyText = doc.createElement("span");
+    emptyText.className = "llm-at-text llm-at-plan-text";
+    emptyText.textContent =
+      traceStatus === "failed"
+        ? "Agent activity unavailable. Retrying soon..."
+        : "No detailed agent activity recorded for this run.";
+    emptyRow.append(emptyIcon, emptyText);
+    list.appendChild(emptyRow);
+    processDetails.appendChild(list);
+    wrap.appendChild(processDetails);
     return wrap;
   }
   const traceVerbosity = getAgentTraceVerbosityPref();

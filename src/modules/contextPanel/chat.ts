@@ -82,6 +82,7 @@ import {
 import {
   agentRunTraceCache,
   agentRunTraceLoadingTasks,
+  type AgentTraceUiState,
 } from "./agentState";
 import {
   sanitizeText,
@@ -149,6 +150,7 @@ import {
 } from "./conversationSummaryCache";
 import type {
   AgentRunEventRecord,
+  AgentRunRecord,
   AgentRuntimeRequest,
 } from "../../agent/types";
 import {
@@ -888,20 +890,158 @@ async function ensureAgentRunTraceLoaded(
   runId: string | undefined,
   body?: Element,
   item?: Zotero.Item | null,
+  opts?: { force?: boolean },
 ): Promise<void> {
+  const TRACE_RETRY_COOLDOWN_MS = 6_000;
+  const rebuildTraceEventsFromRunRecord = (
+    run: AgentRunRecord | null,
+  ): AgentRunEventRecord[] => {
+    if (!run) return [];
+    const nowTs = Date.now();
+    const createdAt = Number.isFinite(run.createdAt)
+      ? Math.floor(run.createdAt)
+      : nowTs;
+    const completedAt = Number.isFinite(run.completedAt)
+      ? Math.floor(run.completedAt as number)
+      : createdAt;
+    const events: AgentRunEventRecord[] = [];
+    const pushEvent = (
+      payload: AgentRunEventRecord["payload"],
+      created: number,
+    ) => {
+      events.push({
+        runId: run.runId,
+        seq: events.length + 1,
+        eventType: payload.type,
+        payload,
+        createdAt: created,
+      });
+    };
+    if (run.status === "running") {
+      pushEvent(
+        {
+          type: "status",
+          text: "Agent run in progress",
+        },
+        createdAt,
+      );
+      return events;
+    }
+    if (run.status === "completed") {
+      pushEvent(
+        {
+          type: "final",
+          text:
+            (run.finalText || "").trim() ||
+            "Completed. Detailed trace unavailable.",
+        },
+        completedAt,
+      );
+      return events;
+    }
+    pushEvent(
+      {
+        type: "fallback",
+        reason:
+          run.status === "cancelled"
+            ? "Run cancelled"
+            : "Run failed. Detailed trace unavailable.",
+      },
+      completedAt,
+    );
+    return events;
+  };
+  const rebuildTraceEventsFromMessage = (
+    targetRunId: string,
+    message?: Message | null,
+  ): AgentRunEventRecord[] => {
+    const text = sanitizeText((message?.text || "").trim());
+    if (!text) return [];
+    return [
+      {
+        runId: targetRunId,
+        seq: 1,
+        eventType: "final",
+        payload: {
+          type: "final",
+          text,
+        },
+        createdAt: Number.isFinite(Number(message?.timestamp))
+          ? Math.floor(Number(message?.timestamp))
+          : Date.now(),
+      },
+    ];
+  };
   const normalizedRunId = (runId || "").trim();
-  if (!normalizedRunId || agentRunTraceCache.has(normalizedRunId)) return;
+  if (!normalizedRunId) return;
+  const cached = agentRunTraceCache.get(normalizedRunId);
+  if (!opts?.force && cached?.status === "ready") return;
+  if (
+    !opts?.force &&
+    cached?.status === "failed" &&
+    cached.lastAttemptAt &&
+    Date.now() - cached.lastAttemptAt < TRACE_RETRY_COOLDOWN_MS
+  ) {
+    return;
+  }
   const existing = agentRunTraceLoadingTasks.get(normalizedRunId);
   if (existing) {
     await existing;
     return;
   }
+  agentRunTraceCache.set(normalizedRunId, {
+    status: "loading",
+    events: cached?.events || [],
+    lastAttemptAt: Date.now(),
+  });
   const task = (async () => {
     try {
       const trace = await getAgentRunTrace(normalizedRunId);
-      agentRunTraceCache.set(normalizedRunId, trace.events);
+      const rebuiltFromRun =
+        trace.events.length > 0 ? [] : rebuildTraceEventsFromRunRecord(trace.run);
+      const fallbackMessage = (() => {
+        if (!item) return null;
+        const conversationKey = getConversationKey(item);
+        const history = chatHistory.get(conversationKey) || [];
+        for (let i = history.length - 1; i >= 0; i -= 1) {
+          const candidate = history[i];
+          if (
+            candidate?.role === "assistant" &&
+            (candidate.agentRunId || "").trim() === normalizedRunId
+          ) {
+            return candidate;
+          }
+        }
+        return null;
+      })();
+      const rebuiltFromMessage =
+        trace.events.length > 0 || rebuiltFromRun.length > 0
+          ? []
+          : rebuildTraceEventsFromMessage(normalizedRunId, fallbackMessage);
+      const events =
+        trace.events.length > 0
+          ? trace.events
+          : rebuiltFromRun.length > 0
+            ? rebuiltFromRun
+            : rebuiltFromMessage;
+      const status: AgentTraceUiState["status"] =
+        trace.events.length > 0
+          ? "ready"
+          : events.length > 0
+            ? "reconstructed"
+            : "failed";
+      agentRunTraceCache.set(normalizedRunId, {
+        status,
+        events,
+        lastAttemptAt: Date.now(),
+      });
     } catch (err) {
       ztoolkit.log("LLM: Failed to load agent run trace", err);
+      agentRunTraceCache.set(normalizedRunId, {
+        status: "failed",
+        events: cached?.events || [],
+        lastAttemptAt: Date.now(),
+      });
     } finally {
       agentRunTraceLoadingTasks.delete(normalizedRunId);
       if (body && item) {
@@ -913,10 +1053,17 @@ async function ensureAgentRunTraceLoaded(
   await task;
 }
 
-function getCachedAgentRunEvents(runId: string | undefined): AgentRunEventRecord[] {
+function getCachedAgentRunTraceState(
+  runId: string | undefined,
+): AgentTraceUiState | null {
   const normalizedRunId = (runId || "").trim();
-  if (!normalizedRunId) return [];
-  return agentRunTraceCache.get(normalizedRunId) || [];
+  if (!normalizedRunId) return null;
+  return (
+    agentRunTraceCache.get(normalizedRunId) || {
+      status: "loading",
+      events: [],
+    }
+  );
 }
 
 export function detectReasoningProvider(
@@ -4288,14 +4435,20 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           ? history[index - 1]
           : null;
       const agentRunId = msg.agentRunId?.trim();
+      const traceState = getCachedAgentRunTraceState(agentRunId);
+      const shouldRequestTraceLoad =
+        Boolean(agentRunId) &&
+        (!traceState ||
+          traceState.status === "loading" ||
+          traceState.status === "failed");
       const agentTraceEl =
         msg.runMode === "agent"
           ? renderAgentTrace({
               doc,
               message: msg,
               userMessage: previousUserMessage,
-              events: getCachedAgentRunEvents(agentRunId),
-              onTraceMissing: agentRunId
+              traceState,
+              onTraceMissing: agentRunId && shouldRequestTraceLoad
                 ? () => {
                     void ensureAgentRunTraceLoaded(agentRunId, body, item);
                   }
