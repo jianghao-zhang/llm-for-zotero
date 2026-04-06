@@ -1,6 +1,11 @@
 import { config } from "../../package.json";
 import { dbg, dbgError } from "../utils/debugLogger";
 import type { AgentRuntime } from "./runtime";
+import {
+  appendAgentRunEvent,
+  createAgentRun,
+  finishAgentRun,
+} from "./store/traceStore";
 import type {
   ActionConfirmationMode,
   ActionProgressEvent,
@@ -1517,6 +1522,41 @@ export function createExternalBackendBridgeRuntime(options: {
       if (!bridgeUrl) {
         return coreRuntime.runTurn(params);
       }
+      let persistedRunId = "";
+      let persistedRunCreated = false;
+      let persistedSeq = 0;
+      const pendingEventsBeforeRunId: AgentEvent[] = [];
+      const ensurePersistedRun = async (runId: string): Promise<void> => {
+        const normalized = (runId || "").trim();
+        if (!normalized) return;
+        if (!persistedRunCreated || persistedRunId !== normalized) {
+          persistedRunId = normalized;
+          persistedSeq = 0;
+          await createAgentRun({
+            runId: persistedRunId,
+            conversationKey: params.request.conversationKey,
+            mode: "agent",
+            model: params.request.model,
+            status: "running",
+            createdAt: Date.now(),
+          });
+          persistedRunCreated = true;
+          if (pendingEventsBeforeRunId.length) {
+            for (const event of pendingEventsBeforeRunId.splice(0)) {
+              persistedSeq += 1;
+              await appendAgentRunEvent(persistedRunId, persistedSeq, event);
+            }
+          }
+        }
+      };
+      const appendPersistedEvent = async (event: AgentEvent): Promise<void> => {
+        if (!persistedRunCreated || !persistedRunId) {
+          pendingEventsBeforeRunId.push(event);
+          return;
+        }
+        persistedSeq += 1;
+        await appendAgentRunEvent(persistedRunId, persistedSeq, event);
+      };
       const contextEnvelope = buildContextEnvelope(params.request);
       const runtimeRequest = await buildBridgeRuntimeRequest(params.request);
       const scope = resolveBridgeScope(params.request);
@@ -1543,10 +1583,20 @@ export function createExternalBackendBridgeRuntime(options: {
           ? "Reused previous context"
           : "Detected updated context";
       conversationContextSignature.set(params.request.conversationKey, currentSignature);
-      await params.onEvent?.({ type: "status", text: contextStatus });
+      const preStatusEvent: AgentEvent = { type: "status", text: contextStatus };
+      await appendPersistedEvent(preStatusEvent);
+      await params.onEvent?.(preStatusEvent);
       try {
-        return await runExternalBridgeTurn(bridgeUrl, {
+        const outcome = await runExternalBridgeTurn(bridgeUrl, {
           ...params,
+          onStart: async (runId) => {
+            await ensurePersistedRun(runId);
+            await params.onStart?.(runId);
+          },
+          onEvent: async (event) => {
+            await appendPersistedEvent(event);
+            await params.onEvent?.(event);
+          },
           contextEnvelope,
           runtimeRequest,
           scope,
@@ -1594,7 +1644,24 @@ export function createExternalBackendBridgeRuntime(options: {
             };
           },
         });
+        const finalRunId = persistedRunId || outcome.runId;
+        if (finalRunId) {
+          await ensurePersistedRun(finalRunId);
+          await finishAgentRun(
+            finalRunId,
+            outcome.kind === "completed" ? "completed" : "failed",
+            outcome.kind === "completed" ? outcome.text : outcome.reason,
+          );
+        }
+        return outcome;
       } catch (error) {
+        if (persistedRunId) {
+          await finishAgentRun(
+            persistedRunId,
+            "failed",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         const message = error instanceof Error ? error.message : String(error);
         if (typeof ztoolkit !== "undefined" && typeof ztoolkit.log === "function") {
           ztoolkit.log("LLM Agent: External bridge unavailable, fallback to local runtime", message);
