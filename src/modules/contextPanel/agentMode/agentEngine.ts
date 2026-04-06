@@ -24,6 +24,7 @@ import type { ReasoningConfig as LLMReasoningConfig } from "../../../utils/llmCl
 import type { ChatMessage } from "../../../utils/llmClient";
 import type { StoredChatMessage } from "../../../utils/chatStore";
 import type { Message } from "../types";
+import type { AgentTraceUiState } from "../agentState";
 
 // ---------------------------------------------------------------------------
 // Types for panel helpers (defined inline to avoid importing from chat.ts)
@@ -216,7 +217,7 @@ export type AgentEngineDeps = {
   chatHistory: Map<number, Message[]>;
 
   // Agent trace cache
-  agentRunTraceCache: Map<string, AgentRunEventRecord[]>;
+  agentRunTraceCache: Map<string, AgentTraceUiState>;
 
   // Request lifecycle
   cancelledRequestId: () => number;
@@ -547,7 +548,7 @@ export async function sendAgentTurn(
     const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
 
     const pushTraceEvent = (runId: string, event: AgentEvent) => {
-      const list = deps.agentRunTraceCache.get(runId) || [];
+      const list = deps.agentRunTraceCache.get(runId)?.events || [];
       list.push({
         runId,
         seq: list.length + 1,
@@ -555,7 +556,11 @@ export async function sendAgentTurn(
         payload: event,
         createdAt: Date.now(),
       });
-      deps.agentRunTraceCache.set(runId, list);
+      deps.agentRunTraceCache.set(runId, {
+        status: "ready",
+        events: list,
+        lastAttemptAt: Date.now(),
+      });
     };
 
     const outcome = await agentRuntime.runTurn({
@@ -564,7 +569,11 @@ export async function sendAgentTurn(
       onStart: async (runId) => {
         assistantMessage.agentRunId = runId;
         userMessage.agentRunId = runId;
-        deps.agentRunTraceCache.set(runId, []);
+        deps.agentRunTraceCache.set(runId, {
+          status: "loading",
+          events: [],
+          lastAttemptAt: Date.now(),
+        });
         refreshChatSafely();
         await deps.updateStoredLatestUserMessage(conversationKey, {
           text: userMessage.text,
@@ -855,7 +864,7 @@ export async function retryAgentTurn(
     const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
 
     const pushTraceEvent = (runId: string, event: AgentEvent) => {
-      const list = deps.agentRunTraceCache.get(runId) || [];
+      const list = deps.agentRunTraceCache.get(runId)?.events || [];
       list.push({
         runId,
         seq: list.length + 1,
@@ -863,7 +872,11 @@ export async function retryAgentTurn(
         payload: event,
         createdAt: Date.now(),
       });
-      deps.agentRunTraceCache.set(runId, list);
+      deps.agentRunTraceCache.set(runId, {
+        status: "ready",
+        events: list,
+        lastAttemptAt: Date.now(),
+      });
     };
 
     const outcome = await agentRuntime.runTurn({
@@ -872,7 +885,11 @@ export async function retryAgentTurn(
       onStart: async (runId) => {
         assistantMessage.agentRunId = runId;
         retryPair.userMessage.agentRunId = runId;
-        deps.agentRunTraceCache.set(runId, []);
+        deps.agentRunTraceCache.set(runId, {
+          status: "loading",
+          events: [],
+          lastAttemptAt: Date.now(),
+        });
         refreshChatSafely();
         await deps.updateStoredLatestUserMessage(conversationKey, {
           text: retryPair.userMessage.text,
