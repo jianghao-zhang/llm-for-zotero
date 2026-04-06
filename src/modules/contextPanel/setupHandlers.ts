@@ -563,11 +563,20 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const history = chatHistory.get(normalizedKey) || [];
     for (let i = history.length - 1; i >= 0; i -= 1) {
       const runMode = history[i]?.runMode;
-      if (runMode === "agent" || runMode === "chat") {
-        return runMode;
+      if (runMode === "agent") {
+        return "agent";
       }
     }
     return "chat";
+  };
+  const isConversationAgentScoped = (targetConversationKey: number): boolean => {
+    const normalizedKey = Number.isFinite(targetConversationKey)
+      ? Math.floor(targetConversationKey)
+      : 0;
+    if (normalizedKey <= 0) return false;
+    if (selectedRuntimeModeCache.get(normalizedKey) === "agent") return true;
+    const history = chatHistory.get(normalizedKey) || [];
+    return history.some((message) => message.runMode === "agent");
   };
   const applyConversationRuntimeMode = (
     targetConversationKey: number,
@@ -884,7 +893,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (runtimeDisableTransitionInFlight) return;
     if (!item || isNoteSession()) return;
     if (getAgentModeEnabled()) return;
-    if (getCurrentRuntimeMode() !== "agent") return;
+    if (!isConversationAgentScoped(getConversationKey(item))) return;
     runtimeDisableTransitionInFlight = true;
     try {
       if (isPaperMode()) {
@@ -958,7 +967,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         applyResponsiveActionButtonsLayout();
       });
     };
-    const onAgentPrefChange = () => {
+  const onAgentPrefChange = () => {
       const nextAgentModeEnabled = getAgentModeEnabled();
       const shouldTransitionToChat =
         lastObservedAgentModeEnabled && !nextAgentModeEnabled;
@@ -4259,7 +4268,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (requestId !== globalHistoryLoadSeq) return;
     for (const entry of visibleEntries) {
       const cachedMode = selectedRuntimeModeCache.get(entry.conversationKey);
-      const resolvedMode = cachedMode || historyRuntimeModes.get(entry.conversationKey);
+      const historyMode = historyRuntimeModes.get(entry.conversationKey);
+      const resolvedMode =
+        cachedMode === "agent" || historyMode === "agent"
+          ? "agent"
+          : cachedMode || historyMode;
       if (!resolvedMode) continue;
       entry.runtimeMode = resolvedMode;
       if (!cachedMode) {
@@ -4342,7 +4355,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       normalizedConversationKey,
       opts?.forcedRuntimeMode,
     );
-    if (!getAgentModeEnabled() && getCurrentRuntimeMode() === "agent" && status) {
+    if (
+      !getAgentModeEnabled() &&
+      isConversationAgentScoped(normalizedConversationKey) &&
+      status
+    ) {
       setStatus(
         status,
         "Claude Code is disabled. Enable Claude Code to continue this conversation.",
@@ -4433,7 +4450,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       normalizedConversationKey,
       opts?.forcedRuntimeMode,
     );
-    if (!getAgentModeEnabled() && getCurrentRuntimeMode() === "agent" && status) {
+    if (
+      !getAgentModeEnabled() &&
+      isConversationAgentScoped(normalizedConversationKey) &&
+      status
+    ) {
       setStatus(
         status,
         "Claude Code is disabled. Enable Claude Code to continue this conversation.",
@@ -10689,7 +10710,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     fromQueue?: boolean;
     queuedText?: string;
   }) => {
-    if (getCurrentRuntimeMode() === "agent" && !getAgentModeEnabled()) {
+    if (
+      item &&
+      !getAgentModeEnabled() &&
+      isConversationAgentScoped(getConversationKey(item))
+    ) {
       if (status) {
         setStatus(
           status,

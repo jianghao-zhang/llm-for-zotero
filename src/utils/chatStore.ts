@@ -1434,29 +1434,30 @@ export async function getConversationRuntimeModes(
   if (!normalizedKeys.length) return new Map();
   const placeholders = normalizedKeys.map(() => "?").join(", ");
   const rows = (await Zotero.DB.queryAsync(
-    `SELECT m.conversation_key AS conversationKey,
-            m.run_mode AS runMode
-     FROM ${CHAT_MESSAGES_TABLE} m
-     JOIN (
-       SELECT conversation_key AS conversationKey,
-              MAX(id) AS maxId
-       FROM ${CHAT_MESSAGES_TABLE}
-       WHERE conversation_key IN (${placeholders})
-         AND run_mode IN ('chat', 'agent')
-       GROUP BY conversation_key
-     ) latest
-       ON latest.maxId = m.id`,
+    `SELECT conversation_key AS conversationKey,
+            MAX(CASE WHEN run_mode = 'agent' THEN 1 ELSE 0 END) AS hasAgent,
+            MAX(CASE WHEN run_mode = 'chat' THEN 1 ELSE 0 END) AS hasChat
+     FROM ${CHAT_MESSAGES_TABLE}
+     WHERE conversation_key IN (${placeholders})
+       AND run_mode IN ('chat', 'agent')
+     GROUP BY conversation_key`,
     normalizedKeys,
-  )) as Array<{ conversationKey?: unknown; runMode?: unknown }> | undefined;
+  )) as
+    | Array<{
+        conversationKey?: unknown;
+        hasAgent?: unknown;
+        hasChat?: unknown;
+      }>
+    | undefined;
   const out = new Map<number, "chat" | "agent">();
   for (const row of rows || []) {
     const conversationKey = normalizeConversationKey(Number(row.conversationKey));
     if (!conversationKey) continue;
-    if (row.runMode === "agent") {
+    if (Number(row.hasAgent) > 0) {
       out.set(conversationKey, "agent");
       continue;
     }
-    if (row.runMode === "chat") {
+    if (Number(row.hasChat) > 0) {
       out.set(conversationKey, "chat");
     }
   }
