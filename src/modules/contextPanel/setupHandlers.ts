@@ -401,6 +401,8 @@ export function setupHandlers(
     slashReferenceOption,
     slashPdfPageOption,
     slashPdfMultiplePagesOption,
+    slashCollectionOption,
+    slashLitReviewOption,
     imagePreview,
     selectedContextList,
     previewStrip,
@@ -687,20 +689,20 @@ export function setupHandlers(
       if (!modeChipBtn.querySelector(".llm-webchat-dot")) {
         const currentLabel = noteSession
           ? (mode === "global" ? "Open note" : "Paper note")
-          : (mode === "global" ? "Open chat" : "Paper chat");
+          : (mode === "global" ? "Library chat" : "Paper chat");
         modeChipBtn.textContent = currentLabel;
         modeChipBtn.title = noteSession
           ? currentLabel
           : mode === "global"
             ? "Switch to paper chat"
-            : "Switch to open chat";
+            : "Switch to library chat";
         modeChipBtn.setAttribute(
           "aria-label",
           noteSession
             ? currentLabel
             : mode === "global"
               ? "Switch to paper chat"
-              : "Switch to open chat",
+              : "Switch to library chat",
         );
       }
     }
@@ -717,11 +719,11 @@ export function setupHandlers(
         lockedKey !== null && currentKey !== null && lockedKey === currentKey;
       modeLockBtn.dataset.locked = isLocked ? "true" : "false";
       modeLockBtn.title = isLocked
-        ? "Unlock open chat default"
-        : "Lock open chat as default";
+        ? "Unlock library chat default"
+        : "Lock library chat as default";
       modeLockBtn.setAttribute(
         "aria-label",
-        isLocked ? "Unlock open chat default" : "Lock open chat as default",
+        isLocked ? "Unlock library chat default" : "Lock library chat as default",
       );
     }
     updateRuntimeModeButton();
@@ -754,6 +756,22 @@ export function setupHandlers(
       );
     } catch {
       // Zotero.Prefs.registerObserver not available – no live sync
+    }
+  }
+
+  // Auto-activate agent mode in standalone library chat
+  {
+    const isStandalone = (body as HTMLElement).dataset?.standalone === "true";
+    if (isStandalone && isGlobalMode()) {
+      const agentEnabled = getAgentModeEnabled();
+      const key = item ? getConversationKey(item) : null;
+      if (key && !selectedRuntimeModeCache.has(key)) {
+        if (agentEnabled) {
+          setCurrentRuntimeMode("agent");
+        } else if (status) {
+          setStatus(status, t("Tip: Enable Agent mode in Preferences for a better library chat experience."), "ready");
+        }
+      }
     }
   }
 
@@ -3915,7 +3933,7 @@ export function setupHandlers(
         globalEntries.push({
           kind: "global",
           section: "open",
-          sectionTitle: "Open Chat",
+          sectionTitle: "Library Chat",
           conversationKey: normalizedKey,
           title: entry.title,
           timestampText: entry.isDraft
@@ -6614,9 +6632,9 @@ export function setupHandlers(
         if (oldDot) {
           oldDot.remove();
           // Restore mode chip text — the normal render sync skips it while the dot is present
-          const chipLabel = isGlobalMode() ? "Open chat" : "Paper chat";
+          const chipLabel = isGlobalMode() ? "Library chat" : "Paper chat";
           modeChipBtn.textContent = chipLabel;
-          modeChipBtn.title = isGlobalMode() ? "Switch to paper chat" : "Switch to open chat";
+          modeChipBtn.title = isGlobalMode() ? "Switch to paper chat" : "Switch to library chat";
         }
         stopWebChatConnectionCheck();
         modeChipBtn.style.cursor = "";
@@ -9227,6 +9245,9 @@ export function setupHandlers(
     const isEventWithinActivePanel = (event: Event) => {
       const panel = panelDoc.querySelector("#llm-main") as HTMLElement | null;
       if (!panel) return null;
+      // In standalone window, accept events from anywhere in the document
+      const standaloneRoot = panelDoc.getElementById("llmforzotero-standalone-chat-root") as HTMLElement | null;
+      if (standaloneRoot) return panel;
       const target = event.target as Node | null;
       const activeEl = panelDoc.activeElement;
       const inPanel = Boolean(
@@ -9257,6 +9278,9 @@ export function setupHandlers(
       event.preventDefault();
       event.stopPropagation();
       applyPanelFontScale(panel);
+      // Also scale the standalone root so sidebar/tabs/title scale together
+      const standaloneRoot = panelDoc.getElementById("llmforzotero-standalone-chat-root") as HTMLElement | null;
+      if (standaloneRoot) applyPanelFontScale(standaloneRoot);
     };
 
     panelDoc.addEventListener(
@@ -9614,6 +9638,57 @@ export function setupHandlers(
       consumeActiveActionToken();
       closeSlashMenu();
       openReferenceSlashFromMenu();
+    });
+  }
+
+  if (slashCollectionOption) {
+    slashCollectionOption.addEventListener("click", async (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      consumeActiveActionToken();
+      closeSlashMenu();
+      // Reuse the reference picker in collection-browse mode
+      openReferenceSlashFromMenu();
+      if (status) {
+        setStatus(
+          status,
+          t("Browse and select a collection to add its papers as context."),
+          "ready",
+        );
+      }
+    });
+  }
+
+  if (slashLitReviewOption) {
+    slashLitReviewOption.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!item) return;
+      consumeActiveActionToken();
+      closeSlashMenu();
+      // Auto-activate agent mode for literature review
+      if (getCurrentRuntimeMode() !== "agent" && getAgentModeEnabled()) {
+        setCurrentRuntimeMode("agent");
+      }
+      // Insert a structured literature review prompt
+      const prompt = t("Please conduct a literature review on the following topic:\n\n[Enter your research topic here]\n\nPlease search my library, identify relevant papers, summarize key findings, and highlight research gaps.");
+      inputBox.value = prompt;
+      persistDraftInputForCurrentConversation();
+      // Select the placeholder text so user can easily replace it
+      const placeholderStart = prompt.indexOf("[");
+      const placeholderEnd = prompt.indexOf("]") + 1;
+      if (placeholderStart >= 0 && placeholderEnd > placeholderStart) {
+        inputBox.setSelectionRange(placeholderStart, placeholderEnd);
+      }
+      inputBox.focus({ preventScroll: true });
+      if (status) {
+        setStatus(
+          status,
+          t("Edit the prompt and press Send to start your literature review."),
+          "ready",
+        );
+      }
     });
   }
 

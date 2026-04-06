@@ -188,9 +188,9 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   const isStandaloneBody = (body as HTMLElement).dataset?.standalone === "true";
 
   // In sidepanels, the mode chip is a non-clickable indicator (always "Paper chat").
-  // In the standalone window, it shows "Open chat".
+  // In the standalone window, it shows "Library chat".
   const modeChipLabel = isStandaloneBody
-    ? (activeNoteSession ? t("Open note") : t("Open chat"))
+    ? (activeNoteSession ? t("Open note") : t("Library chat"))
     : (activeNoteSession ? t("Paper note") : t("Paper chat"));
   const modeChipBtn = createElement(doc, "button", "llm-mode-chip", {
     id: "llm-mode-chip",
@@ -206,10 +206,10 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   // Lock button, right of chip (only visible in standalone open-chat mode)
   const modeLockBtn = createElement(doc, "div", "llm-mode-lock", {
     id: "llm-mode-lock",
-    title: t("Lock open chat as default"),
+    title: t("Lock library chat as default"),
   });
   modeLockBtn.dataset.locked = "false";
-  modeLockBtn.setAttribute("aria-label", t("Lock open chat as default"));
+  modeLockBtn.setAttribute("aria-label", t("Lock library chat as default"));
   modeLockBtn.setAttribute("role", "button");
   modeLockBtn.setAttribute("tabindex", "0");
   modeLockBtn.style.display =
@@ -483,7 +483,21 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     t("Send multiple PDF pages"),
     t("Select pages from the open PDF"),
   );
-  slashList.append(slashUploadBtn, slashReferenceBtn, slashPdfPageBtn, slashPdfMultiplePagesBtn);
+  const slashCollectionBtn = makeSlashItem(
+    "llm-slash-collection-option",
+    t("Select collection"),
+    t("Add a Zotero collection as context"),
+  );
+  const slashLitReviewBtn = makeSlashItem(
+    "llm-slash-lit-review-option",
+    t("Literature review"),
+    t("Launch a literature review workflow"),
+  );
+  if (isStandaloneBody && isGlobalMode) {
+    slashList.append(slashUploadBtn, slashReferenceBtn, slashCollectionBtn, slashLitReviewBtn);
+  } else {
+    slashList.append(slashUploadBtn, slashReferenceBtn, slashPdfPageBtn, slashPdfMultiplePagesBtn);
+  }
   slashMenu.append(slashList);
   // slashMenu is appended to composeArea below (after composeArea is created)
 
@@ -848,6 +862,11 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     modelDropdown,
     reasoningDropdown,
   );
+  // Hide PDF-reader-specific buttons in standalone library chat
+  if (isStandaloneBody && isGlobalMode) {
+    selectTextSlot.style.display = "none";
+    screenshotSlot.style.display = "none";
+  }
   actionsRight.append(sendSlot);
   actionsRow.append(actionsLeft, actionsRight);
   composeArea.appendChild(actionsRow);

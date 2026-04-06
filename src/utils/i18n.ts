@@ -24,12 +24,12 @@ const zhCN: Record<string, string> = {
   "Start a new chat": "开始新对话",
   "Conversation history": "对话历史",
   "Open note": "开放笔记",
-  "Open chat": "开放对话",
+  "Library chat": "文献库对话",
   "Paper note": "论文笔记",
   "Paper chat": "论文对话",
   "Switch to paper chat": "切换到论文对话",
-  "Switch to open chat": "切换到开放对话",
-  "Lock open chat as default": "锁定开放对话为默认",
+  "Switch to library chat": "切换到文献库对话",
+  "Lock library chat as default": "锁定文献库对话为默认",
   "Settings": "设置",
   "Open plugin settings": "打开插件设置",
   "Export": "导出",
@@ -52,6 +52,13 @@ const zhCN: Record<string, string> = {
   "Capture the visible page as an image": "将可见页面截图发送",
   "Send multiple PDF pages": "发送多个 PDF 页面",
   "Select pages from the open PDF": "选择打开 PDF 中的页面",
+  "Select collection": "选择文献集",
+  "Add a Zotero collection as context": "将 Zotero 文献集添加为上下文",
+  "Literature review": "文献综述",
+  "Launch a literature review workflow": "启动文献综述工作流",
+  "Browse and select a collection to add its papers as context.": "浏览并选择一个文献集，将其中的论文添加为上下文。",
+  "Edit the prompt and press Send to start your literature review.": "编辑提示词并按发送开始你的文献综述。",
+  "Please conduct a literature review on the following topic:\n\n[Enter your research topic here]\n\nPlease search my library, identify relevant papers, summarize key findings, and highlight research gaps.": "请对以下主题进行文献综述：\n\n[在此输入你的研究主题]\n\n请搜索我的文献库，找出相关论文，总结主要发现，并指出研究空白。",
   "Capturing PDF pages...": "正在捕获 PDF 页面...",
   "Enter page numbers or ranges (e.g. 1-5, 8, 12):": "输入页码或范围（例如 1-5, 8, 12）：",
   "Select PDF pages": "选择 PDF 页面",
@@ -144,6 +151,7 @@ const zhCN: Record<string, string> = {
   "Failed to load PDF": "加载 PDF 失败",
   "Appended to existing note": "已追加到现有笔记",
   "Reference picker ready. Browse collections or type to search papers.": "参考文献选择器已就绪。浏览分类或输入搜索论文。",
+  "Tip: Enable Agent mode in Preferences for a better library chat experience.": "提示：在偏好设置中启用 Agent 模式以获得更好的文献库对话体验。",
   "Agent mode enabled": "Agent 模式已启用",
   "Chat mode enabled": "对话模式已启用",
   "Agent mode ON. Click to switch to Chat mode": "Agent 模式已开启。点击切换到对话模式",
@@ -396,11 +404,46 @@ export function getWelcomeHtml(): string {
       <div class="llm-welcome-text">
         <div class="llm-welcome-title">Start chatting — here's what you can do.</div>
         <ul class="llm-welcome-list">
-          <li><strong>Paper chat</strong> answers questions about the currently open PDF. <strong>Open chat</strong> is a free-form workspace for questions across multiple papers and files.</li>
+          <li><strong>Paper chat</strong> answers questions about the currently open PDF. <strong>Library chat</strong> is a free-form workspace for questions across multiple papers and files.</li>
           <li>Type <strong>/</strong> to open quick actions: attach files, add a reference, send the current PDF page, or send the entire PDF. Type <strong>@</strong> to add a paper from your library as context.</li>
           <li>Enable <strong>Agent mode</strong> with the toggle in the toolbar to let the assistant autonomously search your library, inspect papers, and complete multi-step research tasks.</li>
           <li>Add context inline: select text in the PDF reader for <strong>text context</strong>, use the screenshot button for <strong>figure context</strong>, or use <strong>@</strong> for <strong>paper context</strong>. Right-click a paper chip to force sending its full text; right-click again to switch it back to retrieval mode.</li>
         </ul>
+      </div>
+    </div>
+  `;
+}
+
+export function getStandaloneLibraryChatStartPageHtml(): string {
+  if (getEffectiveLocale().startsWith("zh")) {
+    return `
+      <div class="llm-standalone-start-page">
+        <div class="llm-start-page-title">LLM-for-Zotero Agent</div>
+        <div class="llm-start-page-subtitle">serve you and your library</div>
+        <div class="llm-start-page-recommendations">
+          <div class="llm-start-page-rec-title">推荐设置以获得最佳体验</div>
+          <ol class="llm-start-page-rec-list">
+            <li><strong>偏好设置 → MinerU</strong>：将 PDF 解析为 Markdown + 图片<span class="llm-rec-reason">（MD 是 LLM 的语言；可以利用解析出的图片写出更好的笔记；节省 token）</span></li>
+            <li>启用 <strong>Agent 模式</strong>，让助手自主完成研究任务</li>
+            <li>使用<strong>高智能模型</strong>：如 Codex、GPT-5.4 等</li>
+            <li>在偏好设置中配置 <strong>Obsidian 路径</strong><em>（即将推出）</em></li>
+          </ol>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="llm-standalone-start-page">
+      <div class="llm-start-page-title">LLM-for-Zotero Agent</div>
+      <div class="llm-start-page-subtitle">serve you and your library</div>
+      <div class="llm-start-page-recommendations">
+        <div class="llm-start-page-rec-title">Recommended settings for the best experience</div>
+        <ol class="llm-start-page-rec-list">
+          <li><strong>Preferences → MinerU</strong>: parse your PDFs to Markdown + images<span class="llm-rec-reason"> (MD is the language of LLMs; enables better notes with parsed images; saves tokens)</span></li>
+          <li>Activate <strong>Agent mode</strong> for autonomous research</li>
+          <li>Use an <strong>intelligent model</strong>: Codex, GPT-5.4, or similar high-intelligence models</li>
+          <li>Set up <strong>Obsidian path</strong> in Preferences <em>(coming soon)</em></li>
+        </ol>
       </div>
     </div>
   `;

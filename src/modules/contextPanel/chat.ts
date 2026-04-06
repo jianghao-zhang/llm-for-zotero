@@ -1,5 +1,5 @@
 import { renderMarkdown, renderMarkdownForNote } from "../../utils/markdown";
-import { getWelcomeHtml, getWebChatWelcomeHtml } from "../../utils/i18n";
+import { getWelcomeHtml, getWebChatWelcomeHtml, getStandaloneLibraryChatStartPageHtml } from "../../utils/i18n";
 import {
   appendMessage as appendStoredMessage,
   clearConversation as clearStoredConversation,
@@ -3403,11 +3403,29 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       const targetEntry = getWebChatTargetByModelName(effectiveConfig.model || "");
       chatBox.innerHTML = getWebChatWelcomeHtml(targetEntry?.label, targetEntry?.modelName);
     } else {
-      chatBox.innerHTML = getWelcomeHtml();
+      const isStandalone = panelRoot?.dataset?.standalone === "true" || (body as HTMLElement).dataset?.standalone === "true";
+      if (isStandalone && isGlobalConversation) {
+        chatBox.innerHTML = getStandaloneLibraryChatStartPageHtml();
+        if (panelRoot) panelRoot.dataset.startPageActive = "true";
+      } else {
+        chatBox.innerHTML = getWelcomeHtml();
+      }
     }
     return;
   }
 
+  // Animate transition from start page to chat mode
+  const wasStartPage = panelRoot?.dataset.startPageActive === "true";
+  if (wasStartPage && panelRoot) {
+    panelRoot.classList.add("llm-start-page-transitioning");
+    delete panelRoot.dataset.startPageActive;
+    const win = body.ownerDocument?.defaultView;
+    if (win) {
+      win.setTimeout(() => {
+        panelRoot.classList.remove("llm-start-page-transitioning");
+      }, 450);
+    }
+  }
   chatBox.innerHTML = "";
 
   const latestRetryPair = findLatestRetryPair(history);

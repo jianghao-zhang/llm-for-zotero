@@ -424,7 +424,7 @@ export function openStandaloneChat(options?: {
     const openTab = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
     openTab.className = "llm-standalone-tab";
     openTab.type = "button";
-    openTab.textContent = t("Open chat");
+    openTab.textContent = t("Library chat");
     openTab.dataset.tab = "open";
 
     paperTab.classList.toggle("active", standaloneMode === "paper");
@@ -592,7 +592,7 @@ export function openStandaloneChat(options?: {
           contentTitleBar.textContent = title || t("Paper chat");
         } catch { contentTitleBar.textContent = t("Paper chat"); }
       } else {
-        contentTitleBar.textContent = t("Open chat");
+        contentTitleBar.textContent = t("Library chat");
       }
     };
 
@@ -619,6 +619,7 @@ export function openStandaloneChat(options?: {
 
         refreshChat(contentArea, item);
         applyPanelFontScale(llmMain);
+        applyPanelFontScale(root);
         void renderShortcuts(contentArea, item);
       } catch (err) {
         ztoolkit.log("LLM: standalone mountChatPanel sync failed", err);
