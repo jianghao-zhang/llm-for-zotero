@@ -8916,6 +8916,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     query: string,
     force = false,
   ) => {
+    const resolveLiveSlashQuery = (): string => {
+      const token = getActiveActionToken();
+      if (token) {
+        return token.query.toLowerCase().trim();
+      }
+      return query.toLowerCase().trim();
+    };
     const maybeRefreshSlashCommands = (
       getAgentApi() as unknown as {
         refreshSlashCommands?: (force?: boolean) => Promise<void>;
@@ -8924,7 +8931,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const canRefresh = typeof maybeRefreshSlashCommands === "function";
     if (!canRefresh) {
       slashCommandsUiState = slashCommandItems.length > 0 ? "ready" : "empty";
-      renderAgentActionsInSlashMenu(query, { state: slashCommandsUiState });
+      renderAgentActionsInSlashMenu(resolveLiveSlashQuery(), {
+        state: slashCommandsUiState,
+      });
       return;
     }
 
@@ -8942,7 +8951,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       } else if (slashCommandsUiState !== "error") {
         slashCommandsUiState = "empty";
       }
-      renderAgentActionsInSlashMenu(query, { state: slashCommandsUiState });
+      renderAgentActionsInSlashMenu(resolveLiveSlashQuery(), {
+        state: slashCommandsUiState,
+      });
       return;
     }
 
@@ -8950,7 +8961,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     slashCommandsLastRefreshAt = Date.now();
     slashCommandsUiState = "loading";
     slashCommandsLastError = "";
-    renderAgentActionsInSlashMenu(query, { state: "loading" });
+    renderAgentActionsInSlashMenu(resolveLiveSlashQuery(), { state: "loading" });
 
     void maybeRefreshSlashCommands(force)
       .then(() => {
@@ -8966,7 +8977,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           slashCommandItems = [];
         }
         slashCommandsUiState = slashCommandItems.length > 0 ? "ready" : "empty";
-        renderAgentActionsInSlashMenu(query, { state: slashCommandsUiState });
+        renderAgentActionsInSlashMenu(resolveLiveSlashQuery(), {
+          state: slashCommandsUiState,
+        });
         if (isFloatingMenuOpen(slashMenu)) {
           updateSlashMenuSelection();
         }
@@ -8976,7 +8989,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         slashCommandsLastError =
           error instanceof Error ? error.message : String(error);
         ztoolkit.log("LLM Agent: Failed to refresh slash commands", error);
-        renderAgentActionsInSlashMenu(query, {
+        renderAgentActionsInSlashMenu(resolveLiveSlashQuery(), {
           state: "error",
           errorText: slashCommandsLastError,
         });

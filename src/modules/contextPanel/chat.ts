@@ -218,6 +218,8 @@ function setHistoryControlsDisabled(body: Element, disabled: boolean): void {
   }
 }
 
+const agentRunTraceRetryTimers = new Map<string, number>();
+
 function extractAgentReceiptCounts(
   safeText: string,
 ): {
@@ -893,6 +895,29 @@ async function ensureAgentRunTraceLoaded(
   opts?: { force?: boolean },
 ): Promise<void> {
   const TRACE_RETRY_COOLDOWN_MS = 6_000;
+  const scheduleTraceRetry = (targetRunId: string, delayMs: number) => {
+    if (!body || !item) return;
+    const ownerWin = body.ownerDocument?.defaultView;
+    if (agentRunTraceRetryTimers.has(targetRunId)) return;
+    const safeDelay = Math.max(250, Math.floor(delayMs));
+    const timerId = ownerWin
+      ? ownerWin.setTimeout(() => {
+          agentRunTraceRetryTimers.delete(targetRunId);
+          void ensureAgentRunTraceLoaded(targetRunId, body, item, { force: true });
+        }, safeDelay)
+      : ((setTimeout(() => {
+          agentRunTraceRetryTimers.delete(targetRunId);
+          void ensureAgentRunTraceLoaded(targetRunId, body, item, { force: true });
+        }, safeDelay) as unknown as number) || 0);
+    agentRunTraceRetryTimers.set(targetRunId, timerId);
+  };
+  const clearTraceRetry = (targetRunId: string) => {
+    const timerId = agentRunTraceRetryTimers.get(targetRunId);
+    if (timerId !== undefined) {
+      clearTimeout(timerId as unknown as number);
+      agentRunTraceRetryTimers.delete(targetRunId);
+    }
+  };
   const rebuildTraceEventsFromRunRecord = (
     run: AgentRunRecord | null,
   ): AgentRunEventRecord[] => {
@@ -975,13 +1000,21 @@ async function ensureAgentRunTraceLoaded(
   const normalizedRunId = (runId || "").trim();
   if (!normalizedRunId) return;
   const cached = agentRunTraceCache.get(normalizedRunId);
-  if (!opts?.force && cached?.status === "ready") return;
+  if (!opts?.force && cached?.status === "ready") {
+    clearTraceRetry(normalizedRunId);
+    return;
+  }
   if (
     !opts?.force &&
     cached?.status === "failed" &&
     cached.lastAttemptAt &&
     Date.now() - cached.lastAttemptAt < TRACE_RETRY_COOLDOWN_MS
   ) {
+    const elapsed = Date.now() - cached.lastAttemptAt;
+    scheduleTraceRetry(
+      normalizedRunId,
+      TRACE_RETRY_COOLDOWN_MS - elapsed + 50,
+    );
     return;
   }
   const existing = agentRunTraceLoadingTasks.get(normalizedRunId);
@@ -1035,6 +1068,11 @@ async function ensureAgentRunTraceLoaded(
         events,
         lastAttemptAt: Date.now(),
       });
+      if (status === "failed") {
+        scheduleTraceRetry(normalizedRunId, TRACE_RETRY_COOLDOWN_MS);
+      } else {
+        clearTraceRetry(normalizedRunId);
+      }
     } catch (err) {
       ztoolkit.log("LLM: Failed to load agent run trace", err);
       agentRunTraceCache.set(normalizedRunId, {
@@ -1042,6 +1080,7 @@ async function ensureAgentRunTraceLoaded(
         events: cached?.events || [],
         lastAttemptAt: Date.now(),
       });
+      scheduleTraceRetry(normalizedRunId, TRACE_RETRY_COOLDOWN_MS);
     } finally {
       agentRunTraceLoadingTasks.delete(normalizedRunId);
       if (body && item) {
