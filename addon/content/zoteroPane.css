@@ -1111,6 +1111,19 @@
   width: auto;
 }
 
+.llm-history-row-runtime-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-10);
+  line-height: 1;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
 .llm-history-row-preview {
   display: block;
   min-width: 0;

@@ -220,6 +220,7 @@ import {
   getPaperConversation,
   listGlobalConversations,
   listPaperConversations,
+  getConversationRuntimeModes,
   ensurePaperV1Conversation,
   setGlobalConversationTitle,
   setPaperConversationTitle,
@@ -550,6 +551,40 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const key = getConversationKey(item);
     return selectedRuntimeModeCache.get(key) || "chat";
   };
+  const resolveConversationRuntimeMode = (
+    targetConversationKey: number,
+  ): ChatRuntimeMode => {
+    const normalizedKey = Number.isFinite(targetConversationKey)
+      ? Math.floor(targetConversationKey)
+      : 0;
+    if (normalizedKey <= 0) return "chat";
+    const cached = selectedRuntimeModeCache.get(normalizedKey);
+    if (cached) return cached;
+    const history = chatHistory.get(normalizedKey) || [];
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const runMode = history[i]?.runMode;
+      if (runMode === "agent" || runMode === "chat") {
+        return runMode;
+      }
+    }
+    return "chat";
+  };
+  const applyConversationRuntimeMode = (
+    targetConversationKey: number,
+    preferredMode?: ChatRuntimeMode,
+  ): ChatRuntimeMode => {
+    const normalizedKey = Number.isFinite(targetConversationKey)
+      ? Math.floor(targetConversationKey)
+      : 0;
+    if (normalizedKey <= 0) return "chat";
+    const resolvedMode =
+      preferredMode || resolveConversationRuntimeMode(normalizedKey);
+    selectedRuntimeModeCache.set(normalizedKey, resolvedMode);
+    if (item && getConversationKey(item) === normalizedKey) {
+      updateRuntimeModeButton();
+    }
+    return resolvedMode;
+  };
   const invalidateClaudeRuntimeCapabilityCaches = () => {
     cachedClaudeRuntimeModelsGlobal = [];
     claudeModelsCacheExpiresAtGlobal = 0;
@@ -611,9 +646,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const shouldHide = !agentFeatureEnabled || webChatActive;
     liveRuntimeModeBtn.style.display = shouldHide ? "none" : "";
     if (shouldHide) {
-      // Force chat mode when the feature is hidden so state stays consistent.
-      if (item) selectedRuntimeModeCache.set(getConversationKey(item), "chat");
-      livePanelRoot.dataset.runtimeMode = "chat";
+      livePanelRoot.dataset.runtimeMode = getCurrentRuntimeMode();
       if (liveClaudePermissionBtn) {
         liveClaudePermissionBtn.style.display = "none";
       }
@@ -690,7 +723,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   };
   const setCurrentRuntimeMode = (mode: ChatRuntimeMode) => {
     if (!item) return;
-    selectedRuntimeModeCache.set(getConversationKey(item), mode);
+    applyConversationRuntimeMode(getConversationKey(item), mode);
     updateRuntimeModeButton();
   };
   const resolveCurrentNoteParentItem = (): Zotero.Item | null => {
@@ -845,6 +878,40 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     updateRuntimeModeButton();
   };
   syncConversationIdentity();
+  let lastObservedAgentModeEnabled = getAgentModeEnabled();
+  let runtimeDisableTransitionInFlight = false;
+  const handleRuntimeDisableTransition = async (): Promise<void> => {
+    if (runtimeDisableTransitionInFlight) return;
+    if (!item || isNoteSession()) return;
+    if (getAgentModeEnabled()) return;
+    if (getCurrentRuntimeMode() !== "agent") return;
+    runtimeDisableTransitionInFlight = true;
+    try {
+      if (isPaperMode()) {
+        await createAndSwitchPaperConversation({ forcedRuntimeMode: "chat" });
+      } else {
+        await createAndSwitchGlobalConversation({ forcedRuntimeMode: "chat" });
+      }
+      if (status) {
+        setStatus(
+          status,
+          "Claude Code disabled. Switched to a new Chat conversation.",
+          "ready",
+        );
+      }
+    } catch (error) {
+      ztoolkit.log("LLM: Failed runtime disable transition", error);
+      if (status) {
+        setStatus(
+          status,
+          "Claude Code disabled. Failed to switch to a new Chat conversation.",
+          "error",
+        );
+      }
+    } finally {
+      runtimeDisableTransitionInFlight = false;
+    }
+  };
 
   // Keep the agent mode toggle in sync when the preference is changed in the
   // Preferences window (which runs in a separate window context).
@@ -892,6 +959,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       });
     };
     const onAgentPrefChange = () => {
+      const nextAgentModeEnabled = getAgentModeEnabled();
+      const shouldTransitionToChat =
+        lastObservedAgentModeEnabled && !nextAgentModeEnabled;
+      lastObservedAgentModeEnabled = nextAgentModeEnabled;
       if (!(body as Element).isConnected) {
         // Panel is gone – clean up the observer.
         try {
@@ -911,6 +982,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           // no-op
         }
         return;
+      }
+      if (shouldTransitionToChat) {
+        queueMicrotask(() => {
+          void handleRuntimeDisableTransition();
+        });
       }
       syncRuntimeActionVisibilityNow();
     };
@@ -3774,6 +3850,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           title.textContent = displayTitle;
         }
         titleLine.append(title);
+        if (!getAgentModeEnabled() && entry.runtimeMode === "agent") {
+          const disabledBadge = createElement(
+            body.ownerDocument as Document,
+            "span",
+            "llm-history-row-runtime-badge",
+            {
+              textContent: "Claude (Disabled)",
+            },
+          ) as HTMLSpanElement;
+          disabledBadge.title = "Enable Claude Code to continue this conversation";
+          titleLine.append(disabledBadge);
+        }
         const preview =
           searchResult && searchResult.previewText
             ? createElement(
@@ -4165,6 +4253,19 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const visibleEntries = [...paperEntries, ...globalEntries].filter(
       (entry) => !pendingHistoryDeletionKeys.has(entry.conversationKey),
     );
+    const historyRuntimeModes = await getConversationRuntimeModes(
+      visibleEntries.map((entry) => entry.conversationKey),
+    );
+    if (requestId !== globalHistoryLoadSeq) return;
+    for (const entry of visibleEntries) {
+      const cachedMode = selectedRuntimeModeCache.get(entry.conversationKey);
+      const resolvedMode = cachedMode || historyRuntimeModes.get(entry.conversationKey);
+      if (!resolvedMode) continue;
+      entry.runtimeMode = resolvedMode;
+      if (!cachedMode) {
+        selectedRuntimeModeCache.set(entry.conversationKey, resolvedMode);
+      }
+    }
     const visibleSections = [
       {
         section: "paper" as const,
@@ -4207,7 +4308,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     updateSelectedTextPreviewPreservingScroll();
   };
 
-  const switchGlobalConversation = async (nextConversationKey: number) => {
+  const switchGlobalConversation = async (
+    nextConversationKey: number,
+    opts?: { forcedRuntimeMode?: ChatRuntimeMode },
+  ) => {
     if (!item || isNoteSession()) return;
     persistDraftInputForCurrentConversation();
     const libraryID = getCurrentLibraryID();
@@ -4234,6 +4338,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     closeHistoryNewMenu();
     closeHistoryMenu();
     await ensureConversationLoaded(item);
+    applyConversationRuntimeMode(
+      normalizedConversationKey,
+      opts?.forcedRuntimeMode,
+    );
+    if (!getAgentModeEnabled() && getCurrentRuntimeMode() === "agent" && status) {
+      setStatus(
+        status,
+        "Claude Code is disabled. Enable Claude Code to continue this conversation.",
+        "warning",
+      );
+    }
     restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
     resetComposePreviewUI();
@@ -4242,7 +4357,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     void refreshGlobalHistoryHeader();
   };
 
-  const switchPaperConversation = async (nextConversationKey?: number) => {
+  const switchPaperConversation = async (
+    nextConversationKey?: number,
+    opts?: { forcedRuntimeMode?: ChatRuntimeMode },
+  ) => {
     if (!item || isNoteSession()) return;
     persistDraftInputForCurrentConversation();
     const paperItem = resolveCurrentPaperBaseItem();
@@ -4311,6 +4429,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     closeHistoryNewMenu();
     closeHistoryMenu();
     await ensureConversationLoaded(item);
+    applyConversationRuntimeMode(
+      normalizedConversationKey,
+      opts?.forcedRuntimeMode,
+    );
+    if (!getAgentModeEnabled() && getCurrentRuntimeMode() === "agent" && status) {
+      setStatus(
+        status,
+        "Claude Code is disabled. Enable Claude Code to continue this conversation.",
+        "warning",
+      );
+    }
     restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
     resetComposePreviewUI();
@@ -4978,12 +5107,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       setStatus(status, t("Conversation deleted. Undo available."), "ready");
   };
 
-  const createAndSwitchGlobalConversation = async () => {
+  const createAndSwitchGlobalConversation = async (opts?: {
+    forcedRuntimeMode?: ChatRuntimeMode;
+  }) => {
     if (!item || isNoteSession()) return;
     if (
-      currentAbortController ||
-      historyNewBtn?.disabled ||
-      inputBox?.disabled
+      !opts?.forcedRuntimeMode &&
+      (currentAbortController || historyNewBtn?.disabled || inputBox?.disabled)
     ) {
       if (status) {
         setStatus(
@@ -5020,20 +5150,25 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       action: "create",
       reason: "forced-new",
     });
+    const inheritedRuntimeMode = opts?.forcedRuntimeMode || getCurrentRuntimeMode();
+    selectedRuntimeModeCache.set(targetConversationKey, inheritedRuntimeMode);
     activeGlobalConversationByLibrary.set(libraryID, targetConversationKey);
-    await switchGlobalConversation(targetConversationKey);
+    await switchGlobalConversation(targetConversationKey, {
+      forcedRuntimeMode: inheritedRuntimeMode,
+    });
     if (status) {
       setStatus(status, t("Started new conversation"), "ready");
     }
     inputBox.focus({ preventScroll: true });
   };
 
-  const createAndSwitchPaperConversation = async () => {
+  const createAndSwitchPaperConversation = async (opts?: {
+    forcedRuntimeMode?: ChatRuntimeMode;
+  }) => {
     if (!item || isNoteSession()) return;
     if (
-      currentAbortController ||
-      historyNewBtn?.disabled ||
-      inputBox?.disabled
+      !opts?.forcedRuntimeMode &&
+      (currentAbortController || historyNewBtn?.disabled || inputBox?.disabled)
     ) {
       if (status) {
         setStatus(
@@ -5082,7 +5217,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       action: "create",
       reason: "forced-new",
     });
-    await switchPaperConversation(targetConversationKey);
+    const inheritedRuntimeMode = opts?.forcedRuntimeMode || getCurrentRuntimeMode();
+    selectedRuntimeModeCache.set(targetConversationKey, inheritedRuntimeMode);
+    await switchPaperConversation(targetConversationKey, {
+      forcedRuntimeMode: inheritedRuntimeMode,
+    });
     if (status) {
       setStatus(status, t("Started new paper chat"), "ready");
     }
@@ -8266,6 +8405,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // isWebChatMode may not be ready during initial render
   }
   restoreDraftInputForCurrentConversation();
+  if (item) {
+    const initialConversationKey = getConversationKey(item);
+    void ensureConversationLoaded(item)
+      .then(() => {
+        applyConversationRuntimeMode(initialConversationKey);
+      })
+      .catch((err) => {
+        ztoolkit.log("LLM: Failed to restore runtime mode from conversation", err);
+      });
+  }
   if (isNoteSession()) {
     void refreshGlobalHistoryHeader();
   } else if (isPaperMode()) {
@@ -9022,27 +9171,48 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const claudeSlashMode = shouldUseClaudeRuntimeModelMenu();
     const ownerDoc = body.ownerDocument;
     const list = slashMenu?.querySelector(".llm-action-picker-list");
-    [slashUploadOption, slashReferenceOption, slashPdfPageOption, slashPdfMultiplePagesOption].forEach((el) => {
-      if (!el) return;
-      el.style.display = claudeSlashMode ? "none" : "";
+    const baseItems = [
+      slashUploadOption,
+      slashReferenceOption,
+      slashPdfPageOption,
+      slashPdfMultiplePagesOption,
+    ].filter((el): el is HTMLButtonElement => Boolean(el));
+    baseItems.forEach((el) => {
+      el.style.display = "";
     });
     const filteredCmds = getRankedSlashCommands(slashCommandItems, query);
     const state = opts?.state || slashCommandsUiState;
     if (!ownerDoc || !list) {
-      return { backendActionsCount: filteredCmds.length, totalActionsCount: filteredCmds.length };
+      return {
+        backendActionsCount: filteredCmds.length,
+        totalActionsCount: baseItems.length + filteredCmds.length,
+      };
     }
-    const firstBase = list.firstChild;
     const mkAgentEl = (tag: string, cls: string): HTMLElement => {
       const el = ownerDoc.createElement(tag);
       el.className = cls;
       el.setAttribute("data-slash-agent-item", "true");
       return el;
     };
-    if (filteredCmds.length > 0) {
+    if (baseItems.length > 0) {
+      const firstBase = baseItems[0];
+      const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
+      baseLabel.setAttribute("aria-hidden", "true");
+      baseLabel.textContent = t("Plugin actions");
+      list.insertBefore(baseLabel, firstBase);
+    }
+    if (claudeSlashMode && baseItems.length > 0) {
+      const separator = mkAgentEl("div", "llm-slash-menu-separator");
+      separator.setAttribute("aria-hidden", "true");
+      list.appendChild(separator);
+    }
+    if (claudeSlashMode) {
       const slashLabel = mkAgentEl("div", "llm-slash-menu-section");
       slashLabel.setAttribute("aria-hidden", "true");
       slashLabel.textContent = "Claude Commands";
-      list.insertBefore(slashLabel, firstBase);
+      list.appendChild(slashLabel);
+    }
+    if (filteredCmds.length > 0) {
       filteredCmds.forEach((cmd) => {
         const btn = mkAgentEl("button", "llm-action-picker-item") as HTMLButtonElement;
         btn.type = "button";
@@ -9094,22 +9264,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           inputBox.focus({ preventScroll: true });
         };
         btn.addEventListener("mousedown", (e: Event) => {
+          // Keep focus in textarea; selection is applied in click handler.
           e.preventDefault();
           e.stopPropagation();
-          applySlashCommandSelection();
         });
         btn.addEventListener("click", (e: Event) => {
-          // Keyboard Enter / programmatic .click() path (detail=0).
-          // Mouse click is already handled in mousedown above.
-          const me = e as MouseEvent;
-          if (typeof me.detail === "number" && me.detail > 0) {
-            return;
-          }
+          // Handles both mouse click and keyboard/programmatic click.
           e.preventDefault();
           e.stopPropagation();
           applySlashCommandSelection();
         });
-        list.insertBefore(btn, firstBase);
+        list.appendChild(btn);
       });
     } else if (claudeSlashMode) {
       const empty = mkAgentEl("div", "llm-action-picker-empty");
@@ -9123,16 +9288,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       } else {
         empty.textContent = "Type / to search Claude Commands";
       }
-      list.insertBefore(empty, firstBase);
+      list.appendChild(empty);
     }
-    if (!claudeSlashMode) {
-      // "Base actions" section label (above the static base items)
-      const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-      baseLabel.setAttribute("aria-hidden", "true");
-      baseLabel.textContent = t("Base actions");
-      list.insertBefore(baseLabel, firstBase);
-    }
-    return { backendActionsCount: filteredCmds.length, totalActionsCount: filteredCmds.length };
+    return {
+      backendActionsCount: filteredCmds.length,
+      totalActionsCount: baseItems.length + filteredCmds.length,
+    };
   };
 
   /** Selects an action from the (legacy) action picker by index. */
@@ -10529,6 +10690,16 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     fromQueue?: boolean;
     queuedText?: string;
   }) => {
+    if (getCurrentRuntimeMode() === "agent" && !getAgentModeEnabled()) {
+      if (status) {
+        setStatus(
+          status,
+          "Claude Code is disabled. Enable Claude Code to continue this conversation.",
+          "warning",
+        );
+      }
+      return;
+    }
     if (
       !opts?.fromQueue &&
       getCurrentRuntimeMode() === "agent" &&
