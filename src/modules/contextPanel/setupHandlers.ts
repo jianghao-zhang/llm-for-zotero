@@ -130,6 +130,7 @@ import {
   editLatestUserMessageAndRetry,
   editUserTurnAndRetry,
   findLatestRetryPair,
+  resolveAgentScopeFromItem,
   type EditLatestTurnMarker,
 } from "./chat";
 import {
@@ -5728,29 +5729,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   const getBridgeBaseUrl = (): string => {
     const configured = getStringPref("agentBackendBridgeUrl").trim();
     if (configured) return configured.replace(/\/+$/, "");
-    return "http://127.0.0.1:18787";
+    return "http://127.0.0.1:19787";
   };
 
   const buildCurrentBridgeScope = (): {
-    scopeType: "paper" | "open";
+    scopeType: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
     scopeId: string;
     scopeLabel?: string;
   } => {
-    const libraryID = getCurrentLibraryID();
-    if (isPaperMode()) {
-      const baseItem = resolveCurrentPaperBaseItem();
-      if (baseItem?.isRegularItem?.()) {
-        const title =
-          typeof baseItem.getField === "function"
-            ? String(baseItem.getField("title") || "").trim() || undefined
-            : undefined;
-        return {
-          scopeType: "paper",
-          scopeId: `${libraryID || 0}:${Math.floor(baseItem.id)}`,
-          scopeLabel: title,
-        };
-      }
+    if (item) {
+      return resolveAgentScopeFromItem(item);
     }
+    const libraryID = getCurrentLibraryID();
     return {
       scopeType: "open",
       scopeId: String(libraryID || 0),

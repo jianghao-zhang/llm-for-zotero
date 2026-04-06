@@ -2660,10 +2660,11 @@ function buildActiveNoteRuntimeContext(
   };
 }
 
-function resolveAgentScopeFromItem(item: Zotero.Item): Pick<
-  AgentRuntimeRequest,
-  "scopeType" | "scopeId" | "scopeLabel"
-> {
+export function resolveAgentScopeFromItem(item: Zotero.Item): {
+  scopeType: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
+  scopeId: string;
+  scopeLabel?: string;
+} {
   const libraryID =
     typeof item.libraryID === "number" && Number.isFinite(item.libraryID)
       ? Math.floor(item.libraryID)

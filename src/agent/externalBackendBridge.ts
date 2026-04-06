@@ -181,10 +181,17 @@ type BridgeScopeType =
   | "tagset"
   | "custom";
 
-type BridgeScope = {
+export type BridgeScopeSnapshot = {
   scopeType: BridgeScopeType;
   scopeId: string;
   scopeLabel?: string;
+};
+type BridgeScope = BridgeScopeSnapshot;
+
+export type LastRunBridgeContext = {
+  conversationKey: number;
+  scope: BridgeScopeSnapshot;
+  updatedAt: number;
 };
 
 export type ExternalBridgeSessionInfo = {
@@ -222,6 +229,51 @@ type BridgeRuntimeRequest = {
     noteText?: string;
   };
 };
+
+const lastRunBridgeContextByConversationKey = new Map<number, LastRunBridgeContext>();
+
+function isBridgeDebugEnabled(): boolean {
+  const traceVerbosity = getStringPref("agentTraceVerbosity").trim().toLowerCase();
+  const rawLogVisibility = getStringPref("agentRawLogVisibility")
+    .trim()
+    .toLowerCase();
+  return (
+    traceVerbosity === "verbose" ||
+    traceVerbosity === "raw" ||
+    rawLogVisibility === "debug_only"
+  );
+}
+
+function buildScopedConversationKey(
+  conversationKey: number,
+  scope?: { scopeType?: string; scopeId?: string },
+): string {
+  if (!scope?.scopeType || !scope.scopeId) {
+    return String(conversationKey);
+  }
+  return `${conversationKey}::${scope.scopeType}:${scope.scopeId}`;
+}
+
+function getLastRunBridgeContext(conversationKey: number): LastRunBridgeContext | undefined {
+  return lastRunBridgeContextByConversationKey.get(Math.floor(conversationKey));
+}
+
+function rememberLastRunBridgeContext(
+  conversationKey: number,
+  scope: BridgeScope,
+): void {
+  const normalizedConversationKey = Math.floor(conversationKey);
+  if (!Number.isFinite(normalizedConversationKey)) return;
+  lastRunBridgeContextByConversationKey.set(normalizedConversationKey, {
+    conversationKey: normalizedConversationKey,
+    scope: {
+      scopeType: scope.scopeType,
+      scopeId: scope.scopeId,
+      scopeLabel: scope.scopeLabel,
+    },
+    updatedAt: Date.now(),
+  });
+}
 
 function getClaudeConfigSourcePref(): "user-level" | "zotero-specific" {
   try {
@@ -1047,22 +1099,107 @@ export async function fetchExternalBridgeSessionInfo(params: {
 }): Promise<ExternalBridgeSessionInfo | null> {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   if (!baseUrl) return null;
-  const qs = new URLSearchParams();
-  qs.set("conversationKey", String(params.conversationKey));
-  if (params.scopeType) qs.set("scopeType", params.scopeType);
-  if (params.scopeId) qs.set("scopeId", params.scopeId);
-  if (params.scopeLabel) qs.set("scopeLabel", params.scopeLabel);
-  const response = await fetch(`${baseUrl}/session-info?${qs.toString()}`, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`Bridge HTTP ${response.status}`);
-  }
-  const json = (await response.json()) as {
-    session?: ExternalBridgeSessionInfo | null;
+  const debugEnabled = isBridgeDebugEnabled();
+  const conversationKey = Math.floor(params.conversationKey);
+  const cached = getLastRunBridgeContext(conversationKey);
+  const candidates: Array<{
+    scopeType?: BridgeScopeType;
+    scopeId?: string;
+    scopeLabel?: string;
+    source: "last_run_snapshot" | "runtime_scope" | "scope_no_label" | "conversation_only";
+  }> = [];
+  const seen = new Set<string>();
+  const pushCandidate = (candidate: {
+    scopeType?: BridgeScopeType;
+    scopeId?: string;
+    scopeLabel?: string;
+    source: "last_run_snapshot" | "runtime_scope" | "scope_no_label" | "conversation_only";
+  }) => {
+    const key = `${candidate.scopeType || ""}|${candidate.scopeId || ""}|${candidate.scopeLabel || ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
   };
-  return json?.session || null;
+
+  if (cached?.scope?.scopeType && cached.scope.scopeId) {
+    pushCandidate({
+      scopeType: cached.scope.scopeType,
+      scopeId: cached.scope.scopeId,
+      scopeLabel: cached.scope.scopeLabel,
+      source: "last_run_snapshot",
+    });
+    pushCandidate({
+      scopeType: cached.scope.scopeType,
+      scopeId: cached.scope.scopeId,
+      source: "scope_no_label",
+    });
+  }
+
+  if (params.scopeType && params.scopeId) {
+    pushCandidate({
+      scopeType: params.scopeType,
+      scopeId: params.scopeId,
+      scopeLabel: params.scopeLabel,
+      source: "runtime_scope",
+    });
+    pushCandidate({
+      scopeType: params.scopeType,
+      scopeId: params.scopeId,
+      source: "scope_no_label",
+    });
+  }
+
+  pushCandidate({ source: "conversation_only" });
+
+  const query = async (candidate: {
+    scopeType?: BridgeScopeType;
+    scopeId?: string;
+    scopeLabel?: string;
+    source: string;
+  }): Promise<ExternalBridgeSessionInfo | null> => {
+    const qs = new URLSearchParams();
+    qs.set("conversationKey", String(conversationKey));
+    if (candidate.scopeType) qs.set("scopeType", candidate.scopeType);
+    if (candidate.scopeId) qs.set("scopeId", candidate.scopeId);
+    if (candidate.scopeLabel) qs.set("scopeLabel", candidate.scopeLabel);
+    const url = `${baseUrl}/session-info?${qs.toString()}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(`Bridge HTTP ${response.status}`);
+    }
+    const json = (await response.json()) as {
+      session?: ExternalBridgeSessionInfo | null;
+    };
+    const session = json?.session || null;
+    if (debugEnabled) {
+      dbg("session-info query", {
+        source: candidate.source,
+        conversationKey,
+        queryScopeType: candidate.scopeType,
+        queryScopeId: candidate.scopeId,
+        queryScopeLabel: candidate.scopeLabel,
+        queryScopedConversationKey: buildScopedConversationKey(conversationKey, candidate),
+        responseScopedConversationKey: session?.scopedConversationKey || null,
+        responseProviderSessionId: session?.providerSessionId || null,
+      });
+    }
+    return session;
+  };
+
+  let firstSession: ExternalBridgeSessionInfo | null = null;
+  for (const candidate of candidates) {
+    const session = await query(candidate);
+    if (!firstSession && session) {
+      firstSession = session;
+    }
+    if (session?.providerSessionId) {
+      return session;
+    }
+  }
+  return firstSession;
 }
 
 async function runExternalBridgeAction(
@@ -1376,6 +1513,19 @@ export function createExternalBackendBridgeRuntime(options: {
       const contextEnvelope = buildContextEnvelope(params.request);
       const runtimeRequest = await buildBridgeRuntimeRequest(params.request);
       const scope = resolveBridgeScope(params.request);
+      rememberLastRunBridgeContext(params.request.conversationKey, scope);
+      if (isBridgeDebugEnabled()) {
+        dbg("run-turn scope snapshot", {
+          conversationKey: params.request.conversationKey,
+          scopeType: scope.scopeType,
+          scopeId: scope.scopeId,
+          scopeLabel: scope.scopeLabel,
+          scopedConversationKey: buildScopedConversationKey(
+            params.request.conversationKey,
+            scope,
+          ),
+        });
+      }
       conversationScopeByKey.set(params.request.conversationKey, scope);
       const currentSignature = signatureForContextEnvelope(contextEnvelope);
       const previousSignature = conversationContextSignature.get(
