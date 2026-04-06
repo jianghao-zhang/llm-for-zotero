@@ -1813,8 +1813,8 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const opened = revealDirectory(targetPath) || revealDirectory(claudeDir);
       if (openZoteroClaudeConfigFolderStatus) {
         openZoteroClaudeConfigFolderStatus.textContent = opened
-          ? `Opened: ${targetPath}`
-          : `Path: ${targetPath}`;
+          ? `Opened: ${claudeDir}`
+          : `Path: ${claudeDir}`;
       }
     });
   }
