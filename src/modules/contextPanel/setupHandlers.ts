@@ -212,6 +212,7 @@ import {
   deleteTurnMessages,
   deleteGlobalConversation,
   deletePaperConversation,
+  ensureGlobalConversationExists,
   getGlobalConversationUserTurnCount,
   getLatestEmptyGlobalConversation,
   loadConversation,
@@ -328,11 +329,20 @@ import {
 import { createSendFlowController } from "./setupHandlers/controllers/sendFlowController";
 import { createClearConversationController } from "./setupHandlers/controllers/clearConversationController";
 import { clearAllAgentToolCaches } from "../../agent/tools";
+import { loadConversationHistoryScope } from "./historyLoader";
 
 /** Monotonic counter incremented every time setupHandlers rebuilds a panel. */
 let setupHandlersGeneration = 0;
 
-export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
+export type SetupHandlersHooks = {
+  onConversationHistoryChanged?: () => void;
+};
+
+export function setupHandlers(
+  body: Element,
+  initialItem?: Zotero.Item | null,
+  hooks?: SetupHandlersHooks,
+) {
   const resolvedInitialState = resolveInitialPanelItemState(initialItem);
   let item = resolvedInitialState.item;
   let basePaperItem = resolvedInitialState.basePaperItem;
@@ -361,6 +371,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     actionsRow,
     actionsLeft,
     actionsRight,
+    popoutBtn,
     settingsBtn,
     exportBtn,
     clearBtn,
@@ -500,6 +511,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
   const resolveCurrentNoteSession = () => resolveActiveNoteSession(item);
   const isNoteSession = () => Boolean(resolveCurrentNoteSession());
+  const notifyConversationHistoryChanged = () => {
+    try {
+      hooks?.onConversationHistoryChanged?.();
+    } catch (err) {
+      ztoolkit.log("LLM: standalone history hook failed", err);
+    }
+  };
   const isGlobalMode = () =>
     resolveDisplayConversationKind(item) === "global";
   const isPaperMode = () =>
@@ -1445,6 +1463,27 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         return;
       }
       positionMenuBelowButton(body, exportMenu, exportBtn);
+    });
+  }
+
+  if (popoutBtn) {
+    popoutBtn.addEventListener("click", (e: Event) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const { isStandaloneWindowActive, openStandaloneChat } = require("./standaloneWindow");
+        if (isStandaloneWindowActive()) {
+          // Toggle off: close the standalone window
+          addon.data.standaloneWindow?.close();
+        } else {
+          openStandaloneChat({
+            initialItem: item,
+            sourceBody: body,
+          });
+        }
+      } catch (err) {
+        ztoolkit.log("LLM: Failed to toggle standalone window", err);
+      }
     });
   }
 
@@ -3734,6 +3773,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       closeHistoryNewMenu();
       closeHistoryMenu();
       hideHistoryUndoToast();
+      notifyConversationHistoryChanged();
       return;
     }
     if (isNoteSession()) {
@@ -3755,6 +3795,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       closeHistoryNewMenu();
       closeHistoryMenu();
       hideHistoryUndoToast();
+      notifyConversationHistoryChanged();
       return;
     }
     const libraryID = getCurrentLibraryID();
@@ -3766,20 +3807,15 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (libraryID && paperItem) {
       const paperItemID = Number(paperItem.id || 0);
       if (paperItemID > 0) {
+        let summaries: Awaited<ReturnType<typeof loadConversationHistoryScope>> =
+          [];
         try {
-          await ensurePaperV1Conversation(libraryID, paperItemID);
-        } catch (err) {
-          ztoolkit.log("LLM: Failed to ensure legacy v1 paper session", err);
-        }
-        if (requestId !== globalHistoryLoadSeq) return;
-        let summaries: Awaited<ReturnType<typeof listPaperConversations>> = [];
-        try {
-          summaries = await listPaperConversations(
+          summaries = await loadConversationHistoryScope({
+            mode: "paper",
             libraryID,
             paperItemID,
-            GLOBAL_HISTORY_LIMIT,
-            true,
-          );
+            limit: GLOBAL_HISTORY_LIMIT,
+          });
         } catch (err) {
           ztoolkit.log("LLM: Failed to load paper history entries", err);
         }
@@ -3803,19 +3839,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           if (pendingHistoryDeletionKeys.has(normalizedKey)) continue;
           if (seenPaperKeys.has(normalizedKey)) continue;
           seenPaperKeys.add(normalizedKey);
-          const lastActivity = Number(
-            summary.lastActivityAt || summary.createdAt || 0,
-          );
-          const isDraft = Number(summary.userTurnCount || 0) <= 0;
-          const title =
-            normalizeHistoryTitle(summary.title) ||
-            (isDraft ? "New chat" : "Untitled chat");
+          const lastActivity = Number(summary.lastActivityAt || summary.createdAt || 0);
+          const isDraft = Boolean(summary.isDraft);
           paperEntries.push({
             kind: "paper",
             section: "paper",
             sectionTitle: "Paper Chat",
             conversationKey: normalizedKey,
-            title,
+            title: summary.title,
             timestampText: isDraft
               ? "Draft"
               : formatGlobalHistoryTimestamp(lastActivity) || "Paper chat",
@@ -3839,14 +3870,34 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
 
     if (libraryID) {
-      let historyEntries: Awaited<ReturnType<typeof listGlobalConversations>> =
+      let activeGlobalKey = 0;
+      if (isGlobalMode() && item && Number.isFinite(item.id) && item.id > 0) {
+        activeGlobalKey = Math.floor(item.id);
+      } else {
+        const remembered = Number(
+          activeGlobalConversationByLibrary.get(libraryID),
+        );
+        if (Number.isFinite(remembered) && remembered > 0) {
+          activeGlobalKey = Math.floor(remembered);
+        }
+      }
+      if (activeGlobalKey > 0) {
+        try {
+          await ensureGlobalConversationExists(libraryID, activeGlobalKey);
+        } catch (err) {
+          ztoolkit.log("LLM: Failed to ensure active global history row", err);
+        }
+      }
+      if (requestId !== globalHistoryLoadSeq) return;
+
+      let historyEntries: Awaited<ReturnType<typeof loadConversationHistoryScope>> =
         [];
       try {
-        historyEntries = await listGlobalConversations(
+        historyEntries = await loadConversationHistoryScope({
+          mode: "open",
           libraryID,
-          GLOBAL_HISTORY_LIMIT,
-          false,
-        );
+          limit: GLOBAL_HISTORY_LIMIT,
+        });
       } catch (err) {
         ztoolkit.log("LLM: Failed to load global history entries", err);
       }
@@ -3860,72 +3911,23 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         if (pendingHistoryDeletionKeys.has(normalizedKey)) continue;
         if (seenGlobalKeys.has(normalizedKey)) continue;
         seenGlobalKeys.add(normalizedKey);
-        const title = normalizeHistoryTitle(entry.title) || "Untitled chat";
-        const lastActivity = Number(
-          entry.lastActivityAt || entry.createdAt || 0,
-        );
+        const lastActivity = Number(entry.lastActivityAt || entry.createdAt || 0);
         globalEntries.push({
           kind: "global",
           section: "open",
           sectionTitle: "Open Chat",
           conversationKey: normalizedKey,
-          title,
-          timestampText:
-            formatGlobalHistoryTimestamp(lastActivity) || "Standalone chat",
+          title: entry.title,
+          timestampText: entry.isDraft
+            ? "Draft"
+            : formatGlobalHistoryTimestamp(lastActivity) || "Standalone chat",
           deletable: true,
-          isDraft: false,
+          isDraft: Boolean(entry.isDraft),
           isPendingDelete: false,
           lastActivityAt: Number.isFinite(lastActivity)
             ? Math.floor(lastActivity)
             : 0,
         });
-      }
-
-      let activeGlobalKey = 0;
-      if (isGlobalMode() && item && Number.isFinite(item.id) && item.id > 0) {
-        activeGlobalKey = Math.floor(item.id);
-      } else {
-        const remembered = Number(
-          activeGlobalConversationByLibrary.get(libraryID),
-        );
-        if (Number.isFinite(remembered) && remembered > 0) {
-          activeGlobalKey = Math.floor(remembered);
-        }
-      }
-      if (
-        activeGlobalKey > 0 &&
-        !pendingHistoryDeletionKeys.has(activeGlobalKey)
-      ) {
-        let userTurnCount = 0;
-        try {
-          userTurnCount =
-            await getGlobalConversationUserTurnCount(activeGlobalKey);
-        } catch (err) {
-          ztoolkit.log(
-            "LLM: Failed to inspect active global draft conversation",
-            err,
-          );
-        }
-        if (requestId !== globalHistoryLoadSeq) return;
-        if (userTurnCount === 0) {
-          const existsInHistorical = globalEntries.some(
-            (entry) => entry.conversationKey === activeGlobalKey,
-          );
-          if (!existsInHistorical) {
-            globalEntries.unshift({
-              kind: "global",
-              section: "open",
-              sectionTitle: "Open Chat",
-              conversationKey: activeGlobalKey,
-              title: "New chat",
-              timestampText: "Draft",
-              deletable: true,
-              isDraft: true,
-              isPendingDelete: false,
-              lastActivityAt: 0,
-            });
-          }
-        }
       }
 
       const dedupedGlobalEntries: ConversationHistoryEntry[] = [];
@@ -3983,6 +3985,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     titleStatic.style.display = "none";
     historyBar.style.display = "inline-flex";
     renderGlobalHistoryMenu();
+    notifyConversationHistoryChanged();
   };
 
   const resetComposePreviewUI = () => {
@@ -5098,60 +5101,8 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     modeChipBtn.addEventListener("click", (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      if (!item || isNoteSession()) return;
-      // [webchat] Mode chip is display-only in webchat mode
-      if (isWebChatMode()) return;
-      if (currentAbortController || inputBox?.disabled) {
-        if (status) {
-          setStatus(
-            status,
-            t("Wait for the current response to finish before switching modes"),
-            "ready",
-          );
-        }
-        return;
-      }
-      closeHistoryMenu();
-      closeHistoryNewMenu();
-      if (isGlobalMode()) {
-        const libraryID = getCurrentLibraryID();
-        const hadLock = libraryID
-          ? getLockedGlobalConversationKey(libraryID) !== null
-          : false;
-        if (libraryID) {
-          // Explicit click always overrides the lock — clear it so
-          // resolveInitialPanelItemState doesn't snap back to global on the
-          // next onAsyncRender.
-          setLockedGlobalConversationKey(libraryID, null);
-          setAutoLockedGlobalConversationKey(null);
-        }
-        // When the lock was active, resolveInitialPanelItemState set
-        // basePaperItem to null.  Recover it from initialItem so that
-        // switchPaperConversation can find the paper to switch to.
-        if (!basePaperItem) {
-          basePaperItem = resolveConversationBaseItem(initialItem) ?? null;
-        }
-        // If lock was active, sync all other panels back to paper mode
-        if (hadLock) {
-          syncLockStateToOtherPanels();
-        }
-        void switchPaperConversation();
-      } else {
-        void (async () => {
-          const libraryID = getCurrentLibraryID();
-          if (!libraryID) return;
-          const remembered = activeGlobalConversationByLibrary.get(libraryID);
-          const rememberedKey =
-            remembered && Number.isFinite(Number(remembered))
-              ? Math.floor(Number(remembered))
-              : 0;
-          if (rememberedKey > 0) {
-            await switchGlobalConversation(rememberedKey);
-          } else {
-            await createAndSwitchGlobalConversation();
-          }
-        })();
-      }
+      // Mode chip is non-clickable — sidepanels are paper-only,
+      // standalone is open-chat-only. No mode switching anywhere.
     });
   }
 

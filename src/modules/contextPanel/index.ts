@@ -68,6 +68,12 @@ import { resolveInitialPanelItemState, resolveActiveLibraryID } from "./portalSc
 import { getLockedGlobalConversationKey } from "./prefHelpers";
 import { getEditableSelectionFromDocument } from "./noteSelection";
 
+export { openStandaloneChat } from "./standaloneWindow";
+import {
+  isStandaloneWindowActive,
+  renderStandalonePlaceholder,
+} from "./standaloneWindow";
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -116,12 +122,22 @@ export function registerReaderContextPanel() {
     },
     onItemChange: ({ setEnabled, tabType }) => {
       setEnabled(true);
+      if (isStandaloneWindowActive()) return true;
       ztoolkit.log(`LLM: panel itemChange tabType=${tabType}`);
       // Refresh the cached tab ID (side effect of getActiveReaderForSelectedTab)
       getActiveReaderForSelectedTab();
       return true;
     },
     onRender: ({ body, item }) => {
+      // When standalone window is open, show placeholder instead of full UI
+      if (isStandaloneWindowActive()) {
+        renderStandalonePlaceholder(body);
+        const resolvedState = resolveInitialPanelItemState(item);
+        activeContextPanels.set(body, () => resolvedState.item);
+        activeContextPanelRawItems.set(body, item || null);
+        (body as any).__llmSyncRendered = true;
+        return;
+      }
       syncGlobalLockVisibility(body);
       try {
         const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
@@ -175,6 +191,7 @@ export function registerReaderContextPanel() {
           void (async () => {
             try {
               if (resolvedState.item) await ensureConversationLoaded(resolvedState.item);
+              if (isStandaloneWindowActive()) return;
               refreshChat(body, resolvedState.item);
             } catch (err) {
               ztoolkit.log("LLM: onRender async setup failed", err);
@@ -190,6 +207,8 @@ export function registerReaderContextPanel() {
     },
     onAsyncRender: async ({ body, item, setEnabled, tabType }) => {
       setEnabled(true);
+      // Skip full render when standalone window is active
+      if (isStandaloneWindowActive()) return;
       const thisGeneration = ++renderGeneration;
       ztoolkit.log(
         `LLM: panel asyncRender tabType=${tabType} hasItem=${Boolean(item)} gen=${thisGeneration}`,
@@ -214,10 +233,13 @@ export function registerReaderContextPanel() {
       if (resolvedItem) {
         await ensureConversationLoaded(resolvedItem);
       }
-      // Bail if a newer render has started while we were awaiting.
+      // Bail if a newer render has started while we were awaiting,
+      // or if the standalone window was opened during the await.
       if (renderGeneration !== thisGeneration) return;
+      if (isStandaloneWindowActive()) return;
       await renderShortcuts(body, resolvedItem);
       if (renderGeneration !== thisGeneration) return;
+      if (isStandaloneWindowActive()) return;
       if (!syncAlreadyRendered) {
         setupHandlers(body, item);
       }

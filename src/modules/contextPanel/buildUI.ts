@@ -185,33 +185,25 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   });
   modeSwitchWrap.dataset.mode = hasItem && isGlobalMode ? "global" : "paper";
 
+  const isStandaloneBody = (body as HTMLElement).dataset?.standalone === "true";
+
+  // In sidepanels, the mode chip is a non-clickable indicator (always "Paper chat").
+  // In the standalone window, it shows "Open chat".
+  const modeChipLabel = isStandaloneBody
+    ? (activeNoteSession ? t("Open note") : t("Open chat"))
+    : (activeNoteSession ? t("Paper note") : t("Paper chat"));
   const modeChipBtn = createElement(doc, "button", "llm-mode-chip", {
     id: "llm-mode-chip",
     type: "button",
-    textContent: hasItem && isGlobalMode
-      ? (activeNoteSession ? t("Open note") : t("Open chat"))
-      : (activeNoteSession ? t("Paper note") : t("Paper chat")),
-    title:
-      activeNoteSession
-        ? hasItem && isGlobalMode
-          ? t("Open note")
-          : t("Paper note")
-        : hasItem && isGlobalMode
-          ? t("Switch to paper chat")
-          : t("Switch to open chat"),
+    textContent: modeChipLabel,
+    title: modeChipLabel,
   });
-  modeChipBtn.setAttribute(
-    "aria-label",
-    activeNoteSession
-      ? hasItem && isGlobalMode
-        ? t("Open note")
-        : t("Paper note")
-      : hasItem && isGlobalMode
-        ? t("Switch to paper chat")
-        : t("Switch to open chat"),
-  );
+  modeChipBtn.setAttribute("aria-label", modeChipLabel);
+  if (!isStandaloneBody) {
+    modeChipBtn.style.cursor = "default";
+  }
 
-  // Lock button, right of chip (only visible in open-chat mode)
+  // Lock button, right of chip (only visible in standalone open-chat mode)
   const modeLockBtn = createElement(doc, "div", "llm-mode-lock", {
     id: "llm-mode-lock",
     title: t("Lock open chat as default"),
@@ -221,7 +213,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   modeLockBtn.setAttribute("role", "button");
   modeLockBtn.setAttribute("tabindex", "0");
   modeLockBtn.style.display =
-    hasItem && isGlobalMode && !activeNoteSession ? "flex" : "none";
+    isStandaloneBody && hasItem && isGlobalMode && !activeNoteSession ? "flex" : "none";
 
   modeSwitchWrap.append(modeChipBtn, modeLockBtn);
 
@@ -231,6 +223,12 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   headerTop.appendChild(headerInfo);
 
   const headerActions = createElement(doc, "div", "llm-header-actions");
+  const popoutBtn = createElement(doc, "button", "llm-btn-icon llm-popout-btn", {
+    id: "llm-popout",
+    type: "button",
+    title: t("Open in Window"),
+  });
+  popoutBtn.setAttribute("aria-label", t("Open chat in a standalone window"));
   const settingsBtn = createElement(doc, "button", "llm-btn-icon llm-settings-btn", {
     id: "llm-settings",
     type: "button",
@@ -250,7 +248,7 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
     type: "button",
     textContent: t("Clear"),
   });
-  headerActions.append(settingsBtn, exportBtn, clearBtn);
+  headerActions.append(popoutBtn, settingsBtn, exportBtn, clearBtn);
   headerTop.appendChild(headerActions);
   header.appendChild(headerTop);
   const historyMenu = createElement(doc, "div", "llm-history-menu", {

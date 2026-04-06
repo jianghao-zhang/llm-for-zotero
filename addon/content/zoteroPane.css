@@ -617,6 +617,275 @@
   pointer-events: none;
 }
 
+.llm-popout-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  font-size: 0;
+  line-height: 0;
+  padding: 0;
+}
+
+/* Hide popout button inside the standalone window */
+[data-standalone="true"] .llm-popout-btn {
+  display: none;
+}
+
+/* Hide inner header elements in standalone — replaced by topbar + sidebar */
+[data-standalone="true"] .llm-header-top {
+  display: none;
+}
+
+/* =========================================================================
+   Standalone window layout — sidebar + topbar + content
+   ========================================================================= */
+
+/* --- Sidebar: icon strip + collapsible panel --- */
+
+.llm-standalone-sidebar {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  border-right: 1px solid var(--stroke-secondary);
+  background: color-mix(in srgb, var(--material-background) 88%, black 12%);
+  overflow: hidden;
+}
+
+/* Icon strip — visible only when sidebar panel is collapsed */
+.llm-standalone-icon-strip {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  width: 48px;
+  min-width: 48px;
+  padding: 10px 0;
+  gap: 4px;
+  background: color-mix(in srgb, var(--material-background) 82%, black 18%);
+  border-right: 1px solid color-mix(in srgb, var(--stroke-secondary) 50%, transparent);
+}
+
+.llm-standalone-sidebar[data-sidebar-state="collapsed"] .llm-standalone-icon-strip {
+  display: flex;
+}
+
+.llm-standalone-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--fill-secondary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.llm-standalone-icon-btn:hover {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-icon-btn svg {
+  flex-shrink: 0;
+}
+
+.llm-standalone-icon-toggle {
+  color: var(--fill-tertiary);
+}
+
+/* Panel — expandable conversation list */
+.llm-standalone-sidebar-panel {
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  min-width: 0;
+  background: color-mix(in srgb, var(--material-sidepane) 90%, black 10%);
+  overflow: hidden;
+  transition: width 0.2s ease, opacity 0.15s ease;
+}
+
+/* Collapsed state — panel hidden, only icon strip visible */
+.llm-standalone-sidebar[data-sidebar-state="collapsed"] .llm-standalone-sidebar-panel {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* border-right is already on the icon strip; no extra rule needed for collapsed */
+
+.llm-standalone-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  gap: 8px;
+}
+
+.llm-standalone-sidebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fill-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.llm-standalone-new-chat-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--stroke-secondary);
+  border-radius: 6px;
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.llm-standalone-new-chat-btn:hover {
+  background: var(--fill-quaternary);
+}
+
+.llm-standalone-sidebar-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 8px 12px;
+}
+
+.llm-standalone-sidebar-empty {
+  color: var(--fill-tertiary);
+  font-size: 12px;
+  padding: 16px 6px;
+  text-align: center;
+}
+
+.llm-standalone-day-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fill-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 6px 4px;
+  user-select: none;
+}
+
+.llm-standalone-conv-item {
+  display: block;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fill-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.llm-standalone-conv-item:hover {
+  background: color-mix(in srgb, var(--fill-quinary) 80%, transparent);
+}
+
+.llm-standalone-conv-item.active {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  color: var(--color-accent);
+  font-weight: 500;
+}
+
+/* --- Main area (topbar + content) --- */
+
+.llm-standalone-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.llm-standalone-topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--stroke-secondary);
+  background: var(--material-sidepane);
+  min-height: 38px;
+}
+
+.llm-standalone-tab {
+  padding: 5px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--fill-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.llm-standalone-tab:hover {
+  background: var(--fill-quinary);
+  color: var(--fill-primary);
+}
+
+.llm-standalone-tab.active {
+  background: var(--fill-quinary);
+  border-color: var(--stroke-secondary);
+  color: var(--fill-primary);
+  font-weight: 600;
+}
+
+.llm-standalone-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Override viewport-relative chat shell height for standalone window */
+[data-standalone="true"] .llm-chat-shell {
+  height: auto;
+  flex: 1 1 0;
+  min-height: 200px;
+}
+
+.llm-popout-btn::before {
+  content: "";
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  mask-image: url("icons/action-popout.svg");
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-image: url("icons/action-popout.svg");
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+  pointer-events: none;
+}
+
 /* Context Section */
 .llm-context-section {
   display: flex;

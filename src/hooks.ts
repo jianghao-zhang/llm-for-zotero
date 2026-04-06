@@ -7,6 +7,7 @@ import {
   registerLLMStyles,
   registerNoteEditingSelectionTracking,
   registerReaderSelectionTracking,
+  openStandaloneChat,
 } from "./modules/contextPanel";
 import { invalidatePaperSearchCache } from "./modules/contextPanel/paperSearch";
 import { initChatStore } from "./utils/chatStore";
@@ -96,6 +97,29 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   registerReaderContextPanel();
   registerReaderSelectionTracking();
   registerNoteEditingSelectionTracking(win);
+
+  // Tools menu item for standalone chat window
+  const doc = win.document;
+  const toolsMenu = doc.getElementById("menu_ToolsPopup");
+  if (toolsMenu) {
+    const menuitem = doc.createXULElement("menuitem");
+    menuitem.id = "llmforzotero-open-standalone";
+    menuitem.setAttribute("label", "LLM Chat Window");
+    menuitem.addEventListener("command", () => openStandaloneChat());
+    toolsMenu.appendChild(menuitem);
+  }
+
+  // Keyboard shortcut: Ctrl/Cmd+Shift+L
+  const keyset = doc.getElementById("mainKeyset");
+  if (keyset) {
+    const key = doc.createXULElement("key");
+    key.id = "llmforzotero-key-standalone";
+    key.setAttribute("modifiers", "accel,shift");
+    key.setAttribute("key", "L");
+    key.setAttribute("oncommand", "void(0)");
+    key.addEventListener("command", () => openStandaloneChat());
+    keyset.appendChild(key);
+  }
 }
 
 function registerPrefsPane() {
@@ -111,6 +135,9 @@ function registerPrefsPane() {
 async function onMainWindowUnload(win: Window): Promise<void> {
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
+  addon.data.standaloneWindow?.close();
+  win.document.getElementById("llmforzotero-open-standalone")?.remove();
+  win.document.getElementById("llmforzotero-key-standalone")?.remove();
 }
 
 function onShutdown(): void {
@@ -120,6 +147,7 @@ function onShutdown(): void {
   }
   ztoolkit.unregisterAll();
   addon.data.dialog?.window?.close();
+  addon.data.standaloneWindow?.close();
   try {
     const { unregisterWebChatRelay } = require("./webchat/relayServer");
     unregisterWebChatRelay();

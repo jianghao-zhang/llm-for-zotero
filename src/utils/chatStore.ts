@@ -156,6 +156,127 @@ function normalizeLimit(limit: number, fallback: number): number {
   return Math.max(1, Math.floor(limit));
 }
 
+function resolveUserLibraryID(): number {
+  const normalized = normalizeLibraryID(
+    Number(
+      (
+        Zotero as unknown as { Libraries?: { userLibraryID?: unknown } }
+      ).Libraries?.userLibraryID,
+    ),
+  );
+  return normalized || 1;
+}
+
+type ConversationCatalogSeedRow = {
+  conversationKey?: unknown;
+  createdAt?: unknown;
+  title?: unknown;
+};
+
+function normalizeCatalogTimestamp(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return Date.now();
+  return Math.floor(parsed);
+}
+
+async function reconcileGlobalConversationCatalog(): Promise<void> {
+  const libraryID = resolveUserLibraryID();
+  const rows = (await Zotero.DB.queryAsync(
+    `SELECT m.conversation_key AS conversationKey,
+            MIN(m.timestamp) AS createdAt,
+            (
+              SELECT m0.text
+              FROM ${CHAT_MESSAGES_TABLE} m0
+              WHERE m0.conversation_key = m.conversation_key
+                AND m0.role = 'user'
+              ORDER BY m0.timestamp ASC, m0.id ASC
+              LIMIT 1
+            ) AS title
+     FROM ${CHAT_MESSAGES_TABLE} m
+     LEFT JOIN ${GLOBAL_CONVERSATIONS_TABLE} gc
+       ON gc.conversation_key = m.conversation_key
+     WHERE m.conversation_key >= ?
+       AND gc.conversation_key IS NULL
+     GROUP BY m.conversation_key
+     ORDER BY m.conversation_key ASC`,
+    [GLOBAL_CONVERSATION_KEY_BASE],
+  )) as ConversationCatalogSeedRow[] | undefined;
+
+  for (const row of rows || []) {
+    const conversationKey = normalizeConversationKey(Number(row.conversationKey));
+    if (!conversationKey) continue;
+    const title =
+      typeof row.title === "string" && row.title.trim()
+        ? normalizeConversationTitleSeed(row.title)
+        : "";
+    await Zotero.DB.queryAsync(
+      `INSERT OR IGNORE INTO ${GLOBAL_CONVERSATIONS_TABLE}
+        (conversation_key, library_id, created_at, title)
+       VALUES (?, ?, ?, ?)`,
+      [
+        conversationKey,
+        libraryID,
+        normalizeCatalogTimestamp(row.createdAt),
+        title || null,
+      ],
+    );
+  }
+}
+
+async function reconcileLegacyPaperV1ConversationCatalog(): Promise<void> {
+  const rows = (await Zotero.DB.queryAsync(
+    `SELECT m.conversation_key AS conversationKey,
+            MIN(m.timestamp) AS createdAt,
+            (
+              SELECT m0.text
+              FROM ${CHAT_MESSAGES_TABLE} m0
+              WHERE m0.conversation_key = m.conversation_key
+                AND m0.role = 'user'
+              ORDER BY m0.timestamp ASC, m0.id ASC
+              LIMIT 1
+            ) AS title
+     FROM ${CHAT_MESSAGES_TABLE} m
+     LEFT JOIN ${PAPER_CONVERSATIONS_TABLE} pc
+       ON pc.conversation_key = m.conversation_key
+     WHERE m.conversation_key > 0
+       AND m.conversation_key < ?
+       AND pc.conversation_key IS NULL
+     GROUP BY m.conversation_key
+     ORDER BY m.conversation_key ASC`,
+    [PAPER_CONVERSATION_KEY_BASE],
+  )) as ConversationCatalogSeedRow[] | undefined;
+
+  for (const row of rows || []) {
+    const conversationKey = normalizeConversationKey(Number(row.conversationKey));
+    if (!conversationKey) continue;
+    const paperItem = Zotero.Items.get(conversationKey) || null;
+    if (!paperItem?.isRegularItem?.()) continue;
+    const libraryID =
+      normalizeLibraryID(Number(paperItem.libraryID)) || resolveUserLibraryID();
+    const title =
+      typeof row.title === "string" && row.title.trim()
+        ? normalizeConversationTitleSeed(row.title)
+        : "";
+    await Zotero.DB.queryAsync(
+      `INSERT OR IGNORE INTO ${PAPER_CONVERSATIONS_TABLE}
+        (conversation_key, library_id, paper_item_id, session_version, created_at, title)
+       VALUES (?, ?, ?, 1, ?, ?)`,
+      [
+        conversationKey,
+        libraryID,
+        conversationKey,
+        normalizeCatalogTimestamp(row.createdAt),
+        title || null,
+      ],
+    );
+  }
+}
+
+export async function reconcileConversationCatalogs(): Promise<void> {
+  await reconcileGlobalConversationCatalog();
+  await reconcileLegacyPaperV1ConversationCatalog();
+}
+
 export async function initChatStore(): Promise<void> {
   await Zotero.DB.executeTransaction(async () => {
     await migrateLegacyChatStore();
@@ -393,6 +514,8 @@ export async function initChatStore(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS ${PAPER_CONVERSATIONS_CONVERSATION_INDEX}
        ON ${PAPER_CONVERSATIONS_TABLE} (conversation_key, paper_item_id, session_version)`,
     );
+
+    await reconcileConversationCatalogs();
   });
 }
 
@@ -1352,6 +1475,25 @@ export async function deletePaperConversation(
     `DELETE FROM ${PAPER_CONVERSATIONS_TABLE}
      WHERE conversation_key = ?`,
     [normalizedKey],
+  );
+}
+
+/**
+ * Ensure a global conversation row exists in the DB for the given key.
+ * Uses INSERT OR IGNORE so it's safe to call repeatedly.
+ */
+export async function ensureGlobalConversationExists(
+  libraryID: number,
+  conversationKey: number,
+): Promise<void> {
+  const normalizedLibraryID = normalizeLibraryID(libraryID);
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  if (!normalizedLibraryID || !normalizedKey) return;
+  await Zotero.DB.queryAsync(
+    `INSERT OR IGNORE INTO ${GLOBAL_CONVERSATIONS_TABLE}
+      (conversation_key, library_id, created_at, title)
+     VALUES (?, ?, ?, NULL)`,
+    [normalizedKey, normalizedLibraryID, Date.now()],
   );
 }
 

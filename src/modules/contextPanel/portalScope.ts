@@ -5,7 +5,6 @@ import {
 import { normalizePositiveInt } from "./normalizers";
 import {
   getLastUsedPaperConversationKey,
-  getLockedGlobalConversationKey,
 } from "./prefHelpers";
 import { activePaperConversationByPaper } from "./state";
 import type { ActiveNoteSession, GlobalPortalItem, PaperPortalItem } from "./types";
@@ -330,14 +329,9 @@ export function resolveInitialPanelItemState(
 
   const libraryID = resolveLibraryIdFromItem(basePaperItem);
 
-  // If open-chat is locked for this library, always open to that session.
-  const lockedGlobalKey = getLockedGlobalConversationKey(libraryID);
-  if (lockedGlobalKey !== null) {
-    return {
-      item: createGlobalPortalItem(libraryID, lockedGlobalKey),
-      basePaperItem: null,
-    };
-  }
+  // Sidepanels always resolve to paper mode. Open chat lives only in
+  // the standalone window, which constructs its own global portal item
+  // directly in openStandaloneChat().
 
   const paperItemID = Number(basePaperItem.id || 0);
   const rememberedPaperKey = Number(

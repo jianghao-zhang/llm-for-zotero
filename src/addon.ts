@@ -21,6 +21,7 @@ class Addon {
       rows: Array<{ [dataKey: string]: string }>;
     };
     dialog?: DialogHelper;
+    standaloneWindow?: Window;
   };
   // Lifecycle hooks
   public hooks: typeof hooks;

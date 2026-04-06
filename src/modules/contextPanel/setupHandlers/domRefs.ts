@@ -13,6 +13,7 @@ export type PanelDomRefs = {
   actionsRow: HTMLDivElement | null;
   actionsLeft: HTMLDivElement | null;
   actionsRight: HTMLDivElement | null;
+  popoutBtn: HTMLButtonElement | null;
   settingsBtn: HTMLButtonElement | null;
   exportBtn: HTMLButtonElement | null;
   clearBtn: HTMLButtonElement | null;
@@ -112,6 +113,7 @@ export function getPanelDomRefs(body: Element): PanelDomRefs {
     actionsRight: body.querySelector(
       ".llm-actions-right",
     ) as HTMLDivElement | null,
+    popoutBtn: body.querySelector("#llm-popout") as HTMLButtonElement | null,
     settingsBtn: body.querySelector("#llm-settings") as HTMLButtonElement | null,
     exportBtn: body.querySelector("#llm-export") as HTMLButtonElement | null,
     clearBtn: body.querySelector("#llm-clear") as HTMLButtonElement | null,
