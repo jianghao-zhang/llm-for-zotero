@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { createExternalBackendBridgeRuntime } from "../src/agent/externalBackendBridge";
+import {
+  createExternalBackendBridgeRuntime,
+  fetchExternalBridgeSessionInfo,
+} from "../src/agent/externalBackendBridge";
 import type { AgentRuntimeOutcome } from "../src/agent/types";
 
 function makeCoreRuntime() {
@@ -130,7 +133,11 @@ describe("external backend bridge runtime", function () {
       assert.equal(outcome.kind, "completed");
       assert.equal((outcome as any).runId, "core-run");
       assert.isTrue(
-        seen.some((entry) => entry.includes("外部 Agent 后端不可用，已自动回退到本地模式")),
+        seen.some(
+          (entry) =>
+            entry.includes("External agent backend unavailable; fell back to local runtime") ||
+            entry.includes("外部 Agent 后端不可用，已自动回退到本地模式"),
+        ),
       );
     } finally {
       (globalThis as any).fetch = fetchBackup;
@@ -141,7 +148,7 @@ describe("external backend bridge runtime", function () {
     const core = makeCoreRuntime();
     const fetchBackup = (globalThis as any).fetch;
     (globalThis as any).fetch = async (url: string) => {
-      if (url.endsWith("/tools")) {
+      if (url.includes("/tools")) {
         return new Response(
           JSON.stringify({
             tools: [
@@ -172,6 +179,143 @@ describe("external backend bridge runtime", function () {
       assert.equal(actions.length, 1);
       assert.equal(actions[0].name, "cc_tool::Read");
       assert.equal(actions[0].source, "backend");
+    } finally {
+      (globalThis as any).fetch = fetchBackup;
+    }
+  });
+
+  it("prefers last run scope snapshot when querying session info", async function () {
+    const core = makeCoreRuntime();
+    const requests: string[] = [];
+    const fetchBackup = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (input: string, init?: { method?: string }) => {
+      requests.push(input);
+      if (input.endsWith("/run-turn")) {
+        const lines = [
+          JSON.stringify({ type: "start", runId: "bridge-run-scope" }),
+          JSON.stringify({
+            type: "outcome",
+            outcome: {
+              kind: "completed",
+              runId: "bridge-run-scope",
+              text: "ok",
+              usedFallback: false,
+            },
+          }),
+        ].join("\n");
+        return new Response(lines, {
+          status: 200,
+          headers: { "content-type": "application/x-ndjson" },
+        });
+      }
+      if (input.includes("/session-info?")) {
+        const url = new URL(input);
+        const scopeType = url.searchParams.get("scopeType");
+        const scopeId = url.searchParams.get("scopeId");
+        if (scopeType === "paper" && scopeId === "1:42") {
+          return new Response(
+            JSON.stringify({
+              session: {
+                originalConversationKey: "42",
+                scopedConversationKey: "42::paper:1:42",
+                providerSessionId: "sess-from-paper",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session: {
+              originalConversationKey: "42",
+              scopedConversationKey: "42::open:1",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+
+    try {
+      const runtime = createExternalBackendBridgeRuntime({
+        coreRuntime: core as any,
+        getBridgeUrl: () => "http://127.0.0.1:9999",
+      });
+      await runtime.runTurn({
+        request: {
+          conversationKey: 42,
+          mode: "agent",
+          userText: "remember scope",
+          scopeType: "paper",
+          scopeId: "1:42",
+          scopeLabel: "Paper 42",
+        } as any,
+      });
+
+      const info = await fetchExternalBridgeSessionInfo({
+        baseUrl: "http://127.0.0.1:9999",
+        conversationKey: 42,
+        scopeType: "open" as any,
+        scopeId: "1",
+        scopeLabel: "Open Chat",
+      });
+
+      assert.equal(info?.providerSessionId, "sess-from-paper");
+      const sessionRequests = requests.filter((entry) => entry.includes("/session-info?"));
+      assert.isTrue(sessionRequests.length >= 1);
+      assert.isTrue(sessionRequests[0].includes("scopeType=paper"));
+      assert.isTrue(sessionRequests[0].includes("scopeId=1%3A42"));
+    } finally {
+      (globalThis as any).fetch = fetchBackup;
+    }
+  });
+
+  it("falls back to conversation-only session-info query when scoped query misses", async function () {
+    const requests: string[] = [];
+    const fetchBackup = (globalThis as any).fetch;
+    (globalThis as any).fetch = async (input: string) => {
+      requests.push(input);
+      if (input.includes("/session-info?")) {
+        const url = new URL(input);
+        const hasScopeType = url.searchParams.has("scopeType");
+        if (hasScopeType) {
+          return new Response(
+            JSON.stringify({
+              session: {
+                originalConversationKey: "77",
+                scopedConversationKey: "77::paper:1:77",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            session: {
+              originalConversationKey: "77",
+              scopedConversationKey: "77",
+              providerSessionId: "sess-from-conversation-only",
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    };
+    try {
+      const info = await fetchExternalBridgeSessionInfo({
+        baseUrl: "http://127.0.0.1:9999",
+        conversationKey: 77,
+        scopeType: "paper" as any,
+        scopeId: "1:77",
+        scopeLabel: "Paper 77",
+      });
+      assert.equal(info?.providerSessionId, "sess-from-conversation-only");
+      const sessionRequests = requests.filter((entry) => entry.includes("/session-info?"));
+      assert.isAtLeast(sessionRequests.length, 2);
+      assert.isTrue(sessionRequests[0].includes("scopeType=paper"));
+      assert.isFalse(sessionRequests[sessionRequests.length - 1].includes("scopeType="));
     } finally {
       (globalThis as any).fetch = fetchBackup;
     }

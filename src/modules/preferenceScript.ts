@@ -1668,7 +1668,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
   if (agentBridgeUrlInput) {
     const key = `${config.prefsPrefix}.agentBackendBridgeUrl`;
-    const saved = (Zotero.Prefs.get(key, true) as string) || "http://127.0.0.1:18787";
+    const saved = (Zotero.Prefs.get(key, true) as string) || "http://127.0.0.1:19787";
     agentBridgeUrlInput.value = saved;
     agentBridgeUrlInput.addEventListener("input", () => {
       Zotero.Prefs.set(key, agentBridgeUrlInput.value.trim(), true);
