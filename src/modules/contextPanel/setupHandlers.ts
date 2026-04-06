@@ -7770,6 +7770,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const disabled = !item;
     withScrollGuard(chatBox, conversationKey, () => {
       // [webchat] Hide reasoning dropdown — users control thinking mode on chatgpt.com
+      if (!reasoningBtn) return;
       if (isWebChatMode()) {
         reasoningBtn.style.display = "none";
         applyResponsiveActionButtonsLayout();

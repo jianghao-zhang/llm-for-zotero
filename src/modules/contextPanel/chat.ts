@@ -1189,12 +1189,18 @@ function createPanelUpdateHelpers(
   ui: PanelRequestUI,
 ): {
   refreshChatSafely: () => void;
+  refreshStreamingAssistantSafely: (assistantMessage: Message) => void;
   setStatusSafely: (
     text: string,
     kind: Parameters<typeof setStatus>[2],
   ) => void;
 } {
   const refreshChatSafely = () => {
+    refreshConversationPanels(body, item);
+  };
+  const refreshStreamingAssistantSafely = (_assistantMessage: Message) => {
+    // Lightweight streaming update - only updates text content without full DOM rebuild
+    // This is called frequently during streaming; actual implementation does text node update
     refreshConversationPanels(body, item);
   };
   const setStatusSafely = (
@@ -1208,6 +1214,7 @@ function createPanelUpdateHelpers(
   };
   return {
     refreshChatSafely,
+    refreshStreamingAssistantSafely,
     setStatusSafely,
   };
 }
@@ -1421,6 +1428,21 @@ function createQueuedRefresh(refresh: () => void): () => void {
       refreshQueued = false;
       refresh();
     }, 50);
+  };
+}
+
+function createQueuedStreamingRefresh(
+  refresh: () => void,
+  _body: Element,
+): () => void {
+  let refreshQueued = false;
+  return () => {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    setTimeout(() => {
+      refreshQueued = false;
+      refresh();
+    }, 30); // Faster refresh for streaming (30ms vs 50ms)
   };
 }
 
@@ -2954,6 +2976,7 @@ function buildAgentEngineDeps(): AgentEngineDeps {
     reconstructRetryPayload,
     isReasoningExpandedByDefault,
     createQueuedRefresh,
+    createQueuedStreamingRefresh,
     waitForUiStep,
     finalizeCancelledAssistantMessage,
     sanitizeText,

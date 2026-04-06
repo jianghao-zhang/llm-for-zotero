@@ -91,7 +91,14 @@ type ExternalToolDescriptor = {
   riskLevel: ToolRiskLevel;
   requiresConfirmation: boolean;
   source: ToolSource;
-};
+}
+
+type ExternalSlashCommandDescriptor = {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  source: "sdk" | "fallback";
+};;
 
 const EXTERNAL_ACTION_PREFIX = "cc_tool::";
 

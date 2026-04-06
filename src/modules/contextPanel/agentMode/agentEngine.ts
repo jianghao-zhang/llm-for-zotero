@@ -42,6 +42,7 @@ type StatusKind = "ready" | "sending" | "error" | "warning";
 
 type PanelUpdateHelpers = {
   refreshChatSafely: () => void;
+  refreshStreamingAssistantSafely: (assistantMessage: Message) => void;
   setStatusSafely: (text: string, kind: StatusKind) => void;
 };
 
@@ -287,6 +288,7 @@ export type AgentEngineDeps = {
   reconstructRetryPayload: (userMessage: Message) => ReconstructedRetryPayload;
   isReasoningExpandedByDefault: () => boolean;
   createQueuedRefresh: (refresh: () => void) => () => void;
+  createQueuedStreamingRefresh: (refresh: () => void, body: Element) => () => void;
   waitForUiStep: () => Promise<void>;
   finalizeCancelledAssistantMessage: (
     message: Message,
@@ -597,9 +599,14 @@ export async function sendAgentTurn(
           );
           assistantMessage.modelProviderLabel = "Claude Code";
         }
+
+        // Track if we need to refresh the View Process box (not just text)
+        let shouldRefreshViewProcess = false;
+
         switch (event.type) {
           case "status":
             setStatusSafely(event.text, "sending");
+            shouldRefreshViewProcess = true; // Status changes update View Process
             break;
           case "confirmation_required":
             deps.showPendingConfirmationCard(
@@ -608,6 +615,7 @@ export async function sendAgentTurn(
               event.action,
             );
             setStatusSafely("Awaiting approval", "warning");
+            shouldRefreshViewProcess = true;
             break;
           case "confirmation_resolved":
             deps.hidePendingConfirmationCard(body);
@@ -615,9 +623,11 @@ export async function sendAgentTurn(
               event.approved ? "Approved; continuing…" : "Approval denied",
               event.approved ? "sending" : "warning",
             );
+            shouldRefreshViewProcess = true;
             break;
           case "fallback":
             setStatusSafely(event.reason, "sending");
+            shouldRefreshViewProcess = true;
             break;
           case "message_delta":
             assistantMessage.text = appendAgentMessageDelta(
@@ -643,11 +653,25 @@ export async function sendAgentTurn(
           default:
             break;
         }
+
+        // Text-only updates: fast, lightweight
         if (event.type === "message_delta" || event.type === "message_rollback") {
           queueRefresh();
           return;
         }
-        refreshChatSafely();
+
+        // Full refresh for final (includes markdown render)
+        if (event.type === "final") {
+          refreshChatSafely();
+          return;
+        }
+
+        // View Process updates: decoupled from text streaming
+        // Only refresh if View Process box needs to show new status/tool calls
+        if (shouldRefreshViewProcess) {
+          refreshChatSafely();
+        }
+
         await deps.waitForUiStep();
       },
     });
@@ -883,9 +907,14 @@ export async function retryAgentTurn(
           );
           assistantMessage.modelProviderLabel = "Claude Code";
         }
+
+        // Track if we need to refresh the View Process box (not just text)
+        let shouldRefreshViewProcess = false;
+
         switch (event.type) {
           case "status":
             setStatusSafely(event.text, "sending");
+            shouldRefreshViewProcess = true; // Status changes update View Process
             break;
           case "confirmation_required":
             deps.showPendingConfirmationCard(
@@ -894,6 +923,7 @@ export async function retryAgentTurn(
               event.action,
             );
             setStatusSafely("Awaiting approval", "warning");
+            shouldRefreshViewProcess = true;
             break;
           case "confirmation_resolved":
             deps.hidePendingConfirmationCard(body);
@@ -901,9 +931,11 @@ export async function retryAgentTurn(
               event.approved ? "Approved; continuing…" : "Approval denied",
               event.approved ? "sending" : "warning",
             );
+            shouldRefreshViewProcess = true;
             break;
           case "fallback":
             setStatusSafely(event.reason, "sending");
+            shouldRefreshViewProcess = true;
             break;
           case "message_delta":
             assistantMessage.text = appendAgentMessageDelta(
@@ -929,11 +961,25 @@ export async function retryAgentTurn(
           default:
             break;
         }
+
+        // Text-only updates: fast, lightweight
         if (event.type === "message_delta" || event.type === "message_rollback") {
           queueRefresh();
           return;
         }
-        refreshChatSafely();
+
+        // Full refresh for final (includes markdown render)
+        if (event.type === "final") {
+          refreshChatSafely();
+          return;
+        }
+
+        // View Process updates: decoupled from text streaming
+        // Only refresh if View Process box needs to show new status/tool calls
+        if (shouldRefreshViewProcess) {
+          refreshChatSafely();
+        }
+
         await deps.waitForUiStep();
       },
     });
