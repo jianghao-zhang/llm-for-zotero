@@ -141,6 +141,49 @@ function normalizeSessionVersion(sessionVersion: number): number | null {
   return normalized > 0 ? normalized : null;
 }
 
+export type GlobalConversationScopeType =
+  | "open"
+  | "folder"
+  | "tag"
+  | "tagset"
+  | "custom";
+
+export type GlobalConversationScopeFilter = {
+  scopeType: GlobalConversationScopeType;
+  scopeId: string;
+  scopeLabel?: string;
+};
+
+function normalizeGlobalScopeType(value: unknown): GlobalConversationScopeType | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  switch (normalized) {
+    case "open":
+    case "folder":
+    case "tag":
+    case "tagset":
+    case "custom":
+      return normalized;
+    default:
+      return null;
+  }
+}
+
+function normalizeGlobalScopeFilter(
+  scope?: GlobalConversationScopeFilter | null,
+): GlobalConversationScopeFilter | null {
+  if (!scope) return null;
+  const scopeType = normalizeGlobalScopeType(scope.scopeType);
+  const scopeId =
+    typeof scope.scopeId === "string" ? scope.scopeId.trim() : "";
+  if (!scopeType || !scopeId) return null;
+  const scopeLabel =
+    typeof scope.scopeLabel === "string" && scope.scopeLabel.trim()
+      ? scope.scopeLabel.trim()
+      : undefined;
+  return { scopeType, scopeId, scopeLabel };
+}
+
 function normalizeConversationTitleSeed(value: string): string {
   if (typeof value !== "string") return "";
   const normalized = value
@@ -349,10 +392,59 @@ export async function initChatStore(): Promise<void> {
       `CREATE TABLE IF NOT EXISTS ${GLOBAL_CONVERSATIONS_TABLE} (
         conversation_key INTEGER PRIMARY KEY,
         library_id INTEGER NOT NULL,
+        scope_type TEXT NOT NULL DEFAULT 'open',
+        scope_id TEXT NOT NULL DEFAULT '',
+        scope_label TEXT,
         created_at INTEGER NOT NULL,
         title TEXT
       )`,
     );
+
+    const globalColumns = (await Zotero.DB.queryAsync(
+      `PRAGMA table_info(${GLOBAL_CONVERSATIONS_TABLE})`,
+    )) as Array<{ name?: unknown }> | undefined;
+    const hasGlobalScopeTypeColumn = Boolean(
+      globalColumns?.some((column) => column?.name === "scope_type"),
+    );
+    if (!hasGlobalScopeTypeColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${GLOBAL_CONVERSATIONS_TABLE}
+         ADD COLUMN scope_type TEXT`,
+      );
+      await Zotero.DB.queryAsync(
+        `UPDATE ${GLOBAL_CONVERSATIONS_TABLE}
+         SET scope_type = 'open'
+         WHERE scope_type IS NULL OR TRIM(scope_type) = ''`,
+      );
+    }
+    const hasGlobalScopeIdColumn = Boolean(
+      globalColumns?.some((column) => column?.name === "scope_id"),
+    );
+    if (!hasGlobalScopeIdColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${GLOBAL_CONVERSATIONS_TABLE}
+         ADD COLUMN scope_id TEXT`,
+      );
+      await Zotero.DB.queryAsync(
+        `UPDATE ${GLOBAL_CONVERSATIONS_TABLE}
+         SET scope_id = CAST(library_id AS TEXT)
+         WHERE scope_id IS NULL OR TRIM(scope_id) = ''`,
+      );
+    }
+    const hasGlobalScopeLabelColumn = Boolean(
+      globalColumns?.some((column) => column?.name === "scope_label"),
+    );
+    if (!hasGlobalScopeLabelColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${GLOBAL_CONVERSATIONS_TABLE}
+         ADD COLUMN scope_label TEXT`,
+      );
+      await Zotero.DB.queryAsync(
+        `UPDATE ${GLOBAL_CONVERSATIONS_TABLE}
+         SET scope_label = 'Open Chat'
+         WHERE scope_label IS NULL OR TRIM(scope_label) = ''`,
+      );
+    }
 
     await Zotero.DB.queryAsync(
       `CREATE INDEX IF NOT EXISTS ${GLOBAL_CONVERSATIONS_LIBRARY_INDEX}
@@ -1079,6 +1171,9 @@ export async function pruneConversation(
 type GlobalConversationSummaryRow = {
   conversationKey?: unknown;
   libraryID?: unknown;
+  scopeType?: unknown;
+  scopeId?: unknown;
+  scopeLabel?: unknown;
   createdAt?: unknown;
   title?: unknown;
   lastActivityAt?: unknown;
@@ -1099,6 +1194,15 @@ function toGlobalConversationSummary(
   return {
     conversationKey,
     libraryID,
+    scopeType: normalizeGlobalScopeType(row.scopeType) || undefined,
+    scopeId:
+      typeof row.scopeId === "string" && row.scopeId.trim()
+        ? row.scopeId.trim()
+        : undefined,
+    scopeLabel:
+      typeof row.scopeLabel === "string" && row.scopeLabel.trim()
+        ? row.scopeLabel.trim()
+        : undefined,
     createdAt: Math.floor(createdAt),
     title:
       typeof row.title === "string" && row.title.trim()
@@ -1357,9 +1461,15 @@ export async function deletePaperConversation(
 
 export async function createGlobalConversation(
   libraryID: number,
+  scope?: GlobalConversationScopeFilter | null,
 ): Promise<number> {
   const normalizedLibraryID = normalizeLibraryID(libraryID);
   if (!normalizedLibraryID) return 0;
+  const normalizedScope = normalizeGlobalScopeFilter(scope) || {
+    scopeType: "open" as const,
+    scopeId: String(normalizedLibraryID),
+    scopeLabel: "Open Chat",
+  };
 
   const createdAt = Date.now();
   return await Zotero.DB.executeTransaction(async () => {
@@ -1376,9 +1486,16 @@ export async function createGlobalConversation(
       : GLOBAL_CONVERSATION_KEY_BASE;
     await Zotero.DB.queryAsync(
       `INSERT INTO ${GLOBAL_CONVERSATIONS_TABLE}
-        (conversation_key, library_id, created_at, title)
-       VALUES (?, ?, ?, NULL)`,
-      [nextConversationKey, normalizedLibraryID, createdAt],
+        (conversation_key, library_id, scope_type, scope_id, scope_label, created_at, title)
+       VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+      [
+        nextConversationKey,
+        normalizedLibraryID,
+        normalizedScope.scopeType,
+        normalizedScope.scopeId,
+        normalizedScope.scopeLabel || null,
+        createdAt,
+      ],
     );
     return nextConversationKey;
   });
@@ -1388,14 +1505,25 @@ export async function listGlobalConversations(
   libraryID: number,
   limit: number,
   includeEmpty = false,
+  scope?: GlobalConversationScopeFilter | null,
 ): Promise<GlobalConversationSummary[]> {
   const normalizedLibraryID = normalizeLibraryID(libraryID);
   if (!normalizedLibraryID) return [];
   const normalizedLimit = normalizeLimit(limit, 50);
+  const normalizedScope = normalizeGlobalScopeFilter(scope);
+  const scopeClause = normalizedScope
+    ? "AND gc.scope_type = ? AND gc.scope_id = ?"
+    : "";
+  const scopeParams = normalizedScope
+    ? [normalizedScope.scopeType, normalizedScope.scopeId]
+    : [];
 
   const rows = (await Zotero.DB.queryAsync(
     `SELECT gc.conversation_key AS conversationKey,
             gc.library_id AS libraryID,
+            gc.scope_type AS scopeType,
+            gc.scope_id AS scopeId,
+            gc.scope_label AS scopeLabel,
             gc.created_at AS createdAt,
             gc.title AS title,
             COALESCE(MAX(m.timestamp), gc.created_at) AS lastActivityAt,
@@ -1404,11 +1532,12 @@ export async function listGlobalConversations(
      LEFT JOIN ${CHAT_MESSAGES_TABLE} m
        ON m.conversation_key = gc.conversation_key
      WHERE gc.library_id = ?
-     GROUP BY gc.conversation_key, gc.library_id, gc.created_at, gc.title
+       ${scopeClause}
+     GROUP BY gc.conversation_key, gc.library_id, gc.scope_type, gc.scope_id, gc.scope_label, gc.created_at, gc.title
      ${includeEmpty ? "" : "HAVING SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) > 0"}
      ORDER BY lastActivityAt DESC, gc.conversation_key DESC
      LIMIT ?`,
-    [normalizedLibraryID, normalizedLimit],
+    [normalizedLibraryID, ...scopeParams, normalizedLimit],
   )) as GlobalConversationSummaryRow[] | undefined;
 
   if (!rows?.length) return [];
@@ -1481,12 +1610,23 @@ export async function getGlobalConversationUserTurnCount(
 
 export async function getLatestEmptyGlobalConversation(
   libraryID: number,
+  scope?: GlobalConversationScopeFilter | null,
 ): Promise<GlobalConversationSummary | null> {
   const normalizedLibraryID = normalizeLibraryID(libraryID);
   if (!normalizedLibraryID) return null;
+  const normalizedScope = normalizeGlobalScopeFilter(scope);
+  const scopeClause = normalizedScope
+    ? "AND gc.scope_type = ? AND gc.scope_id = ?"
+    : "";
+  const scopeParams = normalizedScope
+    ? [normalizedScope.scopeType, normalizedScope.scopeId]
+    : [];
   const rows = (await Zotero.DB.queryAsync(
     `SELECT gc.conversation_key AS conversationKey,
             gc.library_id AS libraryID,
+            gc.scope_type AS scopeType,
+            gc.scope_id AS scopeId,
+            gc.scope_label AS scopeLabel,
             gc.created_at AS createdAt,
             gc.title AS title,
             gc.created_at AS lastActivityAt,
@@ -1495,11 +1635,12 @@ export async function getLatestEmptyGlobalConversation(
      LEFT JOIN ${CHAT_MESSAGES_TABLE} m
        ON m.conversation_key = gc.conversation_key
      WHERE gc.library_id = ?
-     GROUP BY gc.conversation_key, gc.library_id, gc.created_at, gc.title
+       ${scopeClause}
+     GROUP BY gc.conversation_key, gc.library_id, gc.scope_type, gc.scope_id, gc.scope_label, gc.created_at, gc.title
      HAVING SUM(CASE WHEN m.role = 'user' THEN 1 ELSE 0 END) = 0
      ORDER BY gc.created_at DESC, gc.conversation_key DESC
      LIMIT 1`,
-    [normalizedLibraryID],
+    [normalizedLibraryID, ...scopeParams],
   )) as GlobalConversationSummaryRow[] | undefined;
   if (!rows?.length) return null;
   return toGlobalConversationSummary(rows[0]);
@@ -1513,6 +1654,9 @@ export async function getGlobalConversation(
   const rows = (await Zotero.DB.queryAsync(
     `SELECT gc.conversation_key AS conversationKey,
             gc.library_id AS libraryID,
+            gc.scope_type AS scopeType,
+            gc.scope_id AS scopeId,
+            gc.scope_label AS scopeLabel,
             gc.created_at AS createdAt,
             gc.title AS title,
             COALESCE(MAX(m.timestamp), gc.created_at) AS lastActivityAt,
@@ -1521,7 +1665,7 @@ export async function getGlobalConversation(
      LEFT JOIN ${CHAT_MESSAGES_TABLE} m
        ON m.conversation_key = gc.conversation_key
      WHERE gc.conversation_key = ?
-     GROUP BY gc.conversation_key, gc.library_id, gc.created_at, gc.title
+     GROUP BY gc.conversation_key, gc.library_id, gc.scope_type, gc.scope_id, gc.scope_label, gc.created_at, gc.title
      LIMIT 1`,
     [normalizedKey],
   )) as GlobalConversationSummaryRow[] | undefined;

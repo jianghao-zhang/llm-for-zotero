@@ -59,8 +59,10 @@ import {
   currentRequestId,
   pendingRequestId,
   activeGlobalConversationByLibrary,
+  activeGlobalConversationByScopeKey,
   activeConversationModeByLibrary,
   activePaperConversationByPaper,
+  forcedRuntimeScopeCache,
   draftInputCache,
   activeContextPanels,
   activeContextPanelRawItems,
@@ -227,6 +229,7 @@ import {
   touchPaperConversationTitle,
   touchGlobalConversationTitle,
 } from "../../utils/chatStore";
+import type { GlobalConversationScopeFilter } from "../../utils/chatStore";
 import {
   ATTACHMENT_GC_MIN_AGE_MS,
   clearOwnerAttachmentRefs,
@@ -551,6 +554,42 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const key = getConversationKey(item);
     return selectedRuntimeModeCache.get(key) || "chat";
   };
+  const isClaudeBridgeBackend = (): boolean =>
+    getAgentBackendModePref() === "claude_bridge";
+  const resolveCurrentBridgeScope = (): {
+    scopeType: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
+    scopeId: string;
+    scopeLabel?: string;
+  } => {
+    if (item) {
+      return resolveAgentScopeFromItem(item);
+    }
+    const libraryID = getCurrentLibraryID();
+    return {
+      scopeType: "open",
+      scopeId: String(libraryID || 0),
+      scopeLabel: "Open Chat",
+    };
+  };
+  const isForcedScopeType = (scopeType: string): boolean =>
+    scopeType === "folder" || scopeType === "tag" || scopeType === "tagset";
+  const buildGlobalScopeCacheKey = (
+    scope: Pick<GlobalConversationScopeFilter, "scopeType" | "scopeId">,
+  ): string => `${scope.scopeType}:${scope.scopeId}`;
+  const getForcedClaudeScopeFilter = (): GlobalConversationScopeFilter | null => {
+    if (!item || isNoteSession() || !isGlobalMode()) return null;
+    if (!isClaudeBridgeBackend()) return null;
+    const scope = resolveCurrentBridgeScope();
+    if (!isForcedScopeType(scope.scopeType)) return null;
+    const scopeType = scope.scopeType as "folder" | "tag" | "tagset";
+    return {
+      scopeType,
+      scopeId: scope.scopeId,
+      scopeLabel: scope.scopeLabel,
+    };
+  };
+  const isForcedClaudeScope = (): boolean =>
+    Boolean(getForcedClaudeScopeFilter());
   const resolveConversationRuntimeMode = (
     targetConversationKey: number,
   ): ChatRuntimeMode => {
@@ -669,8 +708,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     // [webchat] Agent mode not available in webchat — hide toggle
     let webChatActive = false;
     try { webChatActive = isWebChatMode(); } catch { /* not ready */ }
+    const currentScope = resolveCurrentBridgeScope();
+    const blockedTagFolderScope =
+      isGlobalMode() &&
+      isForcedScopeType(currentScope.scopeType) &&
+      !isClaudeBridgeBackend();
     // Hide the entire toggle when agent feature is disabled or in webchat mode.
-    const shouldHide = !agentFeatureEnabled || webChatActive;
+    const shouldHide =
+      !agentFeatureEnabled || webChatActive || blockedTagFolderScope;
     liveRuntimeModeBtn.style.display = shouldHide ? "none" : "";
     if (shouldHide) {
       livePanelRoot.dataset.runtimeMode = getCurrentRuntimeMode();
@@ -689,6 +734,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     const enabled = mode === "agent";
     const backendMode = getAgentBackendModePref();
     const isClaudeBridge = backendMode === "claude_bridge";
+    const forcedClaudeScope = isForcedClaudeScope();
     const label = liveRuntimeModeBtn.querySelector(
       ".llm-agent-toggle-label",
     ) as HTMLSpanElement | null;
@@ -699,13 +745,23 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     liveRuntimeModeBtn.classList.toggle("llm-agent-toggle-claude", isClaudeBridge);
     liveRuntimeModeBtn.classList.toggle("llm-agent-toggle-enabled", enabled);
     liveRuntimeModeBtn.dataset.mode = mode;
-    liveRuntimeModeBtn.title = enabled
-      ? t("Agent mode ON. Click to switch to Chat mode")
-      : t("Agent mode OFF. Click to switch to Agent mode");
-    liveRuntimeModeBtn.setAttribute(
-      "aria-label",
-      mode === "agent" ? t("Switch to Chat mode") : t("Switch to Agent mode"),
-    );
+    liveRuntimeModeBtn.dataset.forcedScope = forcedClaudeScope ? "true" : "false";
+    liveRuntimeModeBtn.disabled = forcedClaudeScope;
+    if (forcedClaudeScope) {
+      liveRuntimeModeBtn.title = "Claude Code is required in folder/tag view";
+      liveRuntimeModeBtn.setAttribute(
+        "aria-label",
+        "Claude Code is required in folder/tag view",
+      );
+    } else {
+      liveRuntimeModeBtn.title = enabled
+        ? t("Agent mode ON. Click to switch to Chat mode")
+        : t("Agent mode OFF. Click to switch to Agent mode");
+      liveRuntimeModeBtn.setAttribute(
+        "aria-label",
+        mode === "agent" ? t("Switch to Chat mode") : t("Switch to Agent mode"),
+      );
+    }
     liveRuntimeModeBtn.setAttribute("aria-pressed", enabled ? "true" : "false");
     livePanelRoot.dataset.runtimeMode = mode;
 
@@ -751,7 +807,48 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
   const setCurrentRuntimeMode = (mode: ChatRuntimeMode) => {
     if (!item) return;
     applyConversationRuntimeMode(getConversationKey(item), mode);
+    applyTagFolderBackendGate();
+    enforceForcedClaudeScopeRuntime();
     updateRuntimeModeButton();
+  };
+  const enforceForcedClaudeScopeRuntime = () => {
+    if (!item) return;
+    const currentConversationKey = getConversationKey(item);
+    const forcedScope = getForcedClaudeScopeFilter();
+    if (!forcedScope) {
+      const previousMode = forcedRuntimeScopeCache.get(currentConversationKey);
+      if (previousMode) {
+        applyConversationRuntimeMode(currentConversationKey, previousMode);
+        forcedRuntimeScopeCache.delete(currentConversationKey);
+      }
+      return;
+    }
+    const currentMode = resolveConversationRuntimeMode(currentConversationKey);
+    if (currentMode !== "agent" && !forcedRuntimeScopeCache.has(currentConversationKey)) {
+      forcedRuntimeScopeCache.set(currentConversationKey, currentMode);
+    }
+    if (currentMode !== "agent") {
+      applyConversationRuntimeMode(currentConversationKey, "agent");
+    }
+  };
+  const applyTagFolderBackendGate = () => {
+    const scope = resolveCurrentBridgeScope();
+    const blockedByBackend =
+      isGlobalMode() && isForcedScopeType(scope.scopeType) && !isClaudeBridgeBackend();
+    if (inputSection) {
+      inputSection.style.display = blockedByBackend ? "none" : "";
+    }
+    if (actionsRow) {
+      actionsRow.style.display = blockedByBackend ? "none" : "";
+    }
+    if (blockedByBackend && status) {
+      setStatus(
+        status,
+        "Tag/Folder chat requires Claude Code backend. Enable Claude backend to continue.",
+        "warning",
+      );
+    }
+    return blockedByBackend;
   };
   const resolveCurrentNoteParentItem = (): Zotero.Item | null => {
     const noteSession = resolveCurrentNoteSession();
@@ -829,7 +926,15 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     if (item && libraryID > 0 && mode && !noteSession) {
       activeConversationModeByLibrary.set(libraryID, mode);
       if (mode === "global") {
-        activeGlobalConversationByLibrary.set(libraryID, item.id);
+        const forcedScope = getForcedClaudeScopeFilter();
+        if (forcedScope) {
+          activeGlobalConversationByScopeKey.set(
+            buildGlobalScopeCacheKey(forcedScope),
+            item.id,
+          );
+        } else {
+          activeGlobalConversationByLibrary.set(libraryID, item.id);
+        }
       } else if (
         Number.isFinite(conversationKey) &&
         (conversationKey as number) > 0 &&
@@ -4177,6 +4282,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
 
     if (libraryID) {
+      const scopedGlobalFilter = getForcedClaudeScopeFilter();
+      const scopedGlobalKey = scopedGlobalFilter
+        ? buildGlobalScopeCacheKey(scopedGlobalFilter)
+        : "";
       let historyEntries: Awaited<ReturnType<typeof listGlobalConversations>> =
         [];
       try {
@@ -4184,6 +4293,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           libraryID,
           GLOBAL_HISTORY_LIMIT,
           false,
+          scopedGlobalFilter,
         );
       } catch (err) {
         ztoolkit.log("LLM: Failed to load global history entries", err);
@@ -4224,7 +4334,9 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         activeGlobalKey = Math.floor(item.id);
       } else {
         const remembered = Number(
-          activeGlobalConversationByLibrary.get(libraryID),
+          scopedGlobalFilter
+            ? activeGlobalConversationByScopeKey.get(scopedGlobalKey)
+            : activeGlobalConversationByLibrary.get(libraryID),
         );
         if (Number.isFinite(remembered) && remembered > 0) {
           activeGlobalKey = Math.floor(remembered);
@@ -4565,6 +4677,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     libraryID: number,
     deletedConversationKey: number,
   ): Promise<HistorySwitchTarget> => {
+    const scopedGlobalFilter = getForcedClaudeScopeFilter();
+    const scopedGlobalKey = scopedGlobalFilter
+      ? buildGlobalScopeCacheKey(scopedGlobalFilter)
+      : "";
     let remainingHistorical: Awaited<
       ReturnType<typeof listGlobalConversations>
     > = [];
@@ -4573,6 +4689,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         libraryID,
         GLOBAL_HISTORY_LIMIT,
         false,
+        scopedGlobalFilter,
       );
     } catch (err) {
       ztoolkit.log(
@@ -4618,12 +4735,17 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     };
 
     let candidateDraftKey = Number(
-      activeGlobalConversationByLibrary.get(libraryID),
+      scopedGlobalFilter
+        ? activeGlobalConversationByScopeKey.get(scopedGlobalKey)
+        : activeGlobalConversationByLibrary.get(libraryID),
     );
     if (!(await isEmptyDraft(candidateDraftKey))) {
       candidateDraftKey = 0;
       try {
-        const latestEmpty = await getLatestEmptyGlobalConversation(libraryID);
+        const latestEmpty = await getLatestEmptyGlobalConversation(
+          libraryID,
+          scopedGlobalFilter,
+        );
         const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
         if (await isEmptyDraft(latestEmptyKey)) {
           candidateDraftKey = Math.floor(latestEmptyKey);
@@ -4641,7 +4763,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
 
     let createdDraftKey = 0;
     try {
-      createdDraftKey = await createGlobalConversation(libraryID);
+      createdDraftKey = await createGlobalConversation(
+        libraryID,
+        scopedGlobalFilter,
+      );
     } catch (err) {
       ztoolkit.log("LLM: Failed to create fallback draft conversation", err);
     }
@@ -4679,6 +4804,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       Math.floor(rememberedKey) === conversationKey
     ) {
       activeGlobalConversationByLibrary.delete(pending.libraryID);
+    }
+    for (const [scopeKey, rememberedConversationKey] of activeGlobalConversationByScopeKey) {
+      if (
+        Number.isFinite(rememberedConversationKey) &&
+        Math.floor(rememberedConversationKey) === conversationKey
+      ) {
+        activeGlobalConversationByScopeKey.delete(scopeKey);
+      }
     }
     clearPendingDeletionCaches(conversationKey);
     let hasError = false;
@@ -5118,6 +5251,14 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       await switchToHistoryTarget(fallbackTarget);
       if (fallbackTarget.kind === "paper") {
         activeGlobalConversationByLibrary.delete(libraryID);
+        for (const [scopeKey, rememberedConversationKey] of activeGlobalConversationByScopeKey) {
+          if (
+            Number.isFinite(rememberedConversationKey) &&
+            Math.floor(rememberedConversationKey) === entry.conversationKey
+          ) {
+            activeGlobalConversationByScopeKey.delete(scopeKey);
+          }
+        }
       }
     }
 
@@ -5179,8 +5320,15 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     }
 
     let targetConversationKey = 0;
+    const scopedGlobalFilter = getForcedClaudeScopeFilter();
+    const scopedGlobalKey = scopedGlobalFilter
+      ? buildGlobalScopeCacheKey(scopedGlobalFilter)
+      : "";
     try {
-      targetConversationKey = await createGlobalConversation(libraryID);
+      targetConversationKey = await createGlobalConversation(
+        libraryID,
+        scopedGlobalFilter,
+      );
     } catch (err) {
       ztoolkit.log("LLM: Failed to create new global conversation", err);
     }
@@ -5195,9 +5343,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       action: "create",
       reason: "forced-new",
     });
-    const inheritedRuntimeMode = opts?.forcedRuntimeMode || getCurrentRuntimeMode();
+    const inheritedRuntimeMode: ChatRuntimeMode =
+      opts?.forcedRuntimeMode ||
+      (scopedGlobalFilter ? "agent" : getCurrentRuntimeMode());
     selectedRuntimeModeCache.set(targetConversationKey, inheritedRuntimeMode);
-    activeGlobalConversationByLibrary.set(libraryID, targetConversationKey);
+    if (scopedGlobalFilter) {
+      activeGlobalConversationByScopeKey.set(
+        scopedGlobalKey,
+        targetConversationKey,
+      );
+    } else {
+      activeGlobalConversationByLibrary.set(libraryID, targetConversationKey);
+    }
     await switchGlobalConversation(targetConversationKey, {
       forcedRuntimeMode: inheritedRuntimeMode,
     });
@@ -5442,7 +5599,12 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
         void (async () => {
           const libraryID = getCurrentLibraryID();
           if (!libraryID) return;
-          const remembered = activeGlobalConversationByLibrary.get(libraryID);
+          const scopedGlobalFilter = getForcedClaudeScopeFilter();
+          const remembered = scopedGlobalFilter
+            ? activeGlobalConversationByScopeKey.get(
+                buildGlobalScopeCacheKey(scopedGlobalFilter),
+              )
+            : activeGlobalConversationByLibrary.get(libraryID);
           const rememberedKey =
             remembered && Number.isFinite(Number(remembered))
               ? Math.floor(Number(remembered))
@@ -5920,17 +6082,7 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     scopeType: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
     scopeId: string;
     scopeLabel?: string;
-  } => {
-    if (item) {
-      return resolveAgentScopeFromItem(item);
-    }
-    const libraryID = getCurrentLibraryID();
-    return {
-      scopeType: "open",
-      scopeId: String(libraryID || 0),
-      scopeLabel: "Open Chat",
-    };
-  };
+  } => resolveCurrentBridgeScope();
 
   const revealDirectory = (path: string): boolean => {
     const normalized = (path || "").trim();
@@ -10748,6 +10900,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     fromQueue?: boolean;
     queuedText?: string;
   }) => {
+    if (applyTagFolderBackendGate()) {
+      return;
+    }
+    if (item && isForcedClaudeScope() && getCurrentRuntimeMode() !== "agent") {
+      applyConversationRuntimeMode(getConversationKey(item), "agent");
+      updateRuntimeModeButton();
+    }
     if (
       item &&
       isClaudeRuntimeDisabledForConversation(getConversationKey(item))
@@ -11056,6 +11215,18 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
       e.preventDefault();
       e.stopPropagation();
       if (!item) return;
+      if (isForcedClaudeScope()) {
+        applyConversationRuntimeMode(getConversationKey(item), "agent");
+        updateRuntimeModeButton();
+        if (status) {
+          setStatus(
+            status,
+            "Claude Code is required in folder/tag view.",
+            "warning",
+          );
+        }
+        return;
+      }
       const previousConversationKey = getConversationKey(item);
       const wasAgentScoped = isConversationAgentScoped(previousConversationKey);
       const nextMode: ChatRuntimeMode =

@@ -118,10 +118,12 @@ export const paperContentSourceOverrides = new Map<string, PaperContentSourceMod
 // Stores the contextItemId of the currently expanded (sticky) paper chip, or false/undefined if none
 export const selectedPaperPreviewExpandedCache = new Map<number, number | false>();
 export const activeGlobalConversationByLibrary = new Map<number, number>();
+export const activeGlobalConversationByScopeKey = new Map<string, number>();
 export const activeConversationModeByLibrary = new Map<
   number,
   "paper" | "global"
 >();
+export const forcedRuntimeScopeCache = new Map<number, ChatRuntimeMode>();
 // Draft text per conversation — capped to prevent unbounded growth (24h TTL, max 100).
 export const draftInputCache = new TTLMap<number, string>(24 * 60 * 60 * 1000, 100);
 export const selectedTextCache = new Map<number, SelectedTextContext[]>();
@@ -222,7 +224,9 @@ export function clearAllState(): void {
   paperContentSourceOverrides.clear();
   selectedPaperPreviewExpandedCache.clear();
   activeGlobalConversationByLibrary.clear();
+  activeGlobalConversationByScopeKey.clear();
   activeConversationModeByLibrary.clear();
+  forcedRuntimeScopeCache.clear();
   draftInputCache.clear();
   selectedTextCache.clear();
   selectedTextPreviewExpandedCache.clear();

@@ -88,6 +88,9 @@ export type ActiveNoteContext = {
 export type GlobalConversationSummary = {
   conversationKey: number;
   libraryID: number;
+  scopeType?: "open" | "folder" | "tag" | "tagset" | "custom";
+  scopeId?: string;
+  scopeLabel?: string;
   createdAt: number;
   title?: string;
   lastActivityAt: number;
