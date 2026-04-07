@@ -260,7 +260,10 @@ import {
   type PaperSearchSlashToken,
 } from "./paperSearch";
 import { getAgentApi } from "../../agent/index";
-import { fetchExternalBridgeSessionInfo } from "../../agent/externalBackendBridge";
+import {
+  fetchExternalBridgeSessionInfo,
+  getBridgeQuickFixHint,
+} from "../../agent/externalBackendBridge";
 import { renderPendingActionCard } from "./agentTrace/render";
 import type {
   AgentPendingAction,
@@ -5916,6 +5919,10 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     return "http://127.0.0.1:19787";
   };
 
+  const getBridgeRecoveryStatus = (prefix: string): string => {
+    return `${prefix}. ${getBridgeQuickFixHint(getBridgeBaseUrl())}`;
+  };
+
   const buildCurrentBridgeScope = (): {
     scopeType: "paper" | "open" | "folder" | "tag" | "tagset" | "custom";
     scopeId: string;
@@ -7945,11 +7952,11 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
     withScrollGuard(chatBox, conversationKey, () => {
       // [webchat] Hide reasoning dropdown — users control thinking mode on chatgpt.com
       if (isWebChatMode()) {
-        reasoningBtn.style.display = "none";
+        liveReasoningBtn.style.display = "none";
         applyResponsiveActionButtonsLayout();
         return;
       }
-      reasoningBtn.style.display = "";
+      liveReasoningBtn.style.display = "";
 
       const { provider, currentModel, options, enabledLevels, selectedLevel } =
         getReasoningState();
@@ -12224,7 +12231,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           const session = await fetchCurrentSessionInfo();
           const cwd = typeof session?.cwd === "string" ? session.cwd.trim() : "";
           if (!cwd) {
-            if (status) setStatus(status, "Current session folder unavailable", "ready");
+            if (status) {
+              setStatus(
+                status,
+                getBridgeRecoveryStatus("Current session folder unavailable"),
+                "ready",
+              );
+            }
             return;
           }
           await ensureDirectoryExists(cwd);
@@ -12244,7 +12257,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           }
         } catch (error) {
           ztoolkit.log("LLM: Failed to open current session folder", error);
-          if (status) setStatus(status, "Failed to open session folder", "ready");
+          if (status) {
+            setStatus(
+              status,
+              getBridgeRecoveryStatus("Failed to open session folder"),
+              "ready",
+            );
+          }
         }
       })();
     });
@@ -12260,7 +12279,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           const session = await fetchCurrentSessionInfo();
           const cwd = typeof session?.cwd === "string" ? session.cwd.trim() : "";
           if (!cwd) {
-            if (status) setStatus(status, "Current session folder unavailable", "ready");
+            if (status) {
+              setStatus(
+                status,
+                getBridgeRecoveryStatus("Current session folder unavailable"),
+                "ready",
+              );
+            }
             return;
           }
           await ensureDirectoryExists(cwd);
@@ -12291,7 +12316,13 @@ export function setupHandlers(body: Element, initialItem?: Zotero.Item | null) {
           }
         } catch (error) {
           ztoolkit.log("LLM: Failed to open terminal at current session folder", error);
-          if (status) setStatus(status, "Failed to open terminal", "ready");
+          if (status) {
+            setStatus(
+              status,
+              getBridgeRecoveryStatus("Failed to open terminal"),
+              "ready",
+            );
+          }
         }
       })();
     });

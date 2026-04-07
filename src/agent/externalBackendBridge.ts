@@ -106,6 +106,13 @@ type ExternalToolDescriptor = {
   source: ToolSource;
 };
 
+type ExternalSlashCommandDescriptor = {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  source: "sdk" | "fallback";
+};
+
 const EXTERNAL_ACTION_PREFIX = "cc_tool::";
 
 type ContextEnvelope = {
@@ -257,6 +264,36 @@ function buildScopedConversationKey(
     return String(conversationKey);
   }
   return `${conversationKey}::${scope.scopeType}:${scope.scopeId}`;
+}
+
+function getBridgeHealthUrl(baseUrl?: string): string {
+  const normalized = normalizeBaseUrl(baseUrl || "");
+  return `${normalized || "http://127.0.0.1:19787"}/healthz`;
+}
+
+export function getBridgeQuickFixHint(baseUrl?: string): string {
+  const healthUrl = getBridgeHealthUrl(baseUrl);
+  return `Bridge not running. Try: launchctl stop com.toha.ccbridge && launchctl start com.toha.ccbridge ; curl -fsS ${healthUrl}`;
+}
+
+function formatBridgeUserError(
+  error: unknown,
+  baseUrl: string,
+  context: string,
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const hint = getBridgeQuickFixHint(baseUrl);
+  if (/Bridge HTTP \d+/i.test(message)) {
+    return `${context}: ${message}. Check Bridge URL and health endpoint. ${hint}`;
+  }
+  if (
+    /(fetch failed|Failed to fetch|NetworkError|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|aborted)/i.test(
+      message,
+    )
+  ) {
+    return `${context}: ${hint}`;
+  }
+  return `${context}: ${message}. ${hint}`;
 }
 
 function getLastRunBridgeContext(conversationKey: number): LastRunBridgeContext | undefined {
@@ -1065,34 +1102,40 @@ async function fetchExternalTools(baseUrl: string): Promise<ExternalToolDescript
 }
 
 async function fetchExternalCommands(baseUrl: string): Promise<ExternalSlashCommandDescriptor[]> {
-  const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/commands?settingSources=${sources}`, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new Error(`Bridge HTTP ${response.status}`);
-  }
-  const json = await response.json() as { commands?: unknown[] };
-  const rawCommands = Array.isArray(json.commands) ? json.commands : [];
-  const commands: ExternalSlashCommandDescriptor[] = [];
-  for (const raw of rawCommands) {
-    if (!raw || typeof raw !== "object") continue;
-    const command = raw as Record<string, unknown>;
-    const name = typeof command.name === "string" ? command.name.trim().replace(/^\/+/, "") : "";
-    if (!name) continue;
-    commands.push({
-      name,
-      description:
-        typeof command.description === "string" && command.description.trim()
-          ? command.description.trim()
-          : `Claude Code slash command: /${name}`,
-      argumentHint:
-        typeof command.argumentHint === "string" ? command.argumentHint.trim() : "",
-      source: command.source === "fallback" ? "fallback" : "sdk",
+  try {
+    const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
+    const response = await fetch(`${normalizeBaseUrl(baseUrl)}/commands?settingSources=${sources}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
     });
+    if (!response.ok) {
+      throw new Error(`Bridge HTTP ${response.status}`);
+    }
+    const json = await response.json() as { commands?: unknown[] };
+    const rawCommands = Array.isArray(json.commands) ? json.commands : [];
+    const commands: ExternalSlashCommandDescriptor[] = [];
+    for (const raw of rawCommands) {
+      if (!raw || typeof raw !== "object") continue;
+      const command = raw as Record<string, unknown>;
+      const name = typeof command.name === "string" ? command.name.trim().replace(/^\/+/, "") : "";
+      if (!name) continue;
+      commands.push({
+        name,
+        description:
+          typeof command.description === "string" && command.description.trim()
+            ? command.description.trim()
+            : `Claude Code slash command: /${name}`,
+        argumentHint:
+          typeof command.argumentHint === "string" ? command.argumentHint.trim() : "",
+        source: command.source === "fallback" ? "fallback" : "sdk",
+      });
+    }
+    return commands;
+  } catch (error) {
+    throw new Error(
+      formatBridgeUserError(error, baseUrl, "Failed to load Claude commands"),
+    );
   }
-  return commands;
 }
 
 export async function fetchExternalBridgeSessionInfo(params: {
@@ -1168,30 +1211,36 @@ export async function fetchExternalBridgeSessionInfo(params: {
     if (candidate.scopeId) qs.set("scopeId", candidate.scopeId);
     if (candidate.scopeLabel) qs.set("scopeLabel", candidate.scopeLabel);
     const url = `${baseUrl}/session-info?${qs.toString()}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error(`Bridge HTTP ${response.status}`);
-    }
-    const json = (await response.json()) as {
-      session?: ExternalBridgeSessionInfo | null;
-    };
-    const session = json?.session || null;
-    if (debugEnabled) {
-      dbg("session-info query", {
-        source: candidate.source,
-        conversationKey,
-        queryScopeType: candidate.scopeType,
-        queryScopeId: candidate.scopeId,
-        queryScopeLabel: candidate.scopeLabel,
-        queryScopedConversationKey: buildScopedConversationKey(conversationKey, candidate),
-        responseScopedConversationKey: session?.scopedConversationKey || null,
-        responseProviderSessionId: session?.providerSessionId || null,
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
       });
+      if (!response.ok) {
+        throw new Error(`Bridge HTTP ${response.status}`);
+      }
+      const json = (await response.json()) as {
+        session?: ExternalBridgeSessionInfo | null;
+      };
+      const session = json?.session || null;
+      if (debugEnabled) {
+        dbg("session-info query", {
+          source: candidate.source,
+          conversationKey,
+          queryScopeType: candidate.scopeType,
+          queryScopeId: candidate.scopeId,
+          queryScopeLabel: candidate.scopeLabel,
+          queryScopedConversationKey: buildScopedConversationKey(conversationKey, candidate),
+          responseScopedConversationKey: session?.scopedConversationKey || null,
+          responseProviderSessionId: session?.providerSessionId || null,
+        });
+      }
+      return session;
+    } catch (error) {
+      throw new Error(
+        formatBridgeUserError(error, baseUrl, "Failed to fetch session info"),
+      );
     }
-    return session;
   };
 
   let firstSession: ExternalBridgeSessionInfo | null = null;
@@ -1368,7 +1417,17 @@ export function createExternalBackendBridgeRuntime(options: {
         dbg("refreshSlashCommands: fetched successfully", { count: cachedSlashCommands.length });
       } catch (error) {
         dbgError("refreshSlashCommands failed", error);
-        ztoolkit.log("LLM Agent: Failed to refresh slash commands", error);
+        const message = formatBridgeUserError(
+          error,
+          bridgeUrl,
+          "Failed to refresh slash commands",
+        );
+        ztoolkit.log(
+          "LLM Agent: Failed to refresh slash commands",
+          message,
+          error,
+        );
+        throw new Error(message);
       } finally {
         slashCommandsRefreshInFlight = null;
       }
@@ -1655,13 +1714,20 @@ export function createExternalBackendBridgeRuntime(options: {
             error instanceof Error ? error.message : String(error),
           );
         }
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatBridgeUserError(
+          error,
+          bridgeUrl,
+          "External agent backend unavailable",
+        );
         if (typeof ztoolkit !== "undefined" && typeof ztoolkit.log === "function") {
-          ztoolkit.log("LLM Agent: External bridge unavailable, fallback to local runtime", message);
+          ztoolkit.log(
+            "LLM Agent: External bridge unavailable, fallback to local runtime",
+            message,
+          );
         }
         await params.onEvent?.({
           type: "status",
-          text: "External agent backend unavailable; fell back to local runtime",
+          text: `${message} Fell back to local runtime.`,
         });
         return coreRuntime.runTurn(params);
       }
