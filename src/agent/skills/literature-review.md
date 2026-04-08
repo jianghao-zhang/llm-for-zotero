@@ -32,6 +32,8 @@ Deep-read only the **3-5 most relevant papers** to the review topic:
 
 Prioritize breadth over depth — it is better to include 15 papers with abstract-level understanding than 5 papers with full-text reads.
 
+When deep-reading papers with MinerU cache, note any key figures (result plots, comparison tables, architecture diagrams). Consider including select figures in the final review when they illustrate important findings that are hard to convey with text alone.
+
 ### Phase 3 — Synthesis and Writing
 
 Write the review directly in the chat response. Use this structure:
@@ -56,6 +58,8 @@ Write the review directly in the chat response. Use this structure:
 5. **References**
    - List all cited papers in alphabetical order
    - Format: `Author(s). (Year). Title. *Journal*, Volume(Issue), Pages.`
+
+If key figures from deep-read papers would strengthen a thematic point, embed them: `![Figure caption](file:///{mineruCacheDir}/images/filename.png)`. Place figures within the thematic sections they relate to, not in a separate section.
 
 ### Citation rules
 - Every factual claim must have an inline citation.

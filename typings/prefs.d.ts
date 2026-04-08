@@ -29,6 +29,7 @@ declare namespace _ZoteroTypes {
       "enableAgentMode": boolean;
       "obsidianVaultPath": string;
       "obsidianTargetFolder": string;
+      "obsidianAttachmentsFolder": string;
       "obsidianNoteTemplate": string;
       "locale": string;
     };

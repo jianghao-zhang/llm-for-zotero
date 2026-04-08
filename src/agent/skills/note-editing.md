@@ -23,3 +23,10 @@ match: /\b(create|make|new)\b.*\bnote\b/i
 ### Key rules
 - NEVER output note text in chat. Always use `edit_current_note`.
 - Always pass plain text or Markdown, never raw HTML.
+
+### Figures from MinerU cache
+When MinerU cache is available (`mineruCacheDir` in paper context), extracted figures can be embedded in notes:
+- For Zotero notes: use `![Caption](file:///{mineruCacheDir}/images/filename.png)`. The `edit_current_note` tool auto-imports `file://` images as Zotero attachments.
+- Include figures when they support the note content — results plots, architecture diagrams, key tables.
+- Place figures inline near the relevant discussion, not clustered at the end.
+- Use judgement: not every note needs figures. Include them when they aid understanding.

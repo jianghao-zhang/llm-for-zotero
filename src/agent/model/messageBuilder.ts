@@ -12,6 +12,7 @@ import {
   isObsidianConfigured,
   getObsidianVaultPath,
   getObsidianTargetFolder,
+  getObsidianAttachmentsFolder,
   getObsidianNoteTemplate,
   getDefaultObsidianNoteTemplate,
 } from "../../utils/obsidianConfig";
@@ -236,13 +237,15 @@ function buildObsidianConfigSection(): string {
   if (!isObsidianConfigured()) return "";
   const vaultPath = getObsidianVaultPath();
   const targetFolder = getObsidianTargetFolder();
+  const attachmentsFolder = getObsidianAttachmentsFolder();
   const template =
     getObsidianNoteTemplate() || getDefaultObsidianNoteTemplate();
   return [
     "Obsidian configuration (user-configured):",
     `- Vault path: ${vaultPath}`,
-    `- Target folder: ${targetFolder}`,
-    `- Full target path: ${vaultPath}/${targetFolder}`,
+    `- Default folder: ${targetFolder}`,
+    `- Default target path: ${vaultPath}/${targetFolder}`,
+    `- Attachments folder: ${attachmentsFolder} (subfolder for copied figures and images)`,
     "- Note template:",
     "```",
     template,

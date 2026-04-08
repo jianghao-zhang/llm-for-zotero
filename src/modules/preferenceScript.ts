@@ -52,6 +52,8 @@ import {
   setObsidianVaultPath,
   getObsidianTargetFolder,
   setObsidianTargetFolder,
+  getObsidianAttachmentsFolder,
+  setObsidianAttachmentsFolder,
   getObsidianNoteTemplate,
   setObsidianNoteTemplate,
   getDefaultObsidianNoteTemplate,
@@ -1599,6 +1601,15 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       obsTargetFolderInput.value = getObsidianTargetFolder();
       obsTargetFolderInput.addEventListener("input", () => {
         setObsidianTargetFolder(obsTargetFolderInput.value);
+      });
+    }
+    const obsAttachmentsFolderInput = doc.querySelector(
+      `#${config.addonRef}-obsidian-attachments-folder`,
+    ) as HTMLInputElement | null;
+    if (obsAttachmentsFolderInput) {
+      obsAttachmentsFolderInput.value = getObsidianAttachmentsFolder();
+      obsAttachmentsFolderInput.addEventListener("input", () => {
+        setObsidianAttachmentsFolder(obsAttachmentsFolderInput.value);
       });
     }
     if (obsTemplateInput) {

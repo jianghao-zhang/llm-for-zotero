@@ -653,33 +653,18 @@ export function openStandaloneChat(options?: {
       historyPopup.appendChild(loadingEl);
 
       try {
-        const [{ relaySetCommand, relayGetStateSnapshot: getPopupSnapshot }, { fetchChatHistory }] = await Promise.all([
+        const [{ relaySetCommand }, { fetchChatHistory }] = await Promise.all([
           import("../../webchat/relayServer"),
           import("../../webchat/client"),
         ]);
 
-        // Tell the extension to scrape history
         relaySetCommand({ type: "SCRAPE_HISTORY" });
 
-        // Resolve active webchat target for filtering — use relay's active_target directly
-        const { getWebChatTarget: getPopupTarget } = await import("../../webchat/types");
-        const popupActiveTargetId = getPopupSnapshot().active_target;
-        const popupTargetEntry = popupActiveTargetId ? getPopupTarget(popupActiveTargetId) : null;
-        const popupTargetHostname = popupTargetEntry?.modelName || null;
-
-        // Poll for results
         let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
         for (let i = 0; i < 10; i++) {
           if (cancelled || !isInWebChatMode) return;
           try {
-            let allSessions = await fetchChatHistory("");
-            if (popupTargetHostname) {
-              allSessions = allSessions.filter((s) => {
-                try { return s.chatUrl ? new URL(s.chatUrl).hostname === popupTargetHostname : false; }
-                catch { return false; }
-              });
-            }
-            sessions = allSessions;
+            sessions = await fetchChatHistory("");
           } catch { /* relay not reachable */ }
           if (sessions.length > 0) break;
           await new Promise((r) => setTimeout(r, 1000));
@@ -794,33 +779,18 @@ export function openStandaloneChat(options?: {
       sidebarList.appendChild(loadingEl);
 
       try {
-        const [{ relaySetCommand, relayGetStateSnapshot }, { fetchChatHistory }] = await Promise.all([
+        const [{ relaySetCommand }, { fetchChatHistory }] = await Promise.all([
           import("../../webchat/relayServer"),
           import("../../webchat/client"),
         ]);
 
         relaySetCommand({ type: "SCRAPE_HISTORY" });
 
-        // Resolve active webchat target for filtering — use relay's active_target
-        // directly instead of going through model entry lookups.
-        const { getWebChatTarget } = await import("../../webchat/types");
-        const activeTargetId = relayGetStateSnapshot().active_target;
-        const sidebarTargetEntry = activeTargetId ? getWebChatTarget(activeTargetId) : null;
-        const sidebarTargetHostname = sidebarTargetEntry?.modelName || null;
-
         let sessions: Array<{ id: string; title: string; chatUrl: string | null }> = [];
         for (let i = 0; i < 10; i++) {
           if (cancelled || !isInWebChatMode || mySeq !== webChatSidebarRenderSeq) return;
           try {
-            let allSessions = await fetchChatHistory("");
-            // Filter to only show conversations from the active target site
-            if (sidebarTargetHostname) {
-              allSessions = allSessions.filter((s) => {
-                try { return s.chatUrl ? new URL(s.chatUrl).hostname === sidebarTargetHostname : false; }
-                catch { return false; }
-              });
-            }
-            sessions = allSessions;
+            sessions = await fetchChatHistory("");
           } catch { /* relay not reachable */ }
           if (sessions.length > 0) break;
           await new Promise((r) => setTimeout(r, 1000));
@@ -1324,11 +1294,11 @@ export function openStandaloneChat(options?: {
     // Icon strip handlers — new chat
     iconNewChat.addEventListener("click", async () => {
       try {
-        // [webchat] In webchat mode, delegate to embedded panel's "+" button
+        // [webchat] In webchat mode, delegate to embedded panel's "+" button.
+        // Don't clear sidebar — webchat history stays (conversations live on the web).
         if (isInWebChatMode) {
           const embeddedNewBtn = contentArea.querySelector("#llm-history-new") as HTMLElement | null;
           if (embeddedNewBtn) embeddedNewBtn.click();
-          clearSidebarList();
           return;
         }
 
@@ -1378,7 +1348,8 @@ export function openStandaloneChat(options?: {
       historyPopup.style.position = "fixed";
       historyPopup.style.left = `${Math.round(stripRect.right + 4)}px`;
       historyPopup.style.top = `${Math.round(stripRect.top)}px`;
-      historyPopup.style.maxHeight = `${Math.max(200, Math.round(stripRect.height - 20))}px`;
+      historyPopup.style.maxHeight = `${Math.min(400, Math.max(200, Math.round(stripRect.height - 20)))}px`;
+      historyPopup.style.overflowY = "auto";
       historyPopup.style.display = "flex";
       // [webchat] Render web history instead of local history
       if (isInWebChatMode) {

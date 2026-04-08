@@ -20,5 +20,6 @@ pref("maxTokensQuaternary", "4096");
 pref("enableAgentMode", false);
 pref("obsidianVaultPath", "");
 pref("obsidianTargetFolder", "Zotero Notes");
+pref("obsidianAttachmentsFolder", "assets");
 pref("obsidianNoteTemplate", "");
 pref("locale", "auto");

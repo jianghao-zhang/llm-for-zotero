@@ -246,16 +246,18 @@ const zhCN: Record<string, string> = {
   "✓ Connection successful": "✓ 连接成功",
   // Obsidian integration
   "Obsidian Integration": "Obsidian 集成",
-  "Write notes from your Zotero papers directly to your Obsidian vault. Configure the vault path and target folder below.":
-    "将 Zotero 论文笔记直接写入 Obsidian 知识库。在下方配置知识库路径和目标文件夹。",
+  "Write notes from your Zotero papers directly to your Obsidian vault. Configure the vault path and default folder below.":
+    "将 Zotero 论文笔记直接写入 Obsidian 知识库。在下方配置知识库路径和默认文件夹。",
   "Vault Path": "知识库路径",
   "Absolute path to your Obsidian vault folder": "Obsidian 知识库文件夹的绝对路径",
-  "Target Folder": "目标文件夹",
-  "Subfolder within the vault for Zotero notes": "知识库内用于存放 Zotero 笔记的子文件夹",
+  "Default Folder": "默认文件夹",
+  "Default subfolder for notes (the agent can write to any folder if you specify)": "笔记的默认子文件夹（你可以指定其他文件夹，Agent 会写入你指定的位置）",
   "Note Template": "笔记模板",
   "Customize the template used when writing notes to Obsidian. Use {{title}}, {{date}}, {{content}} as placeholders.":
     "自定义写入 Obsidian 时使用的笔记模板。使用 {{title}}、{{date}}、{{content}} 作为占位符。",
   "Reset to Default": "恢复默认",
+  "Attachments Folder": "附件文件夹",
+  "Subfolder for copied figures and images (e.g., assets, attachments)": "用于存放复制的图片和附件的子文件夹（如 assets、attachments）",
   "Test Write Access": "测试写入权限",
   "Write access verified": "✓ 写入权限已验证",
   "Enter a vault path first": "请先输入知识库路径",

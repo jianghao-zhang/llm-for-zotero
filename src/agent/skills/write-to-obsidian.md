@@ -12,7 +12,8 @@ When the user asks to write, save, or export content to Obsidian, follow this wo
 This skill is content-agnostic — it works for any note type: single paper summary, literature review, multi-paper comparison, research notes, or free-form writing.
 
 ### Prerequisites
-- The user's Obsidian vault path and target folder are provided in the system prompt under "Obsidian configuration". If missing, tell the user to configure Obsidian in the plugin preferences (Settings > Agent tab).
+- The user's Obsidian vault path and default folder are provided in the system prompt under "Obsidian configuration". If missing, tell the user to configure Obsidian in the plugin preferences (Settings > Agent tab).
+- The default folder is used when the user doesn't specify a folder. If the user specifies a different folder, write there instead.
 
 ### Recipe
 
@@ -35,12 +36,15 @@ This skill is content-agnostic — it works for any note type: single paper summ
 - Add extra YAML frontmatter fields as appropriate for the content type (e.g., `authors`, `doi`, `journal` for paper notes; nothing extra for free-form).
 - Use standard Markdown formatting compatible with Obsidian.
 
-**Step 4 — Copy figures (if MinerU cache has images and content uses them):**
-- Use `run_command` to copy image files from `{mineruCacheDir}/images/` to `{obsidianTargetPath}/assets/` or a subfolder.
-- Reference copied images in the note using relative paths: `![Figure 1](assets/fig1.png)`.
+**Step 4 — Include figures (when appropriate and MinerU cache is available):**
+- The MinerU cache contains extracted figures in `{mineruCacheDir}/images/`.
+- When figures would add value to the note (e.g., result plots, diagrams, key tables), copy and include them.
+- Use `run_command` to copy needed image files from `{mineruCacheDir}/images/` to `{vaultPath}/{folder}/{attachmentsFolder}/{sanitized-title}/` (attachments folder from Obsidian config).
+- Reference copied images with relative paths: `![Figure caption]({attachmentsFolder}/{sanitized-title}/fig1.png)`.
+- Use judgement: a detailed paper analysis benefits from figures; a quick free-form note may not.
 
 **Step 5 — Write the note file:**
-- Construct the file path: `{vaultPath}/{targetFolder}/{sanitized-title}.md`.
+- Construct the file path: `{vaultPath}/{folder}/{sanitized-title}.md` (use user-specified folder, or the default folder from config).
 - Sanitize the title for filesystem use: replace special characters with hyphens, limit to 80 chars.
 - Call `file_io(write, filePath, noteContent)`.
 
