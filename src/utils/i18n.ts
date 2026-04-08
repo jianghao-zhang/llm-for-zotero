@@ -20,7 +20,7 @@ const zhCN: Record<string, string> = {
   "Limitations": "局限性",
 
   // ── Chat panel UI ───────────────────────────────────────────────────────
-  "LLM Assistant": "LLM 助手",
+  "LLM-for-Zotero": "LLM-for-Zotero",
   "Start a new chat": "开始新对话",
   "Conversation history": "对话历史",
   "Note editing": "笔记编辑",
