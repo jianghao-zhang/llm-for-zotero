@@ -311,7 +311,7 @@ function joinPath(...parts: string[]): string {
         ? part.replace(/[\\/]+$/, "")
         : part.replace(/^[\\/]+|[\\/]+$/g, ""),
     )
-    .join("/");
+    .join(parts[0]?.includes("\\") ? "\\" : "/");
 }
 
 function resolveCodexAuthPath(): string {
@@ -1876,7 +1876,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
         }
         const targetFolder = (obsTargetFolderInput?.value || "").trim();
         const fullPath = targetFolder
-          ? `${vaultPath}/${targetFolder}`
+          ? joinPath(vaultPath, targetFolder)
           : vaultPath;
 
         obsTestBtn.disabled = true;
@@ -1893,7 +1893,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           if (!exists) {
             throw new Error(`Directory not found: ${fullPath}`);
           }
-          const testFile = `${fullPath}/.llm-for-zotero-test`;
+          const testFile = joinPath(fullPath, ".llm-for-zotero-test");
           const bytes = new TextEncoder().encode("test");
           await IOUtils.write(testFile, bytes);
           await IOUtils.remove(testFile);

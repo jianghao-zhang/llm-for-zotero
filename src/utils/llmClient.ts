@@ -464,7 +464,7 @@ function joinPath(...parts: string[]): string {
         : part.replace(/^[\\/]+|[\\/]+$/g, ""),
     )
     .filter((part) => Boolean(part));
-  return normalized.join("/");
+  return normalized.join(parts[0]?.includes("\\") ? "\\" : "/");
 }
 
 function resolveHomeDir(): string {

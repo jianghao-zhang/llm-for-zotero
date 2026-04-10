@@ -135,7 +135,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
           const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
           const action = String(a.action || "access");
           const filePath = typeof a.filePath === "string" ? a.filePath : "";
-          const fileName = filePath.split("/").pop() || "file";
+          const fileName = filePath.split(/[\\/]/).pop() || "file";
 
           if (action === "read") {
             if (fileName === "manifest.json" && filePath.includes("llm-for-zotero-mineru")) {
@@ -164,7 +164,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
           }
           if (r.imageFile) return "Figure loaded";
           const filePath = typeof r.filePath === "string" ? r.filePath : "";
-          const fileName = filePath.split("/").pop() || "";
+          const fileName = filePath.split(/[\\/]/).pop() || "";
           if (fileName === "manifest.json" && filePath.includes("llm-for-zotero-mineru")) {
             return "Paper structure loaded";
           }
@@ -213,7 +213,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
     },
 
     createPendingAction(input) {
-      const fileName = input.filePath.split("/").pop() || input.filePath;
+      const fileName = input.filePath.split(/[\\/]/).pop() || input.filePath;
       const approvalField = {
         type: "select" as const,
         id: "approvalMode",

@@ -49,7 +49,7 @@ function joinPath(...parts: string[]): string {
         ? part.replace(/[\\/]+$/, "")
         : part.replace(/^[\\/]+|[\\/]+$/g, ""),
     )
-    .join("/");
+    .join(parts[0]?.includes("\\") ? "\\" : "/");
 }
 
 function getBaseDir(): string {

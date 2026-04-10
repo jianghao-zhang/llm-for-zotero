@@ -1377,7 +1377,7 @@ export function openStandaloneChat(options?: {
 
       // Skill file items
       for (const fullPath of files) {
-        const filename = fullPath.split("/").pop() || fullPath.split("\\").pop() || fullPath;
+        const filename = fullPath.split(/[\\/]/).pop() || fullPath;
         const item = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
         item.className = "llm-standalone-skill-item";
         item.type = "button";

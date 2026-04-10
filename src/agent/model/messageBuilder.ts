@@ -240,11 +240,12 @@ function buildObsidianConfigSection(): string {
   const attachmentsFolder = getObsidianAttachmentsFolder();
   const template =
     getObsidianNoteTemplate() || getDefaultObsidianNoteTemplate();
+  const sep = vaultPath.includes("\\") ? "\\" : "/";
   return [
     "Obsidian configuration (user-configured):",
     `- Vault path: ${vaultPath}`,
     `- Default folder: ${targetFolder}`,
-    `- Default target path: ${vaultPath}/${targetFolder}`,
+    `- Default target path: ${vaultPath}${sep}${targetFolder}`,
     `- Attachments folder: ${attachmentsFolder} (subfolder for copied figures and images)`,
     "- Note template:",
     "```",

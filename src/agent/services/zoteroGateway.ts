@@ -2649,7 +2649,7 @@ export class ZoteroGateway {
         const title = String(
           attachmentItem.getField?.("title") ||
           (attachmentItem as any).attachmentFilename ||
-          filePath.split("/").pop() || filePath,
+          filePath.split(/[\\/]/).pop() || filePath,
         );
 
         // If there's a parent item (Zotero auto-created from metadata retrieval),
