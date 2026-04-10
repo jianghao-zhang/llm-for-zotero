@@ -5,6 +5,7 @@
 import type { AgentToolDefinition } from "../../types";
 import { ok, fail, validateObject } from "../shared";
 import { isCommandAutoApproved, setCommandAutoApproved } from "./runCommand";
+import { getLocalParentPath } from "../../../utils/localPath";
 
 type FileIOInput = {
   action: "read" | "write";
@@ -51,7 +52,7 @@ async function writeFile(
   const bytes = new TextEncoder().encode(content);
 
   // Ensure parent directory exists
-  const parent = filePath.replace(/[/\\][^/\\]+$/, "");
+  const parent = getLocalParentPath(filePath);
   if (parent && parent !== filePath) {
     const IOUtils = (globalThis as any).IOUtils;
     if (IOUtils?.makeDirectory) {

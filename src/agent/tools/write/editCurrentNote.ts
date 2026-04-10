@@ -3,7 +3,7 @@ import { LibraryMutationService } from "../../services/libraryMutationService";
 import { pushUndoEntry } from "../../store/undoStore";
 import type { AgentToolDefinition } from "../../types";
 import { normalizeNoteSourceText } from "../../../modules/contextPanel/notes";
-import { fileUrlToPath } from "../../../utils/pathFileUrl";
+import { fileUrlToPath } from "../../../utils/localPath";
 import { ok, fail, validateObject, normalizePositiveInt } from "../shared";
 import { executeAndRecordUndo } from "./mutateLibraryShared";
 

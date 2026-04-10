@@ -39,12 +39,12 @@ This skill is content-agnostic — it works for any note type: single paper summ
 **Step 4 — Include figures (when appropriate and MinerU cache is available):**
 - The MinerU cache contains extracted figures in `{mineruCacheDir}/images/`.
 - When figures would add value to the note (e.g., result plots, diagrams, key tables), copy and include them.
-- Use `run_command` to copy needed image files from `{mineruCacheDir}/images/` to `{vaultPath}/{folder}/{attachmentsFolder}/{sanitized-title}/` (use the path separator matching the vault path — `\` on Windows, `/` on macOS/Linux).
+- Use `run_command` to copy needed image files from `{mineruCacheDir}/images/` to `{vaultPath}/{folder}/{attachmentsFolder}/{sanitized-title}/` (use the native path separator from the runtime platform section in the system prompt).
 - Reference copied images with relative paths: `![Figure caption]({attachmentsFolder}/{sanitized-title}/fig1.png)`.
 - Use judgement: a detailed paper analysis benefits from figures; a quick free-form note may not.
 
 **Step 5 — Write the note file:**
-- Construct the file path: `{vaultPath}/{folder}/{sanitized-title}.md` (use the path separator matching the vault path — `\` on Windows, `/` on macOS/Linux).
+- Construct the file path: `{vaultPath}/{folder}/{sanitized-title}.md` (use the native path separator from the runtime platform section in the system prompt).
 - Sanitize the title for filesystem use: replace special characters with hyphens, limit to 80 chars.
 - Call `file_io(write, filePath, noteContent)`.
 
@@ -53,7 +53,7 @@ This skill is content-agnostic — it works for any note type: single paper summ
 - Use the user's configured template. If no template is configured, use sensible defaults with YAML frontmatter.
 - Use `[@citekey]` Pandoc syntax when referencing papers — look up citekeys from Zotero metadata.
 - If writing fails, report the error clearly with the attempted path.
-- Use the correct path separator: if the vault path contains `\` (Windows), join all path segments with `\`; otherwise use `/`. Never mix separators.
+- Use the native path separator provided in the runtime platform section of the system prompt. Never mix separators.
 
 ### Budget
 Total tool calls: 2–5 (read content, optionally look up citekeys, optionally copy images, write note file).
