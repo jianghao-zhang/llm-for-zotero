@@ -108,7 +108,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
           },
           length: {
             type: "number",
-            description: "For action 'read': maximum characters to read (default: 16000). Use with offset to read a specific character range from a file.",
+            description: "For action 'read': maximum characters to read. If omitted, reads the entire file from offset to end. Use with offset to read a specific character range.",
           },
         },
       },
@@ -273,7 +273,6 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
     },
 
     async execute(input) {
-      const defaultMaxReadLen = 16000;
       if (input.action === "read") {
         // Image files: return via artifacts so the LLM can see them visually
         const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
@@ -325,24 +324,16 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
         try {
           const raw = await readFile(input.filePath, input.encoding || "utf-8");
           const start = input.offset || 0;
-          const maxLen = input.length || defaultMaxReadLen;
-          const available = raw.length - start;
-          const sliced = raw.slice(start, start + maxLen);
-          // Only mark truncated when the default cap kicked in (not when an explicit
-          // length was fully satisfied). Explicit length means the caller asked for
-          // exactly this range — delivering it in full is not a truncation.
-          const truncated = !input.length && sliced.length < available;
-          const text = truncated
-            ? sliced + `\n... [truncated, showing ${sliced.length} of ${available} chars from offset ${start}]`
-            : sliced;
+          const end = input.length ? start + input.length : raw.length;
+          const text = raw.slice(start, end);
           return {
             content: {
               action: "read",
               filePath: input.filePath,
               text,
-              bytesRead: sliced.length,
+              bytesRead: text.length,
               ...(start > 0 ? { offset: start } : {}),
-              ...(available > sliced.length ? { totalLength: raw.length } : {}),
+              ...(text.length < raw.length ? { totalLength: raw.length } : {}),
             },
           };
         } catch (error) {
