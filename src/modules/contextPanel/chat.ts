@@ -1378,14 +1378,34 @@ async function buildContextPlanForRequest(params: {
   // Skip for text-only models (e.g. DeepSeek) that reject image_url content.
   const effectiveModel = params.effectiveRequestConfig.model || "";
   let mineruImages: string[] = [];
-  if (planContext && activeContextItem && !isTextOnlyModel(effectiveModel)) {
-    const pdfCtx = pdfTextCache.get(activeContextItem.id);
-    if (pdfCtx?.sourceType === "mineru") {
+  if (planContext && !isTextOnlyModel(effectiveModel)) {
+    // Collect all MinerU-cached attachment IDs from context papers
+    const mineruAttachmentIds: number[] = [];
+    if (activeContextItem) {
+      const activePdfCtx = pdfTextCache.get(activeContextItem.id);
+      if (activePdfCtx?.sourceType === "mineru") {
+        mineruAttachmentIds.push(activeContextItem.id);
+      }
+    }
+    // Also include @-referenced papers with MinerU cache
+    for (const paper of [...params.paperContexts, ...params.fullTextPaperContexts]) {
+      if (paper.contextItemId && !mineruAttachmentIds.includes(paper.contextItemId)) {
+        const pdfCtx = pdfTextCache.get(paper.contextItemId);
+        if (pdfCtx?.sourceType === "mineru") {
+          mineruAttachmentIds.push(paper.contextItemId);
+        }
+      }
+    }
+    // Resolve images from all MinerU papers (cap total at 5)
+    for (const attachmentId of mineruAttachmentIds) {
+      if (mineruImages.length >= 5) break;
       try {
-        mineruImages = await resolveContextImages({
+        const images = await resolveContextImages({
           contextText: planContext,
-          attachmentId: activeContextItem.id,
+          attachmentId,
+          maxImages: 5 - mineruImages.length,
         });
+        mineruImages.push(...images);
       } catch (err) {
         ztoolkit.log("LLM: MinerU figure resolution failed (best-effort)", err);
       }

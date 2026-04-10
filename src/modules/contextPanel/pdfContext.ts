@@ -16,7 +16,8 @@ import {
 } from "./paperAttribution";
 import { readNoteSnapshot } from "./notes";
 import { pdfTextCache, pdfTextLoadingTasks } from "./state";
-import { readCachedMineruMd, invalidateMineruMd } from "./mineruCache";
+import { readCachedMineruMd, invalidateMineruMd, ensureManifest } from "./mineruCache";
+import type { MineruManifest, ManifestSection } from "./mineruCache";
 import { isMineruEnabled } from "../../utils/mineruConfig";
 import type {
   PdfContext,
@@ -160,10 +161,41 @@ async function cachePDFText(item: Zotero.Item) {
     }
 
     if (pdfText) {
-      const chunks = sourceType === "mineru"
-        ? splitMarkdownIntoChunks(pdfText, CHUNK_TARGET_LENGTH)
-        : splitIntoChunks(pdfText, CHUNK_TARGET_LENGTH);
-      const chunkMeta = buildChunkMetadata(chunks, sourceType);
+      // Try manifest-aware chunking for MinerU papers
+      let manifest: MineruManifest | null = null;
+      if (sourceType === "mineru") {
+        try {
+          manifest = await ensureManifest(item.id);
+        } catch {
+          // Non-critical — fall back to heuristic chunking
+        }
+      }
+
+      let chunks: string[];
+      let chunkMeta: PdfChunkMeta[];
+
+      if (manifest && !manifest.noSections && manifest.sections.length > 0) {
+        // Manifest-aware chunking: slice from the raw markdown (offsets match raw full.md),
+        // build metadata from the raw chunks, then convert HTML tables for LLM readability.
+        // Using pdfText (post-conversion) would misalign because convertHtmlTablesToMarkdown
+        // changes character counts.
+        const rawMd = cachedMd!;
+        const rawChunks = splitWithManifestSections(rawMd, manifest.sections, CHUNK_TARGET_LENGTH);
+        chunkMeta = buildChunkMetadataFromManifest(rawChunks, rawMd, manifest.sections);
+        chunks = rawChunks.map(chunk => convertHtmlTablesToMarkdown(chunk));
+        // Update chunkMeta text fields to reflect converted content
+        for (let i = 0; i < chunks.length; i++) {
+          chunkMeta[i].text = chunks[i];
+          chunkMeta[i].normalizedText = normalizeEvidenceText(chunks[i]);
+        }
+      } else if (sourceType === "mineru") {
+        chunks = splitMarkdownIntoChunks(pdfText, CHUNK_TARGET_LENGTH);
+        chunkMeta = buildChunkMetadata(chunks, sourceType);
+      } else {
+        chunks = splitIntoChunks(pdfText, CHUNK_TARGET_LENGTH);
+        chunkMeta = buildChunkMetadata(chunks, sourceType);
+      }
+
       const { chunkStats, docFreq, avgChunkLength } = buildChunkIndex(chunks);
       pdfTextCache.set(item.id, {
         title,
@@ -421,6 +453,113 @@ function splitIntoChunks(text: string, targetLength: number): string[] {
   }
   pushCurrent();
   return chunks;
+}
+
+// ── Manifest-aware chunking ──────────────────────────────────────────────────
+
+/**
+ * Split full.md at section boundaries from the manifest, then sub-chunk
+ * large sections using the existing markdown chunking logic.
+ */
+function splitWithManifestSections(
+  text: string,
+  sections: ManifestSection[],
+  targetLength: number,
+): string[] {
+  const chunks: string[] = [];
+
+  for (const section of sections) {
+    const sectionText = text.slice(section.charStart, section.charEnd).trim();
+    if (!sectionText) continue;
+
+    if (sectionText.length <= targetLength) {
+      chunks.push(sectionText);
+    } else {
+      // Sub-chunk large sections using markdown-aware splitting
+      const subChunks = splitMarkdownIntoChunks(sectionText, targetLength);
+      chunks.push(...subChunks);
+    }
+  }
+
+  // Handle any text before the first section (preamble)
+  if (sections.length > 0 && sections[0].charStart > 0) {
+    const preamble = text.slice(0, sections[0].charStart).trim();
+    if (preamble) {
+      if (preamble.length <= targetLength) {
+        chunks.unshift(preamble);
+      } else {
+        const preambleChunks = splitMarkdownIntoChunks(preamble, targetLength);
+        chunks.unshift(...preambleChunks);
+      }
+    }
+  }
+
+  return chunks;
+}
+
+/**
+ * Build chunk metadata using manifest section boundaries for accurate labels.
+ */
+function buildChunkMetadataFromManifest(
+  chunks: string[],
+  fullText: string,
+  sections: ManifestSection[],
+): PdfChunkMeta[] {
+  // Build a lookup: for any char position in fullText, which section is it?
+  function findSectionForText(chunkText: string): ManifestSection | undefined {
+    const pos = fullText.indexOf(chunkText.slice(0, 100));
+    if (pos < 0) return undefined;
+    for (const section of sections) {
+      if (pos >= section.charStart && pos < section.charEnd) return section;
+    }
+    return undefined;
+  }
+
+  // Map standard section headings to chunk kinds
+  function sectionHeadingToKind(heading: string): PdfChunkKind {
+    const lower = heading.toLowerCase().trim();
+    if (/^abstract/.test(lower)) return "abstract";
+    if (/^introduction/.test(lower)) return "introduction";
+    if (/^method/.test(lower) || /^materials?\s+and\s+method/.test(lower) || /^experimental/.test(lower)) return "methods";
+    if (/^results?/.test(lower)) return "results";
+    if (/^discussion/.test(lower)) return "discussion";
+    if (/^conclusion/.test(lower)) return "conclusion";
+    if (/^reference/.test(lower) || /^bibliography/.test(lower)) return "references";
+    if (/^appendix/.test(lower) || /^supplement/.test(lower)) return "appendix";
+    if (/^fig(?:ure)?\.?\s*\d/i.test(lower)) return "figure-caption";
+    if (/^table\s*\d/i.test(lower)) return "table-caption";
+    return "body";
+  }
+
+  const meta: PdfChunkMeta[] = [];
+  for (const [chunkIndex, chunkText] of chunks.entries()) {
+    const section = findSectionForText(chunkText);
+    const sectionLabel = section?.heading;
+    const chunkKind = section
+      ? sectionHeadingToKind(section.heading)
+      : resolveChunkKind({
+          chunkText,
+          normalizedText: normalizeEvidenceText(chunkText),
+          sectionHeading: matchSectionHeading(chunkText),
+        });
+
+    const normalizedText = normalizeEvidenceText(chunkText);
+    const textWithoutHeading = sectionLabel
+      ? trimLeadingSectionHeading(chunkText, sectionLabel)
+      : sanitizePdfText(chunkText);
+    const cleaned = cleanLeadingEvidenceNoise(textWithoutHeading, chunkKind);
+
+    meta.push({
+      chunkIndex,
+      text: chunkText,
+      normalizedText,
+      sectionLabel,
+      chunkKind,
+      anchorText: buildEvidenceAnchorFromText(cleaned.text) || undefined,
+      leadingNoiseRemoved: cleaned.removedLeadingNoise || undefined,
+    });
+  }
+  return meta;
 }
 
 type SectionHeadingPattern = {

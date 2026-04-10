@@ -220,8 +220,8 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
     return (
       "TURN RULE: Because the user marked specific paper(s) for full-text use on this turn, " +
       "your very first action MUST be to read the paper content. " +
-      "All marked papers have MinerU cache — use `file_io(read, '{mineruCacheDir}/full.md')` for each. " +
-      "This is faster and gives better quality than read_paper. " +
+      "All marked papers have MinerU cache — start by reading `file_io(read, '{mineruCacheDir}/manifest.json')` for each paper " +
+      "to see the section structure, then read the relevant sections from full.md using offset/length. " +
       "Do this before answering, even if the answer seems obvious."
     );
   }

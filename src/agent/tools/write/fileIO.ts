@@ -11,6 +11,8 @@ type FileIOInput = {
   filePath: string;
   content?: string;
   encoding?: string;
+  offset?: number;
+  length?: number;
 };
 
 /**
@@ -77,7 +79,7 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
     spec: {
       name: "file_io",
       description:
-        "Read or write files on the local filesystem. Use this to read data files, write scripts, export analysis results, save CSV/JSON outputs, etc.",
+        "Read or write files on the local filesystem. Reads text files (Markdown, JSON, CSV, etc.) and image files (PNG, JPG, SVG — returned as visual artifacts the model can see). Supports offset/length for partial reads of large files.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -99,6 +101,14 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
           encoding: {
             type: "string",
             description: "Text encoding (default: 'utf-8').",
+          },
+          offset: {
+            type: "number",
+            description: "For action 'read': character offset to start reading from (default: 0). Use with manifest.json charStart/charEnd to read specific paper sections.",
+          },
+          length: {
+            type: "number",
+            description: "For action 'read': maximum characters to read (default: 16000). Use with offset to read a specific character range from a file.",
           },
         },
       },
@@ -124,8 +134,22 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
         onCall: ({ args }) => {
           const a = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
           const action = String(a.action || "access");
-          const path = typeof a.filePath === "string" ? a.filePath.split("/").pop() : "file";
-          return `${action === "write" ? "Writing" : "Reading"} ${path}`;
+          const filePath = typeof a.filePath === "string" ? a.filePath : "";
+          const fileName = filePath.split("/").pop() || "file";
+
+          if (action === "read") {
+            if (fileName === "manifest.json" && filePath.includes("llm-for-zotero-mineru")) {
+              return "Reading paper structure";
+            }
+            if (fileName === "full.md" && typeof a.offset === "number") {
+              return "Reading paper section";
+            }
+            if (/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(fileName)) {
+              return "Reading figure";
+            }
+            return `Reading ${fileName}`;
+          }
+          return `Writing ${fileName}`;
         },
         onPending: "Waiting for confirmation on file operation",
         onApproved: "Performing file operation",
@@ -135,9 +159,19 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
             content && typeof content === "object"
               ? (content as Record<string, unknown>)
               : {};
-          return String(r.action || "file") === "write"
-            ? `File written: ${r.filePath || ""}`
-            : `File read: ${r.bytesRead || 0} chars`;
+          if (String(r.action || "file") === "write") {
+            return `File written: ${r.filePath || ""}`;
+          }
+          if (r.imageFile) return "Figure loaded";
+          const filePath = typeof r.filePath === "string" ? r.filePath : "";
+          const fileName = filePath.split("/").pop() || "";
+          if (fileName === "manifest.json" && filePath.includes("llm-for-zotero-mineru")) {
+            return "Paper structure loaded";
+          }
+          if (fileName === "full.md" && typeof r.offset === "number") {
+            return `Section loaded (${r.bytesRead || 0} chars)`;
+          }
+          return `File read: ${r.bytesRead || 0} chars`;
         },
       },
     },
@@ -160,11 +194,21 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
         typeof args.encoding === "string" && args.encoding.trim()
           ? args.encoding.trim()
           : "utf-8";
+      const offset =
+        action === "read" && typeof args.offset === "number" && args.offset >= 0
+          ? Math.floor(args.offset)
+          : undefined;
+      const length =
+        action === "read" && typeof args.length === "number" && args.length > 0
+          ? Math.floor(args.length)
+          : undefined;
       return ok<FileIOInput>({
         action,
         filePath: args.filePath.trim(),
         content: action === "write" ? String(args.content) : undefined,
         encoding,
+        offset,
+        length,
       });
     },
 
@@ -229,26 +273,85 @@ export function createFileIOTool(): AgentToolDefinition<FileIOInput, unknown> {
     },
 
     async execute(input) {
-      const maxReadLen = 16000;
+      const defaultMaxReadLen = 16000;
       if (input.action === "read") {
+        // Image files: return via artifacts so the LLM can see them visually
+        const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+        const IMAGE_MIME: Record<string, string> = {
+          png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+          gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+        };
+        const fileExt = (input.filePath.match(/\.(\w+)$/)?.[1] || "").toLowerCase();
+        if (IMAGE_EXTENSIONS.has(fileExt)) {
+          const mimeType = IMAGE_MIME[fileExt] || "image/png";
+          // Verify the file exists by attempting a binary read
+          const IOUtils = (globalThis as any).IOUtils;
+          const OSFile = (globalThis as any).OS?.File;
+          let fileExists = false;
+          try {
+            if (IOUtils?.exists) {
+              fileExists = Boolean(await IOUtils.exists(input.filePath));
+            } else if (OSFile?.exists) {
+              fileExists = Boolean(await OSFile.exists(input.filePath));
+            }
+          } catch {
+            fileExists = false;
+          }
+          if (!fileExists) {
+            return {
+              content: {
+                action: "read",
+                filePath: input.filePath,
+                error: "Image file not found",
+              },
+            };
+          }
+          return {
+            content: {
+              action: "read",
+              filePath: input.filePath,
+              imageFile: true,
+              mimeType,
+            },
+            artifacts: [{
+              kind: "image" as const,
+              mimeType,
+              storedPath: input.filePath,
+            }],
+          };
+        }
+
+        // Text files: read with offset/length support
         try {
           const raw = await readFile(input.filePath, input.encoding || "utf-8");
-          const content =
-            raw.length > maxReadLen
-              ? raw.slice(0, maxReadLen) +
-                `\n... [truncated, ${raw.length} chars total]`
-              : raw;
+          const start = input.offset || 0;
+          const maxLen = input.length || defaultMaxReadLen;
+          const available = raw.length - start;
+          const sliced = raw.slice(start, start + maxLen);
+          // Only mark truncated when the default cap kicked in (not when an explicit
+          // length was fully satisfied). Explicit length means the caller asked for
+          // exactly this range — delivering it in full is not a truncation.
+          const truncated = !input.length && sliced.length < available;
+          const text = truncated
+            ? sliced + `\n... [truncated, showing ${sliced.length} of ${available} chars from offset ${start}]`
+            : sliced;
           return {
-            action: "read",
-            filePath: input.filePath,
-            content,
-            bytesRead: raw.length,
+            content: {
+              action: "read",
+              filePath: input.filePath,
+              text,
+              bytesRead: sliced.length,
+              ...(start > 0 ? { offset: start } : {}),
+              ...(available > sliced.length ? { totalLength: raw.length } : {}),
+            },
           };
         } catch (error) {
           return {
-            action: "read",
-            filePath: input.filePath,
-            error: error instanceof Error ? error.message : String(error),
+            content: {
+              action: "read",
+              filePath: input.filePath,
+              error: error instanceof Error ? error.message : String(error),
+            },
           };
         }
       }

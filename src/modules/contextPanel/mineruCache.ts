@@ -282,6 +282,13 @@ export async function writeMineruCacheFiles(
   if (await pathExists(legacyPath)) {
     await removePath(legacyPath);
   }
+
+  // Build manifest.json from content_list + full.md (best effort)
+  try {
+    await buildAndWriteManifest(id);
+  } catch {
+    // Non-critical — manifest is an optimization, not required
+  }
 }
 
 const EXT_MIME: Record<string, string> = {
@@ -310,6 +317,364 @@ export async function readMineruImageAsBase64(
   const ext = (relativePath.match(/\.(\w+)$/)?.[1] || "png").toLowerCase();
   const mime = EXT_MIME[ext] || "image/png";
   return `data:${mime};base64,${toBase64(bytes)}`;
+}
+
+// ── Manifest ─────────────────────────────────────────────────────────────────
+
+export type ManifestFigure = {
+  label: string;
+  path: string;
+  caption: string;
+  page?: number;
+};
+
+export type ManifestTable = {
+  label: string;
+  path: string;
+  caption: string;
+  page?: number;
+};
+
+export type ManifestSection = {
+  heading: string;
+  page?: number;
+  charStart: number;
+  charEnd: number;
+  figures: ManifestFigure[];
+  tables: ManifestTable[];
+  equationCount: number;
+};
+
+export type MineruManifest = {
+  sections: ManifestSection[];
+  allFigures: (ManifestFigure & { section: string })[];
+  allTables: (ManifestTable & { section: string })[];
+  totalPages?: number;
+  totalChars: number;
+  noSections?: boolean;
+};
+
+function getManifestPath(id: number): string {
+  return joinPath(getMineruItemDir(id), "manifest.json");
+}
+
+/** Headings that are journal/publisher metadata noise, not real sections. */
+const NOISE_HEADING_BLOCKLIST = new Set([
+  "cell reports",
+  "cell",
+  "neuron",
+  "current biology",
+  "nature",
+  "nature neuroscience",
+  "nature communications",
+  "science",
+  "elife",
+  "pnas",
+  "check for updates",
+  "authors",
+  "author",
+  "highlights",
+  "correspondence",
+  "graphical abstract",
+  "in brief",
+  "a r t i c l e",
+  "a r t i c l e i n f o",
+  "a b s t r a c t",
+  "key points",
+  "star methods",
+  "resource availability",
+  "lead contact",
+  "data and code",
+  "experimental model",
+  "funding information",
+]);
+
+function isNoiseHeading(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 3) return true;
+  if (NOISE_HEADING_BLOCKLIST.has(trimmed.toLowerCase())) return true;
+  // Unicode garbage from OCR artifacts (e.g. \uf0da sequences)
+  if (/^[\uf000-\uf0ff\s]+$/.test(trimmed)) return true;
+  return false;
+}
+
+/** Extract a figure/table label like "Fig. 1", "Figure 3", "Table 2" from caption text. */
+function extractFigureLabel(caption: string): string {
+  const match = caption.match(
+    /^(Fig(?:ure)?\.?\s*\d+|Table\s*\d+|Supplementary\s+Fig(?:ure)?\.?\s*\d+)/i,
+  );
+  return match ? match[1] : "";
+}
+
+type ContentListEntry = {
+  type: string;
+  text?: string;
+  text_level?: number;
+  page_idx?: number;
+  img_path?: string;
+  image_caption?: string[];
+  image_footnote?: string[];
+  table_body?: string;
+  table_caption?: string[];
+  table_footnote?: string[];
+};
+
+/**
+ * Build a manifest from full.md + content_list.json.
+ *
+ * 1. Scan full.md for `^# heading` lines to get char offsets for sections.
+ * 2. Parse content_list.json for figure/table metadata per section.
+ * 3. Combine into a lightweight manifest the agent can read quickly.
+ */
+export function buildManifest(
+  mdContent: string,
+  contentList: ContentListEntry[],
+): MineruManifest {
+  // ── Step 1: Extract section offsets from full.md ──
+  const headingPattern = /^#\s+(.+)$/gm;
+  const mdHeadings: { heading: string; charStart: number }[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = headingPattern.exec(mdContent)) !== null) {
+    const heading = match[1].trim();
+    if (!isNoiseHeading(heading)) {
+      mdHeadings.push({ heading, charStart: match.index });
+    }
+  }
+
+  // ── Step 2: Map content_list figures/tables/equations to sections ──
+  // Build a section index from content_list using text_level: 1 entries
+  type CLSection = {
+    heading: string;
+    page?: number;
+    figures: ManifestFigure[];
+    tables: ManifestTable[];
+    equationCount: number;
+  };
+  const clSections: CLSection[] = [];
+  let currentCLSection: CLSection | null = null;
+  let totalPages = 0;
+
+  for (const entry of contentList) {
+    if (entry.page_idx !== undefined && entry.page_idx + 1 > totalPages) {
+      totalPages = entry.page_idx + 1;
+    }
+
+    if (
+      entry.type === "text" &&
+      entry.text_level === 1 &&
+      entry.text &&
+      !isNoiseHeading(entry.text)
+    ) {
+      currentCLSection = {
+        heading: entry.text.trim(),
+        page: entry.page_idx,
+        figures: [],
+        tables: [],
+        equationCount: 0,
+      };
+      clSections.push(currentCLSection);
+      continue;
+    }
+
+    if (!currentCLSection) continue;
+
+    if (entry.type === "image" && entry.img_path) {
+      const captionText = (entry.image_caption || []).join(" ").trim();
+      const label = extractFigureLabel(captionText);
+      currentCLSection.figures.push({
+        label: label || `image-${currentCLSection.figures.length + 1}`,
+        path: entry.img_path,
+        caption: captionText.slice(0, 300),
+        page: entry.page_idx,
+      });
+    }
+
+    if (entry.type === "table" && entry.img_path) {
+      const captionText = (entry.table_caption || []).join(" ").trim();
+      const footnoteText = (entry.table_footnote || []).join(" ").trim();
+      const label = extractFigureLabel(captionText || footnoteText);
+      currentCLSection.tables.push({
+        label: label || `table-${currentCLSection.tables.length + 1}`,
+        path: entry.img_path,
+        caption: (captionText || footnoteText).slice(0, 300),
+        page: entry.page_idx,
+      });
+    }
+
+    if (entry.type === "equation") {
+      currentCLSection.equationCount += 1;
+    }
+  }
+
+  // ── Step 3: Build manifest sections by combining md offsets + cl metadata ──
+  // Match md headings to content_list sections by heading text
+  const clSectionByHeading = new Map<string, CLSection>();
+  for (const cls of clSections) {
+    clSectionByHeading.set(cls.heading, cls);
+  }
+
+  const sections: ManifestSection[] = [];
+  for (let i = 0; i < mdHeadings.length; i++) {
+    const { heading, charStart } = mdHeadings[i];
+    const charEnd =
+      i + 1 < mdHeadings.length
+        ? mdHeadings[i + 1].charStart
+        : mdContent.length;
+
+    const cls = clSectionByHeading.get(heading);
+
+    sections.push({
+      heading,
+      page: cls?.page,
+      charStart,
+      charEnd,
+      figures: cls?.figures || [],
+      tables: cls?.tables || [],
+      equationCount: cls?.equationCount || 0,
+    });
+  }
+
+  // Handle edge case: 0-2 real sections → noSections mode
+  if (sections.length <= 2) {
+    return {
+      sections,
+      allFigures: [],
+      allTables: [],
+      totalPages: totalPages || undefined,
+      totalChars: mdContent.length,
+      noSections: true,
+    };
+  }
+
+  // If too many sections (50+), merge adjacent small ones (< 500 chars)
+  if (sections.length > 50) {
+    const merged: ManifestSection[] = [];
+    for (const section of sections) {
+      const prevSection = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (
+        prevSection &&
+        prevSection.charEnd - prevSection.charStart < 500 &&
+        section.charEnd - section.charStart < 500
+      ) {
+        // Merge small adjacent section into previous
+        prevSection.charEnd = section.charEnd;
+        prevSection.figures.push(...section.figures);
+        prevSection.tables.push(...section.tables);
+        prevSection.equationCount += section.equationCount;
+      } else {
+        merged.push({ ...section, figures: [...section.figures], tables: [...section.tables] });
+      }
+    }
+    sections.length = 0;
+    sections.push(...merged);
+  }
+
+  // Build flat figure/table lists
+  const allFigures: (ManifestFigure & { section: string })[] = [];
+  const allTables: (ManifestTable & { section: string })[] = [];
+  for (const section of sections) {
+    for (const fig of section.figures) {
+      allFigures.push({ ...fig, section: section.heading });
+    }
+    for (const tbl of section.tables) {
+      allTables.push({ ...tbl, section: section.heading });
+    }
+  }
+
+  return {
+    sections,
+    allFigures,
+    allTables,
+    totalPages: totalPages || undefined,
+    totalChars: mdContent.length,
+  };
+}
+
+/**
+ * Find the content_list.json file in a MinerU cache directory.
+ * The filename is `{uuid}_content_list.json` where uuid varies per paper.
+ */
+async function findContentListPath(itemDir: string): Promise<string | null> {
+  const io = getIOUtils();
+  const ioAny = io as Record<string, unknown> | undefined;
+  const getChildren =
+    ioAny && typeof ioAny.getChildren === "function"
+      ? (ioAny.getChildren as (path: string) => Promise<string[]>)
+      : null;
+  if (!getChildren) return null;
+
+  let entries: string[];
+  try {
+    entries = await getChildren(itemDir);
+  } catch {
+    return null;
+  }
+
+  for (const entry of entries) {
+    const basename = entry.split(/[\\/]/).pop() || "";
+    if (basename.endsWith("_content_list.json")) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+/**
+ * Build and write manifest.json for a cached paper.
+ * Reads full.md and content_list.json from the cache directory.
+ */
+export async function buildAndWriteManifest(id: number): Promise<MineruManifest | null> {
+  const itemDir = getMineruItemDir(id);
+  if (!(await pathExists(itemDir))) return null;
+
+  const mdBytes = await readFileBytes(getMineruMdPath(id));
+  if (!mdBytes) return null;
+  const mdContent = new TextDecoder("utf-8").decode(mdBytes);
+
+  const contentListPath = await findContentListPath(itemDir);
+  let contentList: ContentListEntry[] = [];
+  if (contentListPath) {
+    const clBytes = await readFileBytes(contentListPath);
+    if (clBytes) {
+      try {
+        contentList = JSON.parse(new TextDecoder("utf-8").decode(clBytes));
+      } catch {
+        // Invalid JSON — proceed without content_list
+      }
+    }
+  }
+
+  const manifest = buildManifest(mdContent, contentList);
+
+  // Write manifest.json
+  const manifestPath = getManifestPath(id);
+  await writeFileBytes(manifestPath, new TextEncoder().encode(JSON.stringify(manifest)));
+
+  return manifest;
+}
+
+/**
+ * Read a previously built manifest.json from cache.
+ */
+export async function readManifest(id: number): Promise<MineruManifest | null> {
+  const manifestPath = getManifestPath(id);
+  const bytes = await readFileBytes(manifestPath);
+  if (!bytes) return null;
+  try {
+    return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get or build the manifest for a cached paper.
+ * Reads from disk if available, otherwise builds and writes it.
+ */
+export async function ensureManifest(id: number): Promise<MineruManifest | null> {
+  const existing = await readManifest(id);
+  if (existing) return existing;
+  return buildAndWriteManifest(id);
 }
 
 export async function invalidateMineruMd(id: number): Promise<void> {

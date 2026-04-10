@@ -1869,7 +1869,9 @@ function summarizeAgentTraceToolCall(
   return {
     kind: "tool",
     icon: "→",
-    text: codeBlock ? label : text,
+    // For file_io, use the descriptive onCall text (e.g. "Reading paper section")
+    // instead of the generic label. For other tools (run_command), keep label.
+    text: (codeBlock && name !== "file_io") ? label : text,
     codeBlock,
   };
 }
