@@ -1405,6 +1405,17 @@
   display: none;
 }
 
+/* Standalone start page: fill available space and center vertically */
+[data-standalone="true"][data-start-page-active="true"] .llm-chat-shell {
+  margin-top: 0;
+  flex: 1 1 auto;
+}
+
+.llm-standalone-start-page {
+  flex: 1;
+  justify-content: center;
+}
+
 [data-start-page-active="true"][data-conversation-kind="global"] .llm-shortcuts {
   display: none;
 }

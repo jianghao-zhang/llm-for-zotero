@@ -351,6 +351,9 @@ export function openStandaloneChat(options?: {
   let currentBasePaperItem: Zotero.Item | null = initialBasePaperItem;
   let isInWebChatMode = false;
   let currentChatHooks: SetupHandlersHooks | null = null;
+  let themeObserver: { observe(target: Node, options: MutationObserverInit): void; disconnect(): void } | null = null;
+  let darkMQ: MediaQueryList | null = null;
+  let onSchemeChange: (() => void) | null = null;
 
   const initWindow = () => {
     // Now the window is loaded — safe to clear the pending flag.
@@ -379,19 +382,48 @@ export function openStandaloneChat(options?: {
       "--color-accent", "--accent-blue",
     ];
     const mainDocEl = mainWin.document.documentElement;
-    const mainStyle = mainDocEl ? mainWin.getComputedStyle(mainDocEl) : null;
-    const varDeclarations = zoteroVars
-      .map((v) => {
-        const val = mainStyle?.getPropertyValue(v).trim();
-        return val ? `${v}: ${val};` : "";
-      })
-      .filter(Boolean)
-      .join("\n  ");
-    if (varDeclarations) {
-      const styleEl = doc.createElementNS(HTML_NS, "style") as HTMLStyleElement;
-      styleEl.textContent = `:root {\n  ${varDeclarations}\n}`;
-      doc.documentElement?.prepend(styleEl);
+    let styleEl: HTMLStyleElement | null = null;
+
+    const syncZoteroVarsToStandalone = () => {
+      if (cancelled || newWin.closed) return;
+      const freshStyle = mainDocEl ? mainWin.getComputedStyle(mainDocEl) : null;
+      const decls = zoteroVars
+        .map((v) => {
+          const val = freshStyle?.getPropertyValue(v).trim();
+          return val ? `${v}: ${val};` : "";
+        })
+        .filter(Boolean)
+        .join("\n  ");
+      if (!decls) return;
+      if (!styleEl) {
+        styleEl = doc.createElementNS(HTML_NS, "style") as HTMLStyleElement;
+        doc.documentElement?.prepend(styleEl);
+      }
+      styleEl.textContent = `:root {\n  ${decls}\n}`;
+    };
+
+    // Initial injection
+    syncZoteroVarsToStandalone();
+
+    // Re-sync when Zotero's theme changes (attribute changes on root element).
+    // Access MutationObserver from the main window — it's not a global in the
+    // standalone window's Gecko execution context.
+    const MO = (mainWin as any).MutationObserver as typeof MutationObserver | undefined;
+    if (MO && mainDocEl) {
+      themeObserver = new MO(() => syncZoteroVarsToStandalone());
+      themeObserver.observe(mainDocEl, {
+        attributes: true,
+        attributeFilter: ["style", "class"],
+      });
     }
+
+    // Re-sync on OS-level dark/light switch
+    const mq = mainWin.matchMedia?.("(prefers-color-scheme: dark)") ?? null;
+    darkMQ = mq;
+    onSchemeChange = () => {
+      newWin.setTimeout(() => syncZoteroVarsToStandalone(), 100);
+    };
+    if (mq) mq.addEventListener("change", onSchemeChange);
 
     // Inject CSS
     const mainCSS = doc.createElementNS(HTML_NS, "link") as HTMLLinkElement;
@@ -433,13 +465,13 @@ export function openStandaloneChat(options?: {
     const paperTab = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
     paperTab.className = "llm-standalone-tab";
     paperTab.type = "button";
-    paperTab.textContent = t("Paper chat");
+    paperTab.textContent = "Paper chat";
     paperTab.dataset.tab = "paper";
 
     const openTab = doc.createElementNS(HTML_NS, "button") as HTMLButtonElement;
     openTab.className = "llm-standalone-tab";
     openTab.type = "button";
-    openTab.textContent = t("Library chat");
+    openTab.textContent = "Library chat";
     openTab.dataset.tab = "open";
 
     paperTab.classList.toggle("active", standaloneMode === "paper");
@@ -694,7 +726,7 @@ export function openStandaloneChat(options?: {
 
       // Tab labels
       if (isWebChat) {
-        paperTab.textContent = t("Web chat");
+        paperTab.textContent = "Web chat";
         paperTab.classList.add("active");
         openTab.classList.remove("active");
         // Force paper tab active since webchat uses that slot
@@ -704,7 +736,7 @@ export function openStandaloneChat(options?: {
       } else {
         // Restore label based on current context
         const noteSession = activeItem ? resolveActiveNoteSession(activeItem) : null;
-        paperTab.textContent = noteSession ? t("Note editing") : t("Paper chat");
+        paperTab.textContent = noteSession ? "Note editing" : "Paper chat";
         paperTab.classList.toggle("active", standaloneMode === "paper");
         openTab.classList.toggle("active", standaloneMode === "open");
       }
@@ -917,10 +949,10 @@ export function openStandaloneChat(options?: {
       if (standaloneMode === "paper" && currentBasePaperItem) {
         try {
           const title = (currentBasePaperItem as any).getField?.("title") || "";
-          contentTitleBar.textContent = title || t("Paper chat");
-        } catch { contentTitleBar.textContent = t("Paper chat"); }
+          contentTitleBar.textContent = title || "Paper chat";
+        } catch { contentTitleBar.textContent = "Paper chat"; }
       } else {
-        contentTitleBar.textContent = t("Library chat");
+        contentTitleBar.textContent = "Library chat";
       }
     };
 
@@ -935,7 +967,7 @@ export function openStandaloneChat(options?: {
 
         // Sync left tab label: "Note editing" when in note mode, "Paper chat" otherwise
         const noteSession = resolveActiveNoteSession(item);
-        paperTab.textContent = noteSession ? t("Note editing") : t("Paper chat");
+        paperTab.textContent = noteSession ? "Note editing" : "Paper chat";
 
         const llmMain = contentArea.querySelector("#llm-main") as HTMLElement | null;
         if (llmMain) llmMain.dataset.standalone = "true";
@@ -1314,7 +1346,7 @@ export function openStandaloneChat(options?: {
             paperTab.classList.add("active");
             openTab.classList.remove("active");
             const noteSession = resolveActiveNoteSession(paperItem);
-            paperTab.textContent = noteSession ? t("Note editing") : t("Paper chat");
+            paperTab.textContent = noteSession ? "Note editing" : "Paper chat";
             mountChatPanel(portalItem);
           }
         } else {
@@ -1882,6 +1914,13 @@ export function openStandaloneChat(options?: {
   const cleanupWindow = () => {
     cancelled = true;
     standaloneItemChangeHandler = null;
+    themeObserver?.disconnect();
+    themeObserver = null;
+    if (darkMQ && onSchemeChange) {
+      darkMQ.removeEventListener("change", onSchemeChange);
+    }
+    darkMQ = null;
+    onSchemeChange = null;
     setStandalonePending(false);
     // Remove the standalone window's content area from panel tracking
     const root = newWin.document?.getElementById(
