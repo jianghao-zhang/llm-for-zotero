@@ -1,6 +1,6 @@
 ---
 id: simple-paper-qa
-description: Answer general questions about a paper
+description: Answer open-ended natural-language questions about the content of one specific paper (what it argues, how it compares to X, what figure 3 means). Not for Zotero operations like editing metadata, tagging, or running scripts.
 version: 1
 match: /\b(what|who|when|where|which|tell me|explain)\b.*\b(about|paper|article|study|wrote|author|publish|year|journal|abstract|topic|field|contribution|finding|claim|conclusion|argue)\b/i
 match: /\bsummar(y|ize|ise)\b/i

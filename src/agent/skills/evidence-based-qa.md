@@ -1,6 +1,6 @@
 ---
 id: evidence-based-qa
-description: Find specific evidence, methods, or results in papers
+description: Locate specific passages in one or more papers that support a given claim, returning quoted evidence with page and section citations. Not for general questions — use simple-paper-qa for those.
 version: 1
 match: /\b(what method|what approach|what technique|what model|how did they|how does it|what results?|what data|what dataset|what experiment|what metric|what performance|what accuracy|what baseline)\b/i
 match: /\b(find|locate|where|which section|which page|quote|passage|excerpt|evidence|proof|support|mention)\b.*\b(paper|article|study|text|document)\b/i
