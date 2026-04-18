@@ -30,9 +30,9 @@ Documentation:
 
 ### 📢 Recent Updates
 
-- **Skills** — Customizable guidance files that shape how the agent handles different tasks. 9 built-in skills included, plus a portal for creating your own. See [Skills](#skills).
+- **Skills** — Customizable guidance files that shape how the agent handles different tasks. 8 built-in skills included, plus a portal for creating your own. See [Skills](#skills).
 - **Standalone Window Mode** — Open the LLM Assistant in its own dedicated window, separate from the Zotero reader sidebar. See [Standalone Window Mode](#standalone-window-mode).
-- **Obsidian Integration** — Write notes from your Zotero papers directly to your Obsidian vault with customizable templates. See [Obsidian Integration](#obsidian-integration).
+- **File-Based Notes** — Save research notes as Markdown files in any local directory — works with Obsidian, Logseq, or any plain markdown folder. See [File-Based Notes](#file-based-notes).
 - **Agent Mode (beta)** — LLM-for-Zotero can now act as an autonomous agent inside your Zotero library. See [Agent Mode](#agent-mode-beta) for details.
 - **Codex auth** — ChatGPT Plus subscribers can use their Codex quota to access Codex models (e.g. `gpt-5.4`) without an API key. See [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers).
 - **MinerU PDF parsing** — High-fidelity PDF extraction that preserves tables, equations, and figures. See [MinerU PDF Parsing](#mineru-pdf-parsing).
@@ -45,7 +45,7 @@ Documentation:
 - [Configuration](#configuration)
 - [Usage Guide](#usage-guide)
 - [Features](#features)
-- [Obsidian Integration](#obsidian-integration)
+- [File-Based Notes](#file-based-notes)
 - [Agent Mode (beta)](#agent-mode-beta)
 - [Skills](#skills)
 - [WebChat Setup](#webchat-setup-chatgpt-web-sync)
@@ -214,42 +214,44 @@ While the standalone window is open, the reader sidebar panels display a placeho
 
 ---
 
-## Obsidian Integration
+## File-Based Notes
 
-The agent can write notes from your Zotero papers directly into your [Obsidian](https://obsidian.md/) vault — with full metadata, citations, and optionally extracted figures.
+Beyond Zotero's built-in notes, the agent can save research notes as Markdown files in any local directory you choose. The plugin is **not tied to any specific note-taking app** — point it at an [Obsidian](https://obsidian.md/) vault, a [Logseq](https://logseq.com/) graph, or a plain folder of `.md` files, and the agent will write notes there with full metadata, citations, and optionally extracted figures.
 
 ### Configuration
 
-Open `Preferences` → `llm-for-zotero` and scroll to the **Obsidian Integration** section.
+Open `Preferences` → `llm-for-zotero` and scroll to the **Notes Directory** section.
 
 <p align="center">
-  <img src="./assets/obsidian_setting.png" alt="Screenshot of Obsidian Integration settings" width="512" />
+  <img src="./assets/outside_notes.png" alt="Screenshot of the Notes Directory settings panel" width="512" />
 </p>
 
-| Setting                | Description                                                                | Default          |
-| ---------------------- | -------------------------------------------------------------------------- | ---------------- |
-| **Vault Path**         | Absolute path to your Obsidian vault root                                  | _(required)_     |
-| **Default Folder**     | Subfolder for notes (created if it doesn't exist)                          | `Logs`           |
-| **Attachments Folder** | Subfolder for copied figures and images                                    | `imgs`           |
-| **Note Template**      | Markdown template with `{{title}}`, `{{date}}`, `{{content}}` placeholders | Built-in default |
+| Setting                  | Description                                                                                      | Example                |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------- |
+| **Nickname**             | How you refer to this directory in chat — the agent recognizes the name when you mention it      | `Obsidian`, `Logseq`   |
+| **Notes Directory Path** | Absolute path to the root directory where notes are saved                                        | `/Users/me/MyVault`    |
+| **Default Folder**       | Default subfolder for new notes (the agent can write to a different folder if you ask it to)     | `Logs`                 |
+| **Attachments Folder**   | Folder for copied figures and images, **relative to the directory root**                         | `Logs/imgs`            |
 
-Click **Test Write Access** to verify the plugin can write to your vault.
+Click **Test Write Access** to verify the plugin can write to your directory.
 
 ### How it works
 
-Ask the agent to write a note to Obsidian (e.g. _"Summarize this paper and save it to Obsidian"_). The agent will:
+Ask the agent to write a note using the nickname you configured — e.g. _"Summarize this paper and save it to Obsidian"_ or _"Log this to my Logseq"_. The agent will:
 
-1. Gather content from the paper (metadata, summary, key points, etc.).
-2. Compose a Markdown note using your configured template.
-3. Add YAML frontmatter with title, date, tags, authors, year, and citation key.
+1. Gather content from the paper (metadata, summary, key points, figures, etc.).
+2. Compose a Markdown note following the conventions of the `write-note` skill.
+3. Add YAML frontmatter that matches the `write-note` template (`title`, `created`, `tags`, `citekey`, `doi`, `journal`); author information is kept in the note body, not frontmatter.
 4. Optionally copy figures from MinerU-parsed PDFs into the attachments folder.
-5. Write the note to `{vault_path}/{default_folder}/{title}.md`.
+5. Write the note to `{notes_directory}/{default_folder}/{title}.md`.
 
 <p align="center">
-  <img src="./assets/obsidian_example.png" alt="Screenshot of a Zotero paper note in Obsidian" width="1024" />
+  <img src="./assets/obsidian_example.png" alt="Example of a paper note rendered in Obsidian" width="1024" />
 </p>
 
-Notes use [Pandoc citation syntax](https://pandoc.org/MANUAL.html#citations) (`[@citekey]`), compatible with Obsidian's Zotero Integration and Pandoc plugins.
+Notes use [Pandoc citation syntax](https://pandoc.org/MANUAL.html#citations) (`[@citekey]`), compatible with Obsidian's Zotero Integration and Pandoc plugins, as well as most other Markdown readers.
+
+> **Customizing the note format:** Note templates and figure-embedding rules live in the `write-note` skill, not in preferences. Open the **Standalone Window** → **Skills** portal to edit it — see the [Skills](#skills) section for details.
 
 ---
 
@@ -261,16 +263,50 @@ When enabled, the LLM becomes an autonomous agent that can read, search, and wri
 
 ### Available Tools
 
-| Tool                       | Description                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------ |
-| `query_library`            | Search/list Zotero items, collections, related papers, and duplicates                      |
-| `read_library`             | Read metadata, notes, annotations, attachments, and collections                            |
-| `inspect_pdf`              | Read front matter, search pages, retrieve evidence, inspect the active reader view         |
-| `search_literature_online` | Search live scholarly sources or fetch external metadata                                   |
-| `mutate_library`           | Batch write operations — metadata edits, tagging, collection changes, note writes, imports |
-| `undo_last_action`         | Revert the last approved write batch                                                       |
+The agent ships with focused tools split into **read** (no confirmation needed) and **write** (route through a confirmation card with batched undo).
 
-The design philosophy is **fewer, more general tools** rather than a long list of task-specific ones. Ask the agent what it can do — it will tell you.
+#### Library & PDF reading
+
+| Tool                       | Description                                                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `query_library`            | Discover Zotero items and collections — search/list any item type, filter by author/year/collection/itemType, browse the collection tree, find related papers, detect duplicates |
+| `read_library`             | Read structured item state for one or more items — metadata, notes, annotations, attachments, collection membership |
+| `read_paper`               | Read text content from a PDF — opening sections by default, or specific section indexes (up to 20 papers per call) |
+| `search_paper`             | Find specific evidence in papers via a question — returns ranked relevant passages (up to 10 papers per call)     |
+| `view_pdf_pages`           | Render PDF pages as images for visual analysis — by question, by page number, or capture the currently visible page |
+| `read_attachment`          | Read any Zotero attachment by ID (HTML snapshots, text files, images), or send the whole file to the model        |
+| `search_literature_online` | Search live scholarly sources (CrossRef, Semantic Scholar) for metadata, recommendations, references, citations   |
+
+#### Library writes
+
+| Tool                  | Description                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `apply_tags`          | Add or remove tags on one or more papers                                                     |
+| `update_metadata`     | Update metadata fields (title, authors, DOI, etc.) on an item                                |
+| `move_to_collection`  | Add or remove papers from collections                                                        |
+| `manage_collections`  | Create or delete collections (folders)                                                       |
+| `manage_attachments`  | Delete, rename, or re-link broken attachment file paths                                      |
+| `merge_items`         | Merge duplicates — keeps the master, moves children from the others, trashes the rest        |
+| `trash_items`         | Move items to the trash                                                                      |
+| `import_identifiers`  | Import papers by DOI, ISBN, arXiv ID, or URL                                                 |
+| `import_local_files`  | Import local files (PDFs, etc.) — Zotero auto-fetches metadata for recognized PDFs           |
+| `edit_current_note`   | Edit the active Zotero note or create a new one (plain text, Markdown, or HTML)              |
+
+#### Filesystem & scripting
+
+| Tool             | Description                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| `file_io`        | Read or write files on the local filesystem — text and image, with offset/length for partial reads       |
+| `run_command`    | Run a shell command (zsh on macOS, bash on Linux, cmd.exe on Windows) — for analysis scripts and CLI tools |
+| `zotero_script`  | Execute JavaScript inside Zotero's runtime — read mode for bulk data, write mode for custom mutations    |
+
+#### Safety net
+
+| Tool               | Description                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `undo_last_action` | Undo the most recent write action in this conversation — keeps the last 10 entries per session         |
+
+The design philosophy is **read tools are unrestricted; write tools always confirm and stay undoable**. Ask the agent what it can do — it will tell you.
 
 ### Demos
 
@@ -324,7 +360,7 @@ Skills are customizable guidance files that shape how the agent approaches diffe
 
 > Skills require **Agent Mode** to be enabled. They have no effect in standard chat mode.
 
-The plugin ships with **9 built-in skills** covering common research workflows:
+The plugin ships with **8 built-in skills** covering common research workflows:
 
 | Skill | What it guides the agent to do |
 | --- | --- |
@@ -334,9 +370,8 @@ The plugin ships with **9 built-in skills** covering common research workflows:
 | `compare-papers` | Compare multiple papers using batched reads and focused retrieval |
 | `library-analysis` | Summarize or analyze your entire library without context overflow |
 | `literature-review` | Conduct a structured literature review (discover, read, synthesize) |
-| `note-from-paper` | Create reading notes from papers with optional figure inclusion |
-| `note-editing` | Create and edit Zotero notes with smart defaults |
-| `write-to-obsidian` | Export notes to your Obsidian vault with metadata and citations |
+| `write-note` | Write reading notes either as Zotero notes or as Markdown files in your notes directory (Obsidian, Logseq, plain folders) |
+| `import-cited-reference` | Import papers cited in the current PDF into your Zotero library |
 
 ### Creating Custom Skills
 
@@ -474,7 +509,7 @@ When a personal API key is provided, the plugin calls the MinerU API directly (`
 - [x] GitHub Copilot auth
 - [x] WebChat mode (ChatGPT web sync)
 - [x] Standalone window mode ([#78](https://github.com/yilewang/llm-for-zotero/issues/78))
-- [x] Obsidian integration
+- [x] File-based notes (Obsidian, Logseq, any Markdown directory)
 - [ ] Local MinerU support
 - [x] Customized skills
 - [ ] Cross-device synchronization

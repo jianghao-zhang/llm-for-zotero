@@ -69,41 +69,95 @@ async function executeCommand(params: {
     }
 
     if (Subprocess?.call) {
-      const proc = await Subprocess.call({
-        command: shell,
-        arguments: [shellFlag, command],
-        environment: {},
-        workdir: params.cwd || undefined,
-      });
+      const info = getRuntimePlatformInfo();
 
-      const timeoutPromise = new Promise<"timeout">((resolve) =>
-        setTimeout(() => resolve("timeout"), timeoutMs),
-      );
+      if (info.platform === "windows") {
+        // Windows: Subprocess pipes don't capture cmd.exe output in Zotero's
+        // Gecko build. Redirect to a fixed temp file, then read it back.
+        const Components = (globalThis as any).Components;
+        const tempDir = (globalThis as any).Services?.dirsvc
+          ?.get("TmpD", Components?.interfaces?.nsIFile)?.path
+          || "C:\\Windows\\Temp";
+        const tempOut = `${tempDir}\\zotero-llm-cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`;
+        const wrappedCommand = `( ${command} ) > "${tempOut}" 2>&1`;
 
-      const resultPromise = (async () => {
-        const [stdout, stderr] = await Promise.all([
+        const proc = await Subprocess.call({
+          command: shell,
+          arguments: [shellFlag, wrappedCommand],
+          workdir: params.cwd || undefined,
+        });
+
+        // Drain pipes (they'll be empty on Windows, but drain to avoid hangs)
+        const drainPromise = Promise.all([
           drainPipe(proc.stdout),
           drainPipe(proc.stderr),
         ]);
-        const { exitCode } = await proc.wait();
-        return { stdout, stderr, exitCode };
-      })();
 
-      const raceResult = await Promise.race([resultPromise, timeoutPromise]);
-      if (raceResult === "timeout") {
-        try { proc.kill(); } catch { /* ignore */ }
-        const partial = await resultPromise.catch(() => ({
-          stdout: "",
-          stderr: "",
-          exitCode: -1,
-        }));
-        return {
-          stdout: partial.stdout,
-          stderr: partial.stderr + "\n[Command timed out]",
-          exitCode: -1,
-        };
+        const timeoutPromise = new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), timeoutMs),
+        );
+
+        const resultPromise = (async () => {
+          await drainPromise;
+          const { exitCode } = await proc.wait();
+          return exitCode;
+        })();
+
+        const race = await Promise.race([resultPromise, timeoutPromise]);
+        if (race === "timeout") {
+          try { proc.kill(); } catch { /* ignore */ }
+          try { const IO = (globalThis as any).IOUtils; await IO.remove(tempOut, { ignoreAbsent: true }); } catch { /* ignore */ }
+          return { stdout: "", stderr: "[Command timed out]", exitCode: -1 };
+        }
+
+        // Read captured output from temp file
+        let stdout = "";
+        try {
+          const IOUtils = (globalThis as any).IOUtils;
+          const data = await IOUtils.read(tempOut);
+          stdout = new TextDecoder("utf-8").decode(data instanceof Uint8Array ? data : new Uint8Array(data));
+          await IOUtils.remove(tempOut, { ignoreAbsent: true });
+        } catch { /* temp file missing or unreadable */ }
+
+        return { stdout, stderr: "", exitCode: race };
+
+      } else {
+        // macOS / Linux: pipes work normally
+        const proc = await Subprocess.call({
+          command: shell,
+          arguments: [shellFlag, command],
+          workdir: params.cwd || undefined,
+        });
+
+        const timeoutPromise = new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), timeoutMs),
+        );
+
+        const resultPromise = (async () => {
+          const [stdout, stderr] = await Promise.all([
+            drainPipe(proc.stdout),
+            drainPipe(proc.stderr),
+          ]);
+          const { exitCode } = await proc.wait();
+          return { stdout, stderr, exitCode };
+        })();
+
+        const raceResult = await Promise.race([resultPromise, timeoutPromise]);
+        if (raceResult === "timeout") {
+          try { proc.kill(); } catch { /* ignore */ }
+          const partial = await resultPromise.catch(() => ({
+            stdout: "",
+            stderr: "",
+            exitCode: -1,
+          }));
+          return {
+            stdout: partial.stdout,
+            stderr: partial.stderr + "\n[Command timed out]",
+            exitCode: -1,
+          };
+        }
+        return raceResult;
       }
-      return raceResult;
     }
   } catch (error) {
     Zotero.debug?.(

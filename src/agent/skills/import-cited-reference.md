@@ -1,11 +1,28 @@
 ---
 id: import-to-library
+description: Import cited papers into your Zotero library by DOI
+version: 1
 match: /\b(add|import|save|get)\b.*\b(to|into)\s*(my\s*)?(library|zotero|collection)\b/i
 match: /\b(add|import|save)\b.*\breference\s*(#|no\.?|number)?\s*\d/i
 match: /\breference\s*(#|no\.?|number)?\s*\d+\b.*\b(add|import|save|library)\b/i
 match: /\bcited\b.*\b(add|import|save)\b/i
 match: /\b(add|import)\b.*\b(this|these|that|those)\s*(paper|article|study|studies)\b/i
 ---
+
+<!--
+  SKILL: Import References
+
+  This skill activates when you ask to add papers to your library
+  (e.g., "import reference #5", "add this paper to my library").
+
+  You can customize:
+  - Resolution strategy: change how DOIs are looked up
+  - Import behavior: adjust batch vs single import
+  - Target collection: modify default import destination
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Importing papers into the Zotero library
 

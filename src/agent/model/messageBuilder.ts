@@ -5,17 +5,16 @@ import type {
 } from "../types";
 import { AGENT_PERSONA_INSTRUCTIONS } from "./agentPersona";
 import { buildAgentMemoryBlock } from "../store/conversationMemory";
-import { getAllSkills, matchesSkill } from "../skills";
+import { getAllSkills } from "../skills";
 
 import { isTextOnlyModel } from "../../providers";
 import {
-  isObsidianConfigured,
-  getObsidianVaultPath,
-  getObsidianTargetFolder,
-  getObsidianAttachmentsFolder,
-  getObsidianNoteTemplate,
-  getDefaultObsidianNoteTemplate,
-} from "../../utils/obsidianConfig";
+  isNotesDirectoryConfigured,
+  getNotesDirectoryPath,
+  getNotesDirectoryFolder,
+  getNotesDirectoryAttachmentsFolder,
+  getNotesDirectoryNickname,
+} from "../../utils/notesDirectoryConfig";
 import { joinLocalPath } from "../../utils/localPath";
 import { buildRuntimePlatformGuidanceText } from "../../utils/runtimePlatform";
 
@@ -192,6 +191,7 @@ function buildSystemPrompt(sections: PromptSection[]): string {
 function collectGuidanceInstructions(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
+  matchedSkillIds: ReadonlyArray<string>,
 ): string[] {
   const instructions = new Set<string>();
   for (const tool of tools) {
@@ -201,8 +201,15 @@ function collectGuidanceInstructions(
     const instruction = guidance.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
+
+  // Inject only the skills that the caller (runtime.ts) pre-selected for
+  // this user turn. Skill selection happens once in getMatchedSkillIds,
+  // before this function is called — its result gates which instruction
+  // bodies ship in the system prompt so unrelated skills don't flood the
+  // context.
+  const activeSkillIds = new Set(matchedSkillIds);
   for (const skill of getAllSkills()) {
-    if (!matchesSkill(skill, request)) continue;
+    if (!activeSkillIds.has(skill.id)) continue;
     const instruction = skill.instruction.trim();
     if (instruction) instructions.add(instruction);
   }
@@ -238,29 +245,41 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   );
 }
 
-function buildObsidianConfigSection(): string {
-  if (!isObsidianConfigured()) return "";
-  const vaultPath = getObsidianVaultPath();
-  const targetFolder = getObsidianTargetFolder();
-  const attachmentsFolder = getObsidianAttachmentsFolder();
-  const template =
-    getObsidianNoteTemplate() || getDefaultObsidianNoteTemplate();
+function buildNotesDirectorySection(): string {
+  if (!isNotesDirectoryConfigured()) return "";
+  const dirPath = getNotesDirectoryPath();
+  const targetFolder = getNotesDirectoryFolder();
+  const attachmentsFolder = getNotesDirectoryAttachmentsFolder();
+  const nickname = getNotesDirectoryNickname().trim();
   const defaultTargetPath = targetFolder
-    ? joinLocalPath(vaultPath, targetFolder)
-    : vaultPath;
-  return [
-    "Obsidian configuration (user-configured):",
-    `- Vault path: ${vaultPath}`,
+    ? joinLocalPath(dirPath, targetFolder)
+    : dirPath;
+  const lines = [
+    "Notes directory configuration (user-configured):",
+  ];
+  if (nickname) {
+    lines.push(`- Nickname: ${nickname}`);
+  }
+  const attachmentsPath = attachmentsFolder
+    ? joinLocalPath(dirPath, attachmentsFolder)
+    : "";
+  lines.push(
+    `- Directory path: ${dirPath}`,
     `- Default folder: ${targetFolder}`,
     `- Default target path: ${defaultTargetPath}`,
-    `- Attachments folder: ${attachmentsFolder} (subfolder for copied figures and images)`,
-    "- Note template:",
-    "```",
-    template,
-    "```",
-    "When writing to Obsidian, use Pandoc citation syntax [@citekey] for paper references. " +
-      "Look up citation keys from Zotero item metadata via read_library.",
-  ].join("\n");
+    `- Attachments folder: ${attachmentsFolder} (relative to notes directory root)`,
+  );
+  if (attachmentsPath) {
+    lines.push(
+      `- Attachments path: ${attachmentsPath} (resolved absolute path for copying images)`,
+    );
+  }
+  if (nickname) {
+    lines.push(
+      `When the user mentions "${nickname}" in the context of notes, write to this directory.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function buildRuntimePlatformSection(): string {
@@ -270,6 +289,7 @@ function buildRuntimePlatformSection(): string {
 export async function buildAgentInitialMessages(
   request: AgentRuntimeRequest,
   tools: AgentToolDefinition<any, any>[],
+  matchedSkillIds: ReadonlyArray<string>,
 ): Promise<AgentModelMessage[]> {
   const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
   const autoReadInstruction = buildAutoReadInstruction(request);
@@ -292,12 +312,12 @@ export async function buildAgentInitialMessages(
       lines: [(request.customInstructions || "").trim()],
     },
     {
-      id: "obsidian-config",
-      lines: [buildObsidianConfigSection()],
+      id: "notes-directory-config",
+      lines: [buildNotesDirectorySection()],
     },
     {
       id: "tool-guidance",
-      lines: collectGuidanceInstructions(request, tools),
+      lines: collectGuidanceInstructions(request, tools, matchedSkillIds),
     },
     {
       id: "agent-memory",

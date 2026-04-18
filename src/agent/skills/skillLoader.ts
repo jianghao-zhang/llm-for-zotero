@@ -18,8 +18,12 @@ import type { AgentRuntimeRequest } from "../types";
  */
 export type AgentSkill = {
   id: string;
+  description: string;
+  version: number;
   patterns: RegExp[];
   instruction: string;
+  /** Set at load time by userSkills.ts based on filename + content comparison. */
+  source: "system" | "customized" | "personal";
 };
 
 /**
@@ -50,6 +54,8 @@ export function parseSkill(raw: string): AgentSkill {
   }
 
   let id = "unknown";
+  let description = "";
+  let version = 0;
   const patterns: RegExp[] = [];
 
   for (const line of fmLines) {
@@ -58,6 +64,18 @@ export function parseSkill(raw: string): AgentSkill {
       id = idMatch[1].trim();
       continue;
     }
+    const descMatch = line.match(/^description:\s*(.+)$/);
+    if (descMatch) {
+      description = descMatch[1].trim();
+      continue;
+    }
+    const versionMatch = line.match(/^version:\s*(\d+)$/);
+    if (versionMatch) {
+      version = parseInt(versionMatch[1], 10);
+      continue;
+    }
+    // Skip name: lines (legacy, no longer used)
+    if (/^name:\s/.test(line)) continue;
     const matchMatch = line.match(/^match:\s*\/(.+)\/([gimsuy]*)$/);
     if (matchMatch) {
       try {
@@ -70,7 +88,7 @@ export function parseSkill(raw: string): AgentSkill {
 
   const instruction = lines.slice(frontmatterEnd).join("\n").trim();
 
-  return { id, patterns, instruction };
+  return { id, description, version, patterns, instruction, source: "personal" };
 }
 
 /**

@@ -255,9 +255,28 @@ export function createApplyTagsTool(
             };
             return ok({ action: input.action, operation: updatedOperation });
           }
+          // Resolution was submitted but every row was empty. Without this
+          // explicit fail, execute() would throw and the error would be
+          // swallowed into a silent "0 items tagged" result.
+          return fail(
+            "No tags were entered for any paper. Add at least one tag per paper you want to update, or cancel the operation.",
+          );
         }
 
-        // No editable resolution data or unchanged; pass through
+        // No resolution data (auto_approve / non-HITL path). Validate the
+        // original operation has something to apply so we don't silently
+        // pass through an empty request.
+        const hasNonEmptyAssignments = operation.assignments?.some(
+          (entry) => Array.isArray(entry.tags) && entry.tags.length > 0,
+        );
+        const hasFlatOp =
+          (operation.itemIds?.length ?? 0) > 0 &&
+          (operation.tags?.length ?? 0) > 0;
+        if (!hasNonEmptyAssignments && !hasFlatOp) {
+          return fail(
+            "No tags to apply. Provide either (itemIds + tags) or assignments with non-empty tag arrays.",
+          );
+        }
         return ok(input);
       }
 

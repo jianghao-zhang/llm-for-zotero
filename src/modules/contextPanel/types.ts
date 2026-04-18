@@ -306,6 +306,8 @@ export type SendQuestionOptions = {
   agentRunId?: string;
   skipAgentDispatch?: boolean;
   pdfModePaperKeys?: Set<string>;
+  /** Skill IDs force-activated via slash menu selection. */
+  forcedSkillIds?: string[];
   /** System messages injected by provider-side PDF upload (Qwen fileid://, Kimi extracted text). */
   pdfUploadSystemMessages?: string[];
   /** [webchat] When true, attach the paper PDF to the ChatGPT query. */

@@ -1,5 +1,7 @@
 import { createElement } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
+import { getAllSkills } from "../../agent/skills";
+import type { AgentSkill } from "../../agent/skills/skillLoader";
 import type { RuntimeModelEntry } from "../../utils/modelProviders";
 import { getLastUsedModelEntryId, getModelEntryById } from "../../utils/modelProviders";
 import {
@@ -113,6 +115,7 @@ import {
   removeLastUsedPaperConversationKey,
   getLockedGlobalConversationKey,
   setLockedGlobalConversationKey,
+  buildPaperStateKey,
 } from "./prefHelpers";
 import {
   sendQuestion,
@@ -419,6 +422,13 @@ export function setupHandlers(
   let basePaperItem = resolvedInitialState.basePaperItem;
   const buildPaperStateKey = (libraryID: number, paperItemID: number): string =>
     `${Math.floor(libraryID)}:${Math.floor(paperItemID)}`;
+  const resolveLibraryIdFromItem = (
+    targetItem: Zotero.Item | null | undefined,
+  ): number => {
+    const parsed = Number(targetItem?.libraryID);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed);
+    return resolveActiveLibraryID() || 0;
+  };
 
   const {
     inputBox,
@@ -4274,6 +4284,7 @@ export function setupHandlers(
     inlineEditCleanup?.();
     setInlineEditCleanup(null);
     setInlineEditTarget(null);
+    clearForcedSkill();
     closePaperPicker();
     closePromptMenu();
     closeResponseMenu();
@@ -4397,6 +4408,7 @@ export function setupHandlers(
     inlineEditCleanup?.();
     setInlineEditCleanup(null);
     setInlineEditTarget(null);
+    clearForcedSkill();
     closePaperPicker();
     closePromptMenu();
     closeResponseMenu();
@@ -7637,9 +7649,16 @@ export function setupHandlers(
   if (isNoteSession()) {
     void refreshGlobalHistoryHeader();
   } else if (isPaperMode()) {
-    void switchPaperConversation().catch((err) => {
-      ztoolkit.log("LLM: Failed to restore paper conversation session", err);
-    });
+    // In the standalone window, mountChatPanel's own async IIFE handles
+    // conversation loading.  The parameter-less auto-fire would race with it
+    // and resolve to a different (default) conversation, overwriting the
+    // explicitly targeted one.
+    const isStandalone = panelRoot.dataset.standalone === "true";
+    if (!isStandalone) {
+      void switchPaperConversation().catch((err) => {
+        ztoolkit.log("LLM: Failed to restore paper conversation session", err);
+      });
+    }
   } else {
     void refreshGlobalHistoryHeader();
   }
@@ -7978,7 +7997,7 @@ export function setupHandlers(
       option.setAttribute("aria-selected", idx === actionPickerActiveIndex ? "true" : "false");
       option.tabIndex = -1;
       const titleEl = createElement(ownerDoc, "div", "llm-action-picker-title", {
-        textContent: formatActionLabel(action.name),
+        textContent: action.name,
       });
       const descEl = createElement(ownerDoc, "div", "llm-action-picker-description", {
         textContent: action.description,
@@ -8008,10 +8027,12 @@ export function setupHandlers(
       closeSlashMenu();
       return;
     }
-    // Agent mode: render filtered agent actions into slash menu
+    // Agent mode: render agent actions first (creates section labels),
+    // then skills (inserts between agent actions and base actions)
     if (getCurrentRuntimeMode() === "agent") {
       const query = token.query.toLowerCase().trim();
       renderAgentActionsInSlashMenu(query);
+      renderSkillsInSlashMenu(query);
     }
     if (!isFloatingMenuOpen(slashMenu)) {
       closeRetryModelMenu();
@@ -8031,12 +8052,30 @@ export function setupHandlers(
   };
 
   // ── Action HITL panel ──────────────────────────────────────────────────────
+  /**
+   * Refreshes the `data-has-action-card` attribute on the panel root so CSS
+   * can restore chat-mode shell sizing when a card is present on the start
+   * page. Called whenever a card is added or removed.
+   */
+  const syncHasActionCardAttr = () => {
+    if (!panelRoot) return;
+    const hasCard = !!chatBox?.querySelector(
+      ".llm-action-inline-card, .llm-action-progress-card",
+    );
+    if (hasCard) {
+      panelRoot.dataset.hasActionCard = "true";
+    } else {
+      delete panelRoot.dataset.hasActionCard;
+    }
+  };
+
   const closeActionHitlPanel = () => {
     if (actionHitlPanel) {
       actionHitlPanel.style.display = "none";
       actionHitlPanel.innerHTML = "";
     }
     chatBox?.querySelector(".llm-action-inline-card")?.remove();
+    syncHasActionCardAttr();
   };
 
   const showActionHitlCard = (requestId: string, action: AgentPendingAction): Promise<AgentConfirmationResolution> => {
@@ -8054,8 +8093,97 @@ export function setupHandlers(
         wrapper.appendChild(card);
         chatBox.appendChild(wrapper);
         chatBox.scrollTop = chatBox.scrollHeight;
+        syncHasActionCardAttr();
       }
     });
+  };
+
+  /**
+   * Returns a controller for a persistent "action in progress" indicator
+   * rendered inside the chat thread.  The indicator surfaces the current
+   * action's step label + the bouncing-dots animation used during assistant
+   * streaming, so users can see that work is happening during long
+   * network-bound steps (e.g. audit_library's per-item metadata fetch).
+   */
+  const createActionProgressIndicator = (actionName: string) => {
+    const ownerDoc = body.ownerDocument;
+    let element: HTMLDivElement | null = null;
+    let stepText: HTMLDivElement | null = null;
+    let summaryText: HTMLDivElement | null = null;
+
+    const ensureMounted = () => {
+      if (!ownerDoc || !chatBox) return;
+      if (element && element.isConnected) return;
+      chatBox.querySelector(".llm-action-progress-card")?.remove();
+      const wrapper = ownerDoc.createElement("div");
+      wrapper.className = "llm-action-progress-card";
+
+      const header = ownerDoc.createElement("div");
+      header.className = "llm-action-progress-header";
+      const title = ownerDoc.createElement("div");
+      title.className = "llm-action-progress-title";
+      title.textContent = `${formatActionLabel(actionName)}`;
+      const typing = ownerDoc.createElement("div");
+      typing.className = "llm-typing llm-action-progress-typing";
+      typing.innerHTML =
+        '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';
+      header.append(title, typing);
+      wrapper.appendChild(header);
+
+      const step = ownerDoc.createElement("div");
+      step.className = "llm-action-progress-step";
+      step.textContent = "Starting…";
+      wrapper.appendChild(step);
+      stepText = step;
+
+      const summary = ownerDoc.createElement("div");
+      summary.className = "llm-action-progress-summary";
+      summary.textContent = "";
+      wrapper.appendChild(summary);
+      summaryText = summary;
+
+      chatBox.appendChild(wrapper);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      element = wrapper;
+      syncHasActionCardAttr();
+    };
+
+    // Mount right away so the user sees feedback before the first step event.
+    ensureMounted();
+
+    return {
+      setStep(stepName: string, index: number, total: number) {
+        ensureMounted();
+        if (stepText) {
+          stepText.textContent = `${stepName} (${index}/${total})`;
+        }
+        if (summaryText) {
+          summaryText.textContent = "";
+        }
+      },
+      setSummary(summary: string) {
+        ensureMounted();
+        if (summaryText) summaryText.textContent = summary;
+      },
+      hide() {
+        if (element && element.isConnected) {
+          element.remove();
+        }
+        element = null;
+        stepText = null;
+        summaryText = null;
+        syncHasActionCardAttr();
+      },
+      remove() {
+        if (element && element.isConnected) {
+          element.remove();
+        }
+        element = null;
+        stepText = null;
+        summaryText = null;
+        syncHasActionCardAttr();
+      },
+    };
   };
 
   // ── Action launch form ─────────────────────────────────────────────────────
@@ -8077,8 +8205,13 @@ export function setupHandlers(
   const buildActionInput = (actionName: string, schema: object, extraFields: Record<string, string>): Record<string, unknown> => {
     const input: Record<string, unknown> = { ...extraFields };
     const s = schema as { required?: string[] };
-    if (s.required?.includes("itemId") && item) {
-      input.itemId = item.id;
+    if (s.required?.includes("itemId")) {
+      // Portal items carry the conversation key as `id`, not the real Zotero
+      // item ID. Resolve to the base paper first so tools receive a real ID.
+      const realItem = resolveCurrentPaperBaseItem() || item;
+      if (realItem?.id) {
+        input.itemId = realItem.id;
+      }
     }
     return input;
   };
@@ -8172,8 +8305,13 @@ export function setupHandlers(
       input = parsedInput;
       // Auto-fill itemId from context if needed
       const s = action.inputSchema as { required?: string[] };
-      if (s.required?.includes("itemId") && item && !input.itemId) {
-        input.itemId = item.id;
+      if (s.required?.includes("itemId") && !input.itemId) {
+        // Portal items carry the conversation key as `id`, not the real Zotero
+        // item ID. Resolve to the base paper first so tools receive a real ID.
+        const realItem = resolveCurrentPaperBaseItem() || item;
+        if (realItem?.id) {
+          input.itemId = realItem.id;
+        }
       }
     } else {
       const needsInput = getNeedsUserInputFields(action.name, action.inputSchema);
@@ -8188,15 +8326,36 @@ export function setupHandlers(
       input = buildActionInput(action.name, action.inputSchema, extraFields);
     }
     if (status) setStatus(status, `Running: ${formatActionLabel(action.name)}…`, "ready");
+    const progressIndicator = createActionProgressIndicator(action.name);
     try {
       const agentApi = getAgentApi();
+      const selectedProfile = getSelectedProfile();
+      const actionLlmConfig = selectedProfile
+        ? {
+            model: selectedProfile.model,
+            apiBase: selectedProfile.apiBase,
+            apiKey: selectedProfile.apiKey,
+            authMode: selectedProfile.authMode,
+            providerProtocol: selectedProfile.providerProtocol,
+          }
+        : undefined;
       const result = await agentApi.runAction(action.name, input, {
         confirmationMode: "native_ui",
+        llm: actionLlmConfig,
         onProgress: (event) => {
-          if (event.type === "step_start" && status) {
-            setStatus(status, `${event.step} (${event.index}/${event.total})`, "ready");
-          } else if (event.type === "step_done" && event.summary && status) {
-            setStatus(status, event.summary, "ready");
+          if (event.type === "step_start") {
+            progressIndicator.setStep(event.step, event.index, event.total);
+            if (status) {
+              setStatus(status, `${event.step} (${event.index}/${event.total})`, "ready");
+            }
+          } else if (event.type === "step_done") {
+            if (event.summary) {
+              progressIndicator.setSummary(event.summary);
+              if (status) setStatus(status, event.summary, "ready");
+            }
+          } else if (event.type === "confirmation_required") {
+            // HITL card takes over; hide the indicator until work resumes.
+            progressIndicator.hide();
           }
         },
         requestConfirmation: (requestId, pendingAction) =>
@@ -8214,7 +8373,60 @@ export function setupHandlers(
     } catch (err) {
       ztoolkit.log("LLM: action picker run error", err);
       if (status) setStatus(status, `Error: ${String(err)}`, "error");
+    } finally {
+      progressIndicator.remove();
     }
+  };
+
+  // ── Forced skill state (from slash menu skill selection) ────────────────
+  /** The skill ID force-selected from the slash menu, if any. */
+  let forcedSkillId: string | null = null;
+  /** Badge element for the forced skill, rendered in the compose area. */
+  let forcedSkillBadge: HTMLElement | null = null;
+
+  const clearForcedSkill = (): void => {
+    forcedSkillId = null;
+    forcedSkillBadge = null;
+    const row = body.querySelector("#llm-command-row");
+    if (row) {
+      row.removeAttribute("data-active");
+      row.classList.remove("llm-command-row--skill");
+    }
+    if (inputBox.dataset.originalPlaceholder !== undefined) {
+      inputBox.placeholder = inputBox.dataset.originalPlaceholder;
+      delete inputBox.dataset.originalPlaceholder;
+    }
+  };
+
+  const handleSkillSelection = (skill: AgentSkill): void => {
+    clearForcedSkill();
+    clearCommandChip();
+    forcedSkillId = skill.id;
+
+    // Ensure agent mode
+    if (getCurrentRuntimeMode() !== "agent" && getAgentModeEnabled()) {
+      setCurrentRuntimeMode("agent");
+    }
+
+    // Populate the command row above the textarea
+    const row = body.querySelector("#llm-command-row");
+    const badgeEl = body.querySelector("#llm-command-row-badge");
+    if (!row || !badgeEl) return;
+
+    badgeEl.textContent = `/${skill.id}`;
+    row.classList.add("llm-command-row--skill");
+    row.setAttribute("data-active", "");
+    forcedSkillBadge = row as HTMLElement;
+
+    if (inputBox.dataset.originalPlaceholder === undefined) {
+      inputBox.dataset.originalPlaceholder = inputBox.placeholder;
+    }
+    inputBox.placeholder = "";
+    inputBox.value = "";
+    inputBox.focus({ preventScroll: true });
+    const EvtCtor =
+      (inputBox.ownerDocument?.defaultView as any)?.Event ?? Event;
+    inputBox.dispatchEvent(new EvtCtor("input", { bubbles: true }));
   };
 
   // ── Inline command badge state ──────────────────────────────────────────
@@ -8226,12 +8438,12 @@ export function setupHandlers(
   /** Removes the inline command badge from the textarea and restores state. */
   const clearCommandChip = (): void => {
     activeCommandAction = null;
-    if (activeCommandBadge) {
-      activeCommandBadge.remove();
-      activeCommandBadge = null;
+    activeCommandBadge = null;
+    const row = body.querySelector("#llm-command-row");
+    if (row) {
+      row.removeAttribute("data-active");
+      row.classList.remove("llm-command-row--skill");
     }
-    // Reset the text-indent we added to make room for the badge
-    inputBox.style.textIndent = "";
     // Restore original placeholder
     if (inputBox.dataset.originalPlaceholder !== undefined) {
       inputBox.placeholder = inputBox.dataset.originalPlaceholder;
@@ -8242,44 +8454,29 @@ export function setupHandlers(
   /**
    * Creates an inline command badge inside the textarea area.
    * The badge is positioned at the textarea's first-line text start position,
-   * and the textarea's text-indent is increased to flow around it.
+   * and the textarea's padding-left is increased to flow around it.
    * The badge is atomic — removed entirely via its x button or Backspace.
    */
   const insertCommandToken = (action: ActionPickerItem): void => {
+    clearForcedSkill();
     clearCommandChip();
     activeCommandAction = action;
-    const ownerDoc = body.ownerDocument;
-    // The compose area wraps the textarea and has position: relative
-    const composeArea = inputBox.closest(".llm-compose-area") || inputBox.parentElement;
-    if (!ownerDoc || !composeArea) return;
 
-    // Create the inline badge element
-    const badge = ownerDoc.createElement("div");
-    badge.className = "llm-command-inline";
-    badge.title = action.description;
-    badge.textContent = `/${action.name}`;
+    // Populate the command row above the textarea
+    const row = body.querySelector("#llm-command-row");
+    const badgeEl = body.querySelector("#llm-command-row-badge");
+    if (!row || !badgeEl) return;
 
-    // Position the badge at the textarea's text start position.
-    // Use computed style to get exact padding/border values.
-    const cs = ownerDoc.defaultView?.getComputedStyle(inputBox);
-    const padTop = cs ? parseFloat(cs.paddingTop) : 12;
-    const padLeft = cs ? parseFloat(cs.paddingLeft) : 14;
-    const borderTop = cs ? parseFloat(cs.borderTopWidth) : 1;
-    const borderLeft = cs ? parseFloat(cs.borderLeftWidth) : 1;
-    badge.style.top = `${inputBox.offsetTop + borderTop + padTop}px`;
-    badge.style.left = `${inputBox.offsetLeft + borderLeft + padLeft}px`;
-    composeArea.appendChild(badge);
-    activeCommandBadge = badge;
-
-    // Measure the badge width and set text-indent to push textarea text past it
-    const badgeWidth = badge.offsetWidth;
-    inputBox.style.textIndent = `${badgeWidth + 6}px`; // badge width + gap
+    badgeEl.textContent = `/${action.name}`;
+    row.classList.remove("llm-command-row--skill");
+    row.setAttribute("data-active", "");
+    activeCommandBadge = row as HTMLElement;
 
     // Save original placeholder and update hint
     if (inputBox.dataset.originalPlaceholder === undefined) {
       inputBox.dataset.originalPlaceholder = inputBox.placeholder;
     }
-    inputBox.placeholder = ""; // the badge itself serves as context
+    inputBox.placeholder = "";
     inputBox.value = "";
     inputBox.focus({ preventScroll: true });
     const EvtCtor = (inputBox.ownerDocument?.defaultView as any)?.Event ?? Event;
@@ -8449,7 +8646,100 @@ export function setupHandlers(
     void executeAgentAction(action, input);
   };
 
-  /** Prepends filtered system-specific actions into the slash menu. */
+  /** Prepends filtered skills into the slash menu (agent mode only). */
+  const renderSkillsInSlashMenu = (query: string = "") => {
+    const list = slashMenu?.querySelector(".llm-action-picker-list");
+    if (!list) return;
+    const ownerDoc = body.ownerDocument;
+    if (!ownerDoc) return;
+
+    list
+      .querySelectorAll("[data-slash-skill-item]")
+      .forEach((el: Element) => el.remove());
+
+    const allSkills = getAllSkills();
+    if (!allSkills.length) return;
+
+    const filtered = query
+      ? allSkills.filter(
+          (s: AgentSkill) =>
+            s.id.toLowerCase().includes(query) ||
+            s.description.toLowerCase().includes(query),
+        )
+      : allSkills;
+
+    if (!filtered.length) return;
+
+    const baseAnchor =
+      list.querySelector("[data-slash-section='base']") ||
+      list.querySelector("[data-slash-base-item]") ||
+      null;
+
+    const mkSkillEl = (tag: string, cls: string): HTMLElement => {
+      const el = ownerDoc.createElement(tag);
+      el.className = cls;
+      el.setAttribute("data-slash-skill-item", "true");
+      return el;
+    };
+
+    const sectionLabel = mkSkillEl("div", "llm-slash-menu-section");
+    sectionLabel.setAttribute("aria-hidden", "true");
+    sectionLabel.textContent = t("Skills");
+    list.insertBefore(sectionLabel, baseAnchor);
+
+    filtered.forEach((skill: AgentSkill) => {
+      const btn = mkSkillEl(
+        "button",
+        "llm-action-picker-item",
+      ) as HTMLButtonElement;
+      btn.type = "button";
+      btn.title = skill.description || skill.id;
+
+      const titleEl = ownerDoc.createElement("span");
+      titleEl.className = "llm-action-picker-title";
+      titleEl.textContent = skill.id;
+
+      const descEl = ownerDoc.createElement("span");
+      descEl.className = "llm-action-picker-description";
+      descEl.textContent = skill.description;
+
+      const badgeLabel =
+        skill.source === "system"
+          ? "System"
+          : skill.source === "customized"
+            ? "Customized"
+            : "Personal";
+      const badgeEl = ownerDoc.createElement("span");
+      badgeEl.className = "llm-action-picker-badge";
+      badgeEl.textContent = t(badgeLabel);
+
+      btn.append(titleEl, descEl, badgeEl);
+      btn.addEventListener("click", (e: Event) => {
+        e.preventDefault();
+        e.stopPropagation();
+        consumeActiveActionToken();
+        closeSlashMenu();
+        handleSkillSelection(skill);
+      });
+
+      list.insertBefore(btn, baseAnchor);
+    });
+  };
+
+  /**
+   * Extracts the first sentence of a description for compact slash-menu
+   * display. Falls back to the first ~80 chars if no sentence boundary is
+   * found. Preserves the full text as a tooltip.
+   */
+  const firstSentence = (text: string): string => {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    const match = /^(.+?[.!?])(?:\s|$)/.exec(normalized);
+    if (match) return match[1];
+    if (normalized.length <= 80) return normalized;
+    return `${normalized.slice(0, 77).trimEnd()}...`;
+  };
+
   const renderAgentActionsInSlashMenu = (query: string = "") => {
     clearAgentSlashItems();
     const ownerDoc = body.ownerDocument;
@@ -8542,18 +8832,33 @@ export function setupHandlers(
             a.description.toLowerCase().includes(query),
         )
       : allActions;
+    const baseAnchor = list.querySelector("[data-slash-base-item]") || null;
+    const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
+    baseLabel.setAttribute("aria-hidden", "true");
+    baseLabel.setAttribute("data-slash-section", "base");
+    baseLabel.textContent = t("Base actions");
+    list.insertBefore(baseLabel, baseAnchor);
     const agentLabel = mkAgentEl("div", "llm-slash-menu-section");
     agentLabel.setAttribute("aria-hidden", "true");
     agentLabel.textContent = t("Agent actions");
-    list.insertBefore(agentLabel, firstBase);
+    list.insertBefore(agentLabel, baseLabel);
     filtered.forEach((action) => {
       const btn = mkAgentEl("button", "llm-action-picker-item") as HTMLButtonElement;
       btn.type = "button";
       btn.title = action.description;
       const titleEl = ownerDoc.createElement("span");
       titleEl.className = "llm-action-picker-title";
-      titleEl.textContent = formatActionLabel(action.name);
-      btn.append(titleEl);
+      titleEl.textContent = action.name;
+      // Inline description matching the skills menu pattern — single-line
+      // ellipsized via .llm-action-picker-description CSS; hover reveals
+      // the full description via btn.title. We show just the first sentence
+      // because action.description is typically a multi-sentence
+      // paragraph written for the LLM, and single-line truncation on the
+      // full text often cuts mid-word or reveals nothing meaningful.
+      const descEl = ownerDoc.createElement("span");
+      descEl.className = "llm-action-picker-description";
+      descEl.textContent = firstSentence(action.description);
+      btn.append(titleEl, descEl);
       btn.addEventListener("click", (e: Event) => {
         e.preventDefault();
         e.stopPropagation();
@@ -8561,12 +8866,8 @@ export function setupHandlers(
         closeSlashMenu();
         void insertCommandToken(action);
       });
-      list.insertBefore(btn, firstBase);
+      list.insertBefore(btn, baseLabel);
     });
-    const baseLabel = mkAgentEl("div", "llm-slash-menu-section");
-    baseLabel.setAttribute("aria-hidden", "true");
-    baseLabel.textContent = t("Base actions");
-    list.insertBefore(baseLabel, firstBase);
   };
 
   /** Selects an action from the (legacy) action picker by index. */
@@ -9673,7 +9974,15 @@ export function setupHandlers(
       inputBox.focus({ preventScroll: true });
     });
 
+    /** Auto-resize the textarea to fit its content, up to max-height. */
+    const autoResizeInput = (): void => {
+      inputBox.style.height = "auto";
+      const max = 220; // matches CSS max-height
+      inputBox.style.height = `${Math.min(inputBox.scrollHeight, max)}px`;
+    };
+
     inputBox.addEventListener("input", () => {
+      autoResizeInput();
       persistDraftInputForCurrentConversation();
       schedulePaperPickerSearch();
       scheduleActionPickerTrigger();
@@ -9682,6 +9991,20 @@ export function setupHandlers(
       schedulePaperPickerSearch();
       scheduleActionPickerTrigger();
     });
+
+    // Command row dismiss button (reuses .llm-paper-context-clear class)
+    const commandRowClearBtn = body.querySelector("#llm-command-row .llm-paper-context-clear");
+    if (commandRowClearBtn) {
+      commandRowClearBtn.addEventListener("click", () => {
+        if (forcedSkillId) {
+          clearForcedSkill();
+        } else if (activeCommandAction) {
+          clearCommandChip();
+        }
+        inputBox.focus({ preventScroll: true });
+      });
+    }
+
     inputBox.addEventListener("keyup", (e: Event) => {
       const key = (e as KeyboardEvent).key;
       if (
@@ -9874,6 +10197,12 @@ export function setupHandlers(
         }
       : undefined,
     editStaleStatusText: EDIT_STALE_STATUS_TEXT,
+    consumeForcedSkillIds: () => {
+      if (!forcedSkillId) return undefined;
+      const ids = [forcedSkillId];
+      clearForcedSkill();
+      return ids;
+    },
   });
   const { clearCurrentConversation } = createClearConversationController({
     getConversationKey: () => (item ? getConversationKey(item) : null),
@@ -10355,14 +10684,27 @@ export function setupHandlers(
         return;
       }
     }
-    // Backspace at position 0 with active command badge: remove the badge
-    if (ke.key === "Backspace" && activeCommandAction) {
-      if (inputBox.selectionStart === 0 && inputBox.selectionEnd === 0) {
+    // Backspace at position 0 with active badge: remove it
+    if (ke.key === "Backspace" && inputBox.selectionStart === 0 && inputBox.selectionEnd === 0) {
+      if (forcedSkillId) {
+        e.preventDefault();
+        e.stopPropagation();
+        clearForcedSkill();
+        return;
+      }
+      if (activeCommandAction) {
         e.preventDefault();
         e.stopPropagation();
         clearCommandChip();
         return;
       }
+    }
+    // Escape with active skill badge: remove the badge
+    if (ke.key === "Escape" && forcedSkillId) {
+      e.preventDefault();
+      e.stopPropagation();
+      clearForcedSkill();
+      return;
     }
     // Escape with active command badge: remove the badge
     if (ke.key === "Escape" && activeCommandAction) {

@@ -500,7 +500,7 @@ export function getStandaloneLibraryChatStartPageHtml(): string {
             <li><strong>偏好设置 → MinerU</strong>：将 PDF 解析为 Markdown + 图片<span class="llm-rec-reason">（MD 是 LLM 的语言；可以利用解析出的图片写出更好的笔记；节省 token）</span></li>
             <li>启用 <strong>Agent 模式</strong>，让助手自主完成研究任务</li>
             <li>使用<strong>高智能模型</strong>：如 Codex、GPT-5.4 等</li>
-            <li>在偏好设置中配置 <strong>Obsidian 路径</strong>（设置 → Agent 标签页）</li>
+            <li>在偏好设置中配置<strong>笔记目录路径</strong>（设置 → Agent 标签页）</li>
           </ol>
         </div>
       </div>
@@ -516,7 +516,7 @@ export function getStandaloneLibraryChatStartPageHtml(): string {
           <li><strong>Preferences → MinerU</strong>: parse your PDFs to Markdown + images<span class="llm-rec-reason"> (MD is the language of LLMs; enables better notes with parsed images; saves tokens)</span></li>
           <li>Activate <strong>Agent mode</strong> for autonomous research</li>
           <li>Use an <strong>intelligent model</strong>: Codex, GPT-5.4, or similar high-intelligence models</li>
-          <li>Set up <strong>Obsidian path</strong> in Preferences (Settings → Agent tab)</li>
+          <li>Set up <strong>Notes directory</strong> in Preferences (Settings → Agent tab)</li>
         </ol>
       </div>
     </div>

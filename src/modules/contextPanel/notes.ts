@@ -381,17 +381,48 @@ function injectCitationLinksIntoNoteHtml(
   return result;
 }
 
+/**
+ * Canonical footer appended to every saved note (whether saved via the
+ * chat UI's "Save as note" button, via the chat-history export, or via a
+ * skill). Centralised so the footer text matches across every entry path
+ * — and so the skill's footer instruction in `src/agent/skills/write-note.md`
+ * stays textually identical to the UI-appended one.
+ */
+const NOTE_FOOTER_TEXT = "Written by LLM-for-Zotero.";
+const NOTE_FOOTER_HTML = `<hr/><p>${NOTE_FOOTER_TEXT}</p>`;
+
+/**
+ * Strips an already-present `Written by LLM-for-Zotero[ plugin][.]` footer
+ * from the end of markdown text produced by the LLM. When the agent follows
+ * the `write-note` skill, its output already ends with the canonical
+ * footer — we must remove it before the UI adds its own, otherwise the
+ * rendered note shows the footer twice (the bug this fixes).
+ *
+ * Tolerates minor formatting variation: optional preceding `---` separator,
+ * optional trailing period, optional "plugin" suffix, and surrounding
+ * whitespace.
+ */
+function stripTrailingPluginFooter(text: string): string {
+  if (!text) return text;
+  return text.replace(
+    /\s*(?:\n+-{3,}\s*)?\n+\s*Written by LLM-for-Zotero(?:\s+plugin)?\.?\s*$/i,
+    "",
+  );
+}
+
 function buildAssistantNoteHtml(
   contentText: string,
   modelName: string,
   paperContexts?: PaperContextRef[],
 ): string {
-  const response = sanitizeText(contentText || "").trim();
+  const response = sanitizeText(
+    stripTrailingPluginFooter(contentText || ""),
+  ).trim();
   const source = modelName.trim() || "unknown";
   const timestamp = getCurrentLocalTimestamp();
   let responseHtml = renderRawNoteHtml(response);
   responseHtml = injectCitationLinksIntoNoteHtml(responseHtml, paperContexts);
-  return `<p><strong>${escapeNoteHtml(timestamp)}</strong></p><p><strong>${escapeNoteHtml(source)}:</strong></p><div>${responseHtml}</div><hr/><p>Written by LLM-for-Zotero plugin</p>`;
+  return `<p><strong>${escapeNoteHtml(timestamp)}</strong></p><p><strong>${escapeNoteHtml(source)}:</strong></p><div>${responseHtml}</div>${NOTE_FOOTER_HTML}`;
 }
 
 function renderChatMessageHtmlForNote(text: string): string {
@@ -623,7 +654,13 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
   const htmlBlocks: string[] = [];
   let lastUserPaperContexts: PaperContextRef[] | undefined;
   for (const msg of messages) {
-    const text = sanitizeText(msg.text || "").trim();
+    // Strip any skill-added footer from assistant messages so chat-history
+    // exports don't end up with "Written by LLM-for-Zotero." repeated for
+    // every saved-as-note assistant turn plus the UI wrapper's own footer.
+    const rawText = msg.text || "";
+    const textPreStripped =
+      msg.role === "assistant" ? stripTrailingPluginFooter(rawText) : rawText;
+    const text = sanitizeText(textPreStripped).trim();
     const selectedTextContexts = normalizeSelectedTextsForNote(
       msg.selectedTexts,
       msg.selectedText,
@@ -716,7 +753,7 @@ export function buildChatHistoryNotePayload(messages: Message[]): {
   const bodyHtml = htmlBlocks.join("<hr/>");
   return {
     noteText,
-    noteHtml: `<p><strong>Chat history saved at ${escapeNoteHtml(timestamp)}</strong></p><div>${bodyHtml}</div><hr/><p>Written by LLM-for-Zotero plugin</p>`,
+    noteHtml: `<p><strong>Chat history saved at ${escapeNoteHtml(timestamp)}</strong></p><div>${bodyHtml}</div>${NOTE_FOOTER_HTML}`,
   };
 }
 

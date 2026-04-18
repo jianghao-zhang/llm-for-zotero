@@ -136,6 +136,8 @@ type SendFlowControllerDeps = {
   autoUnlockGlobalChat: () => void;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
   editStaleStatusText: string;
+  /** Consume forced skill IDs from slash menu selection. Returns the IDs and clears state. */
+  consumeForcedSkillIds?: () => string[] | undefined;
   // [webchat]
   hasActivePdfFullTextPapers?: (item: Zotero.Item, paperContexts?: any[]) => boolean;
   hasUploadedPdfInCurrentWebChatConversation?: () => boolean;
@@ -477,6 +479,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       )
       : false;
 
+    const forcedSkillIds = deps.consumeForcedSkillIds?.();
     const sendTask = deps.sendQuestion({
       body: deps.body,
       item,
@@ -501,6 +504,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       attachments: selectedFiles.length ? selectedFiles : undefined,
       runtimeMode,
       pdfModePaperKeys: pdfModeKeySet.size > 0 ? pdfModeKeySet : undefined,
+      forcedSkillIds,
       pdfUploadSystemMessages: pdfUploadSystemMessages.length ? pdfUploadSystemMessages : undefined,
       webchatSendPdf,
       webchatForceNewChat,

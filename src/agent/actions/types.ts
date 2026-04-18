@@ -5,6 +5,21 @@ import type { LibraryQueryService } from "../services/libraryQueryService";
 import type { LibraryReadService } from "../services/libraryReadService";
 import type { LibraryMutationService } from "../services/libraryMutationService";
 import type { LiteratureSearchService } from "../services/literatureSearchService";
+import type { ModelProviderAuthMode } from "../../utils/modelProviders";
+import type { ProviderProtocol } from "../../utils/providerProtocol";
+
+/**
+ * LLM credentials that an action can use to call the model directly
+ * (e.g. to propose per-item tag or collection suggestions).  When absent,
+ * actions fall back to non-AI behavior.
+ */
+export type ActionLLMConfig = {
+  model: string;
+  apiBase: string;
+  apiKey?: string;
+  authMode?: ModelProviderAuthMode;
+  providerProtocol?: ProviderProtocol;
+};
 
 /**
  * How confirmations (HITL) are handled when an action's tool calls require user approval.
@@ -49,6 +64,13 @@ export type ActionExecutionContext = {
     requestId: string,
     action: AgentPendingAction,
   ) => Promise<AgentConfirmationResolution>;
+  /**
+   * Optional LLM credentials.  When present, actions can call `callLLM()` to
+   * generate per-item suggestions (tags, collections, etc.).  When absent,
+   * actions must fall back to non-AI behavior so they still work in contexts
+   * (e.g. the MCP server) where no user-side model is configured.
+   */
+  llm?: ActionLLMConfig;
 };
 
 export type ActionResult<TOutput = unknown> =

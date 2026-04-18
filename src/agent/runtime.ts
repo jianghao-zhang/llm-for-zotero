@@ -21,7 +21,8 @@ import type { AgentModelAdapter } from "./model/adapter";
 import { resolveAgentLimits } from "./model/limits";
 import { classifyRequest } from "./model/requestClassifier";
 import { buildAgentInitialMessages } from "./model/messageBuilder";
-import { getMatchedSkillIds } from "./skills";
+import { detectSkillIntent } from "./model/skillClassifier";
+import { getAllSkills, getMatchedSkillIds } from "./skills";
 import {
   appendAgentRunEvent,
   createAgentRun,
@@ -302,12 +303,30 @@ export class AgentRuntime {
       modelProviderLabel: request.modelProviderLabel,
     };
     const toolsUsedThisTurn: string[] = [];
+    // Intent/skill selection runs ONCE per user turn, before the system
+    // prompt is built. The flow:
+    //   1. detectSkillIntent — one LLM call against the primary model,
+    //      returns which skills the user's message is asking for. Falls
+    //      back to regex `match:` patterns on any error.
+    //   2. getMatchedSkillIds — unions classifier output with explicit
+    //      forcedSkillIds (slash menu) and runtime-context forces
+    //      (e.g. notes-directory nickname mention).
+    //   3. matchedSkills is threaded into buildAgentInitialMessages so
+    //      only those skills' instructions ship in the system prompt,
+    //      and emitted as trace events for UI visibility.
+    // The resulting system prompt is reused across every model inference
+    // inside the agent loop — no per-step classification cost.
+    const classifiedSkillIds = await detectSkillIntent(
+      request,
+      getAllSkills(),
+    );
+    const matchedSkills = getMatchedSkillIds(request, classifiedSkillIds);
     const messages = (await buildAgentInitialMessages(
       request,
       this.registry.listToolDefinitionsForRequest(request),
+      matchedSkills,
     )) as AgentModelMessage[];
 
-    const matchedSkills = getMatchedSkillIds(request);
     for (const skillId of matchedSkills) {
       await emit({ type: "status", text: `Skill activated: ${skillId}` });
     }

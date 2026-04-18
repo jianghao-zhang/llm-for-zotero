@@ -1,10 +1,28 @@
 ---
 id: library-analysis
+description: Analyze your whole library or collection with statistics
+version: 1
 match: /\b(summarize|summarise|summary|overview|statistics|stats|analyze|analyse|breakdown|survey|audit)\b.*\b(library|collection|all papers|all items|my papers|entire|whole)\b/i
 match: /\b(my library|whole library|entire library|all my)\b.*\b(summarize|summarise|summary|overview|analyze|analyse|statistics|stats|topics?|themes?|trends?|breakdown)\b/i
 match: /\bhow many\b.*\b(papers?|items?|articles?|books?)\b/i
 match: /\b(distribution|breakdown|histogram)\b.*\b(years?|tags?|authors?|types?|collections?|journals?|venues?)\b/i
 ---
+
+<!--
+  SKILL: Library Analysis
+
+  This skill activates when you ask for statistics or analysis of your
+  library or collection (e.g., "how many papers do I have?", "analyze
+  my library", "breakdown by year").
+
+  You can customize:
+  - Analysis dimensions: change what statistics are gathered
+  - Script templates: modify the Zotero script used for aggregation
+  - Output format: adjust how results are presented
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Library / Collection Analysis — use zotero_script(mode:'read')
 

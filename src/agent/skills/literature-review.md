@@ -1,10 +1,28 @@
 ---
 id: literature-review
+description: Structured scientific review with thematic synthesis and citations
+version: 1
 match: /\b(literature review|lit review|review of (the )?literature)\b/i
 match: /\b(conduct|write|create|generate|draft)\b.*\b(review|synthesis|survey)\b.*\b(on|about|regarding|of)\b/i
 match: /\bconduct a literature review\b/i
 match: /\b(review|synthesize|survey)\b.*\b(research|papers?|studies|findings?|literature)\b/i
 ---
+
+<!--
+  SKILL: Literature Review
+
+  This skill activates when you ask for a literature review or synthesis
+  (e.g., "conduct a literature review on X", "synthesize the research").
+
+  You can customize:
+  - Discovery phase: change how papers are found and selected
+  - Review structure: modify sections (intro, themes, gaps, conclusion)
+  - Citation format: adjust citation style
+  - Depth vs breadth: change how many papers are deep-read vs skimmed
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Literature Review — structured scientific review workflow
 

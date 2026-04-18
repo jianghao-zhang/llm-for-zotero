@@ -267,6 +267,7 @@ describe("primitive agent tools", function () {
         ],
       },
       [],
+      [],
     );
     const systemText =
       typeof messages[0]?.content === "string" ? messages[0].content : "";
@@ -294,6 +295,7 @@ describe("primitive agent tools", function () {
         createQueryLibraryTool({} as never),
         createApplyTagsTool({} as never),
       ],
+      [],
     );
     const systemText =
       typeof messages[0]?.content === "string" ? messages[0].content : "";
@@ -502,6 +504,7 @@ describe("primitive agent tools", function () {
         },
       },
       [],
+      [],
     );
     const userMessage = messages[messages.length - 1];
     const userText =
@@ -534,6 +537,7 @@ describe("primitive agent tools", function () {
           noteText: "Current note body",
         },
       },
+      [],
       [],
     );
     const userMessage = messages[messages.length - 1];

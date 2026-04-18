@@ -443,29 +443,29 @@
           </html:div>
         </html:div>
 
-        <!-- ── Obsidian Integration ── -->
+        <!-- ── Notes Directory ── -->
         <html:div style="border: 1px solid var(--stroke-secondary, #c8c8c8); border-radius: 8px; overflow: hidden; margin-top: 6px;">
           <html:div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: Field; color: FieldText; border-bottom: 1px solid var(--stroke-secondary, #c8c8c8);">
-            <html:span style="font-weight: 700; font-size: 13px;">Obsidian Integration</html:span>
+            <html:span style="font-weight: 700; font-size: 13px;">Notes Directory</html:span>
           </html:div>
           <html:div style="display: flex; flex-direction: column; gap: 12px; padding: 14px;">
             <html:span style="font-size: 11.5px; color: var(--fill-secondary, #888); line-height: 1.5;">
-              Write notes from your Zotero papers directly to your Obsidian vault.
-              Configure the vault path and default folder below.
+              Configure a local directory for saving notes as files.
+              Note format and templates are managed through skills — type <html:code>/</html:code> in chat to see available skills, or edit skill files directly.
             </html:span>
 
-            <!-- Vault Path -->
+            <!-- Nickname -->
             <html:div style="display: flex; flex-direction: column; gap: 2px;">
               <html:label
-                for="__addonRef__-obsidian-vault-path"
+                for="__addonRef__-notes-dir-nickname"
                 style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
               >
-                Vault Path
+                Nickname
               </html:label>
               <html:input
-                id="__addonRef__-obsidian-vault-path"
+                id="__addonRef__-notes-dir-nickname"
                 type="text"
-                placeholder="/path/to/vault or C:\path\to\vault"
+                placeholder="e.g., Obsidian, Logseq, My Notes"
                 style="
                   width: 100%;
                   padding: 6px 10px;
@@ -478,7 +478,35 @@
                 "
               ></html:input>
               <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                Absolute path to your Obsidian vault folder
+                How you refer to this directory — the agent will recognize it when you mention it
+              </html:span>
+            </html:div>
+
+            <!-- Notes Directory Path -->
+            <html:div style="display: flex; flex-direction: column; gap: 2px;">
+              <html:label
+                for="__addonRef__-obsidian-vault-path"
+                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
+              >
+                Notes Directory Path
+              </html:label>
+              <html:input
+                id="__addonRef__-obsidian-vault-path"
+                type="text"
+                placeholder="/path/to/notes or C:\path\to\notes"
+                style="
+                  width: 100%;
+                  padding: 6px 10px;
+                  font-size: 13px;
+                  border: 1px solid var(--stroke-secondary, #c8c8c8);
+                  border-radius: 6px;
+                  box-sizing: border-box;
+                  background: Field;
+                  color: FieldText;
+                "
+              ></html:input>
+              <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
+                Absolute path to the directory where notes are saved as files
               </html:span>
             </html:div>
 
@@ -534,7 +562,7 @@
                 "
               ></html:input>
               <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888); margin-top: 1px;">
-                Subfolder for copied figures and images (e.g., assets, attachments)
+                Folder for images, relative to vault root (e.g., assets, Notes/imgs)
               </html:span>
             </html:div>
 
@@ -563,52 +591,6 @@
               ></html:span>
             </html:div>
 
-            <!-- Note Template -->
-            <html:div style="display: flex; flex-direction: column; gap: 2px;">
-              <html:label
-                for="__addonRef__-obsidian-note-template"
-                style="display: block; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit); margin-bottom: 2px;"
-              >
-                Note Template
-              </html:label>
-              <html:textarea
-                id="__addonRef__-obsidian-note-template"
-                rows="8"
-                style="
-                  width: 100%;
-                  padding: 6px 10px;
-                  font-size: 12px;
-                  font-family: monospace;
-                  border: 1px solid var(--stroke-secondary, #c8c8c8);
-                  border-radius: 6px;
-                  box-sizing: border-box;
-                  background: Field;
-                  color: FieldText;
-                  resize: vertical;
-                "
-              ></html:textarea>
-              <html:div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
-                <html:span style="font-size: 10.5px; color: var(--fill-secondary, #888);">
-                  Customize the template used when writing notes to Obsidian. Use {{title}}, {{date}}, {{content}} as placeholders.
-                </html:span>
-                <html:button
-                  id="__addonRef__-obsidian-reset-template"
-                  type="button"
-                  style="
-                    padding: 2px 8px;
-                    font-size: 11px;
-                    background: transparent;
-                    color: var(--color-accent, #2563eb);
-                    border: none;
-                    cursor: pointer;
-                    white-space: nowrap;
-                    text-decoration: underline;
-                  "
-                >
-                  Reset to Default
-                </html:button>
-              </html:div>
-            </html:div>
           </html:div>
         </html:div>
       </html:div>

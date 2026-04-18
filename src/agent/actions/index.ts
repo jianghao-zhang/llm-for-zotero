@@ -27,4 +27,5 @@ export type {
   ActionProgressEvent,
   ActionResult,
   ActionServices,
+  ActionLLMConfig,
 } from "./types";

@@ -806,23 +806,21 @@ export function registerReaderSelectionTracking() {
             sentinel = fallback;
           }
 
-          // Use MutationObserver to detect when the sentinel is removed from
-          // the DOM (popup dismissed), instead of polling with recursive
-          // setTimeout (which could accumulate up to 600 timer callbacks).
-          const observerTarget = sentinel;
-          const parentEl = observerTarget.parentNode;
-          if (parentEl) {
-            const observer = new MutationObserver(() => {
-              if (!observerTarget.isConnected) {
-                observer.disconnect();
+          // Clean up cache when the selection popup is dismissed.
+          // MutationObserver proved unreliable in this Gecko context, so use a
+          // delayed connectivity check instead.
+          const sentinelEl: HTMLSpanElement | null = sentinel;
+          const win = sentinelEl?.ownerDocument?.defaultView;
+          if (win && sentinelEl) {
+            win.setTimeout(() => {
+              if (!sentinelEl.isConnected) {
                 for (const key of keys) {
                   if (recentReaderSelectionCache.get(key) === selectedText) {
                     recentReaderSelectionCache.delete(key);
                   }
                 }
               }
-            });
-            observer.observe(parentEl, { childList: true });
+            }, 30_000);
           }
         } catch (_err) {
           ztoolkit.log("LLM: selection popup sentinel failed", _err);

@@ -2862,6 +2862,7 @@ export type BuildAgentRuntimeRequestParams = {
   fullTextPaperContexts: PaperContextRef[];
   attachments: ChatAttachment[] | undefined;
   screenshots: string[] | undefined;
+  forcedSkillIds?: string[];
   effectiveRequestConfig: EffectiveRequestConfig;
   history: ChatMessage[];
 };
@@ -2930,6 +2931,7 @@ async function buildAgentRuntimeRequest(
     fullTextPaperContexts: enrichedFullTextPapers,
     attachments: params.attachments,
     screenshots: params.screenshots,
+    forcedSkillIds: params.forcedSkillIds,
     model: params.effectiveRequestConfig.model,
     apiBase: params.effectiveRequestConfig.apiBase,
     apiKey: params.effectiveRequestConfig.apiKey,
@@ -3053,6 +3055,7 @@ async function sendAgentQuestion(opts: {
   fullTextPaperContexts?: PaperContextRef[];
   attachments?: ChatAttachment[];
   pdfModePaperKeys?: Set<string>;
+  forcedSkillIds?: string[];
   pdfUploadSystemMessages?: string[];
 }): Promise<void> {
   await sendAgentTurn(opts, buildAgentEngineDeps(opts.item));
@@ -3089,6 +3092,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       fullTextPaperContexts,
       attachments,
       pdfModePaperKeys,
+      forcedSkillIds: opts.forcedSkillIds,
       pdfUploadSystemMessages: opts.pdfUploadSystemMessages,
     });
     return;
@@ -3370,6 +3374,9 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       await persistAssistantOnce();
       restoreRequestUIIdle(body, conversationKey, thisRequestId);
       setStatusSafely(errMsg, "error");
+    } finally {
+      setAbortController(conversationKey, null);
+      setPendingRequestId(conversationKey, 0);
     }
     return;
   }

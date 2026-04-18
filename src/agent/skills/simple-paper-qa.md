@@ -1,11 +1,28 @@
 ---
 id: simple-paper-qa
+description: Answer open-ended natural-language questions about the content of one specific paper (what it argues, how it compares to X, what figure 3 means). Not for Zotero operations like editing metadata, tagging, or running scripts.
+version: 1
 match: /\b(what|who|when|where|which|tell me|explain)\b.*\b(about|paper|article|study|wrote|author|publish|year|journal|abstract|topic|field|contribution|finding|claim|conclusion|argue)\b/i
 match: /\bsummar(y|ize|ise)\b/i
 match: /\b(what is|what are|what does|what do)\b.*\b(this paper|this article|this study|the paper|the article)\b/i
 match: /\b(main|key|central|primary|core)\b.*\b(finding|result|contribution|argument|claim|conclusion|point|idea|theme|message|takeaway)\b/i
 match: /\b(tldr|tl;dr|gist|overview|brief)\b/i
 ---
+
+<!--
+  SKILL: Paper Q&A
+
+  This skill activates for general questions about a paper (e.g., "what is
+  this paper about?", "summarize this", "who are the authors?").
+
+  You can customize:
+  - Reading strategy: change when MinerU vs read_paper is used
+  - Escalation rules: adjust when to do deeper retrieval
+  - Answer style: modify how responses are structured
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Simple Paper Q&A — one read, then answer
 

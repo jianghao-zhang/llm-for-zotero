@@ -1,10 +1,27 @@
 ---
 id: compare-papers
+description: Compare multiple papers by theme, methodology, or findings
+version: 1
 match: /\b(compare|contrast|difference|differ|similarities|similarity)\b.*\b(papers?|articles?|studies|works?)\b/i
 match: /\b(papers?|articles?|studies)\b.*\b(compare|contrast|difference|differ|similarities|similarity)\b/i
 match: /\bcomparative\s+(analysis|review|study)\b/i
 match: /\bhow\s+(does|do|is|are)\b.*\bdiffer\b/i
 ---
+
+<!--
+  SKILL: Compare Papers
+
+  This skill activates when you ask to compare multiple papers
+  (e.g., "compare these two papers", "what are the differences?").
+
+  You can customize:
+  - Comparison dimensions: change what aspects are compared
+  - Reading depth: adjust how deeply each paper is read
+  - Output format: modify the comparison structure
+
+  Your changes are preserved across plugin updates.
+  To reset to default, delete this file — it will be recreated on next restart.
+-->
 
 ## Comparing Multiple Papers — use targeted reading, not full text
 

@@ -56,16 +56,15 @@ import {
   setMineruExcludePatterns,
 } from "../utils/mineruConfig";
 import {
-  getObsidianVaultPath,
-  setObsidianVaultPath,
-  getObsidianTargetFolder,
-  setObsidianTargetFolder,
-  getObsidianAttachmentsFolder,
-  setObsidianAttachmentsFolder,
-  getObsidianNoteTemplate,
-  setObsidianNoteTemplate,
-  getDefaultObsidianNoteTemplate,
-} from "../utils/obsidianConfig";
+  getNotesDirectoryPath,
+  setNotesDirectoryPath,
+  getNotesDirectoryFolder,
+  setNotesDirectoryFolder,
+  getNotesDirectoryAttachmentsFolder,
+  setNotesDirectoryAttachmentsFolder,
+  getNotesDirectoryNickname,
+  setNotesDirectoryNickname,
+} from "../utils/notesDirectoryConfig";
 import { testMineruConnection } from "../utils/mineruClient";
 import { registerMineruManagerScript } from "./mineruManagerScript";
 import {
@@ -2023,79 +2022,69 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  // ── Obsidian settings ────────────────────────────────────────────
+  // ── Notes Directory settings ─────────────────────────────────────
   {
-    const obsVaultPathInput = doc.querySelector(
+    const notesDirNicknameInput = doc.querySelector(
+      `#${config.addonRef}-notes-dir-nickname`,
+    ) as HTMLInputElement | null;
+    const notesDirPathInput = doc.querySelector(
       `#${config.addonRef}-obsidian-vault-path`,
     ) as HTMLInputElement | null;
-    const obsTargetFolderInput = doc.querySelector(
+    const notesDirFolderInput = doc.querySelector(
       `#${config.addonRef}-obsidian-target-folder`,
     ) as HTMLInputElement | null;
-    const obsTemplateInput = doc.querySelector(
-      `#${config.addonRef}-obsidian-note-template`,
-    ) as HTMLTextAreaElement | null;
-    const obsTestBtn = doc.querySelector(
+    const notesDirTestBtn = doc.querySelector(
       `#${config.addonRef}-obsidian-test`,
     ) as HTMLButtonElement | null;
-    const obsTestStatus = doc.querySelector(
+    const notesDirTestStatus = doc.querySelector(
       `#${config.addonRef}-obsidian-test-status`,
     ) as HTMLSpanElement | null;
-    const obsResetTemplateBtn = doc.querySelector(
-      `#${config.addonRef}-obsidian-reset-template`,
-    ) as HTMLButtonElement | null;
 
-    if (obsVaultPathInput) {
-      obsVaultPathInput.value = getObsidianVaultPath();
-      obsVaultPathInput.addEventListener("input", () => {
-        setObsidianVaultPath(obsVaultPathInput.value);
+    if (notesDirNicknameInput) {
+      notesDirNicknameInput.value = getNotesDirectoryNickname();
+      notesDirNicknameInput.addEventListener("input", () => {
+        setNotesDirectoryNickname(notesDirNicknameInput.value);
       });
     }
-    if (obsTargetFolderInput) {
-      obsTargetFolderInput.value = getObsidianTargetFolder();
-      obsTargetFolderInput.addEventListener("input", () => {
-        setObsidianTargetFolder(obsTargetFolderInput.value);
+    if (notesDirPathInput) {
+      notesDirPathInput.value = getNotesDirectoryPath();
+      notesDirPathInput.addEventListener("input", () => {
+        setNotesDirectoryPath(notesDirPathInput.value);
       });
     }
-    const obsAttachmentsFolderInput = doc.querySelector(
+    if (notesDirFolderInput) {
+      notesDirFolderInput.value = getNotesDirectoryFolder();
+      notesDirFolderInput.addEventListener("input", () => {
+        setNotesDirectoryFolder(notesDirFolderInput.value);
+      });
+    }
+    const notesDirAttachmentsInput = doc.querySelector(
       `#${config.addonRef}-obsidian-attachments-folder`,
     ) as HTMLInputElement | null;
-    if (obsAttachmentsFolderInput) {
-      obsAttachmentsFolderInput.value = getObsidianAttachmentsFolder();
-      obsAttachmentsFolderInput.addEventListener("input", () => {
-        setObsidianAttachmentsFolder(obsAttachmentsFolderInput.value);
+    if (notesDirAttachmentsInput) {
+      notesDirAttachmentsInput.value = getNotesDirectoryAttachmentsFolder();
+      notesDirAttachmentsInput.addEventListener("input", () => {
+        setNotesDirectoryAttachmentsFolder(notesDirAttachmentsInput.value);
       });
     }
-    if (obsTemplateInput) {
-      const stored = getObsidianNoteTemplate();
-      obsTemplateInput.value = stored || getDefaultObsidianNoteTemplate();
-      obsTemplateInput.addEventListener("input", () => {
-        setObsidianNoteTemplate(obsTemplateInput.value);
-      });
-    }
-    if (obsResetTemplateBtn && obsTemplateInput) {
-      obsResetTemplateBtn.addEventListener("click", () => {
-        setObsidianNoteTemplate("");
-        obsTemplateInput.value = getDefaultObsidianNoteTemplate();
-      });
-    }
-    if (obsTestBtn && obsTestStatus) {
-      obsTestBtn.addEventListener("click", async () => {
-        const vaultPath = (obsVaultPathInput?.value || "").trim();
-        if (!vaultPath) {
-          obsTestStatus.style.display = "inline";
-          obsTestStatus.style.color = "#dc2626";
-          obsTestStatus.textContent = t("Enter a vault path first");
+    if (notesDirTestBtn && notesDirTestStatus) {
+      notesDirTestBtn.addEventListener("click", async () => {
+        const dirPath = (notesDirPathInput?.value || "").trim();
+        if (!dirPath) {
+          notesDirTestStatus.style.display = "inline";
+          notesDirTestStatus.style.color = "#dc2626";
+          notesDirTestStatus.textContent = t("Enter a directory path first");
           return;
         }
-        const targetFolder = (obsTargetFolderInput?.value || "").trim();
+        const targetFolder = (notesDirFolderInput?.value || "").trim();
         const fullPath = targetFolder
-          ? joinLocalPath(vaultPath, targetFolder)
-          : vaultPath;
+          ? joinLocalPath(dirPath, targetFolder)
+          : dirPath;
 
-        obsTestBtn.disabled = true;
-        obsTestStatus.style.display = "inline";
-        obsTestStatus.style.color = "var(--fill-secondary, #888)";
-        obsTestStatus.textContent = "Testing...";
+        notesDirTestBtn.disabled = true;
+        notesDirTestStatus.style.display = "inline";
+        notesDirTestStatus.style.color = "var(--fill-secondary, #888)";
+        notesDirTestStatus.textContent = "Testing...";
 
         try {
           const IOUtils = (globalThis as any).IOUtils;
@@ -2110,14 +2099,14 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           const bytes = new TextEncoder().encode("test");
           await IOUtils.write(testFile, bytes);
           await IOUtils.remove(testFile);
-          obsTestStatus.style.color = "#16a34a";
-          obsTestStatus.textContent = t("Write access verified");
+          notesDirTestStatus.style.color = "#16a34a";
+          notesDirTestStatus.textContent = t("Write access verified");
         } catch (err) {
-          obsTestStatus.style.color = "#dc2626";
-          obsTestStatus.textContent =
+          notesDirTestStatus.style.color = "#dc2626";
+          notesDirTestStatus.textContent =
             err instanceof Error ? err.message : String(err);
         } finally {
-          obsTestBtn.disabled = false;
+          notesDirTestBtn.disabled = false;
         }
       });
     }

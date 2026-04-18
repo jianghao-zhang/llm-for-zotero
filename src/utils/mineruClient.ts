@@ -584,7 +584,6 @@ async function runCurl(args: string[], timeoutMs = 300000): Promise<number> {
       const proc = await Subprocess.call({
         command: curlPath,
         arguments: args,
-        environment: {},
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const drain = async (pipe: any) => {

@@ -149,7 +149,7 @@ describe("self-contained agent tool", function () {
 
   it("adds tool-local guidance into the shared initial messages", async function () {
     const tool = createSelfContainedTestTool();
-    const messages = await buildAgentInitialMessages(request, [tool]);
+    const messages = await buildAgentInitialMessages(request, [tool], []);
     assert.equal(messages[0]?.role, "system");
     assert.include(
       typeof messages[0]?.content === "string" ? messages[0].content : "",

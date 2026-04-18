@@ -73,6 +73,18 @@ export function hasMeaningfulWebChatAnswerText(
   ) {
     return false;
   }
+  // Chinese equivalents (DeepSeek Chinese UI)
+  const raw = normalizeWebChatAnswerText(text);
+  if (raw === "思考中" || raw === "思考中..." || raw === "深度思考" || raw === "停止思考") {
+    return false;
+  }
+  if (
+    /^已深度思考/.test(raw) || /^已思考/.test(raw) || /^思考了/.test(raw) ||
+    /^正在阅读/.test(raw) || /^正在搜索/.test(raw) ||
+    /^正在分析/.test(raw) || /^正在浏览/.test(raw)
+  ) {
+    return false;
+  }
   return true;
 }
 

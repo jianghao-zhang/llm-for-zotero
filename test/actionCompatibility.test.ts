@@ -345,4 +345,146 @@ describe("action compatibility after tool refactors", function () {
       noteId: undefined,
     });
   });
+
+  it("discover_related surfaces failure when every search mode fails", async function () {
+    const registry = new AgentToolRegistry();
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => ({
+          results: {
+            "101": {
+              metadata: {
+                title: "Seed Paper",
+                fields: { DOI: "10.1000/seed" },
+                creators: [],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    // Every fetchMode call throws → registry returns ok: false for all three.
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => {
+          throw new Error("OpenAlex unreachable");
+        },
+      ),
+    );
+
+    const { ctx } = createActionContext(registry);
+    const result = await discoverRelatedAction.execute({ itemId: 101 }, ctx);
+
+    assert.isFalse(
+      result.ok,
+      "action must fail when every search mode fails (currently collapses to empty-success)",
+    );
+  });
+
+  it("discover_related does not import when the load_more iteration cap is hit", async function () {
+    const registry = new AgentToolRegistry();
+    let importCalls = 0;
+
+    registry.register(
+      createStubTool(
+        {
+          name: "read_library",
+          description: "read",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => ({
+          results: {
+            "101": {
+              metadata: {
+                title: "Seed Paper",
+                fields: { DOI: "10.1000/seed" },
+                creators: [],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "search_literature_online",
+          description: "search",
+          inputSchema: { type: "object" },
+          mutability: "read",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => ({
+          results: [
+            { title: "P1", doi: "10.1000/p1", authors: [], year: 2024 },
+          ],
+        }),
+      ),
+    );
+
+    registry.register(
+      createStubTool(
+        {
+          name: "import_identifiers",
+          description: "import",
+          inputSchema: { type: "object" },
+          mutability: "write",
+          requiresConfirmation: false,
+        },
+        (args) => ({ ok: true, value: args as Record<string, unknown> }),
+        async () => {
+          importCalls += 1;
+          return {
+            result: { succeeded: 1, failed: 0, itemIds: [501] },
+          };
+        },
+      ),
+    );
+
+    // User keeps clicking "Load more" forever → loop must exit via the
+    // iteration cap and NOT fall through into the import branch.
+    const { ctx } = createActionContext(registry, async () => ({
+      approved: true,
+      actionId: "load_more",
+      data: { selectedPaperIds: ["recommendations-1"] },
+    }));
+
+    const result = await discoverRelatedAction.execute({ itemId: 101 }, ctx);
+
+    assert.isTrue(result.ok);
+    if (!result.ok) return;
+    assert.equal(
+      result.output.imported,
+      0,
+      "must not import after load_more cap — no explicit import confirmation",
+    );
+    assert.equal(
+      importCalls,
+      0,
+      "import_identifiers must not be called when cap is hit",
+    );
+  });
 });
