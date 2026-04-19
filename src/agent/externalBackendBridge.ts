@@ -666,9 +666,12 @@ async function runExternalBridgeTurn(
         const requestId = line.event.requestId;
         const registerResolver = () => {
           params.registerPendingConfirmation?.(requestId, (resolution) => {
-            void params
-              .resolveExternalConfirmation?.(requestId, resolution)
-              .then(async (result) => {
+            const syncConfirmation = async (attempt = 0): Promise<void> => {
+              try {
+                const result = await params.resolveExternalConfirmation?.(
+                  requestId,
+                  resolution,
+                );
                 if (!result) return;
                 if (debugModeEnabled) {
                   await params.onEvent?.({
@@ -683,6 +686,11 @@ async function runExternalBridgeTurn(
                   });
                 }
                 if (!result.ok || !result.accepted) {
+                  if (attempt < 2) {
+                    await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+                    await syncConfirmation(attempt + 1);
+                    return;
+                  }
                   await params.onEvent?.({
                     type: "status",
                     text: `Confirmation sync failed for ${requestId}: ${result.errorMessage || "not accepted by backend"}`,
@@ -701,8 +709,12 @@ async function runExternalBridgeTurn(
                   actionId: resolution.actionId,
                   data: resolution.data,
                 });
-              })
-              .catch(async (error) => {
+              } catch (error) {
+                if (attempt < 2) {
+                  await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+                  await syncConfirmation(attempt + 1);
+                  return;
+                }
                 await params.onEvent?.({
                   type: "status",
                   text: `Confirmation sync failed for ${requestId}: ${
@@ -711,7 +723,9 @@ async function runExternalBridgeTurn(
                 });
                 // Re-register so the user can retry approval instead of getting stuck.
                 registerResolver();
-              });
+              }
+            };
+            void syncConfirmation();
           });
         };
         registerResolver();
@@ -1078,9 +1092,11 @@ function signatureForContextEnvelope(envelope: ContextEnvelope): string {
   });
 }
 
-async function fetchExternalTools(baseUrl: string): Promise<ExternalToolDescriptor[]> {
-  const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/tools?settingSources=${sources}`, {
+async function fetchExternalTools(
+  baseUrl: string,
+  encodedSources: string,
+): Promise<ExternalToolDescriptor[]> {
+  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/tools?settingSources=${encodedSources}`, {
     method: "GET",
     headers: { Accept: "application/json" },
   });
@@ -1118,11 +1134,11 @@ async function fetchExternalTools(baseUrl: string): Promise<ExternalToolDescript
 
 async function fetchExternalEfforts(
   baseUrl: string,
+  encodedSources: string,
   model?: string,
 ): Promise<ExternalEffortInfo> {
-  const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
   const modelParam = model?.trim() ? `&model=${encodeURIComponent(model.trim())}` : "";
-  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/efforts?settingSources=${sources}${modelParam}`, {
+  const response = await fetch(`${normalizeBaseUrl(baseUrl)}/efforts?settingSources=${encodedSources}${modelParam}`, {
     method: "GET",
     headers: { Accept: "application/json" },
   });
@@ -1137,10 +1153,12 @@ async function fetchExternalEfforts(
   };
 }
 
-async function fetchExternalCommands(baseUrl: string): Promise<ExternalSlashCommandDescriptor[]> {
+async function fetchExternalCommands(
+  baseUrl: string,
+  encodedSources: string,
+): Promise<ExternalSlashCommandDescriptor[]> {
   try {
-    const sources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
-    const response = await fetch(`${normalizeBaseUrl(baseUrl)}/commands?settingSources=${sources}`, {
+    const response = await fetch(`${normalizeBaseUrl(baseUrl)}/commands?settingSources=${encodedSources}`, {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -1376,10 +1394,10 @@ export function createExternalBackendBridgeRuntime(options: {
   let slashCommandsCacheExpiresAt = 0;
   let slashCommandsRefreshInFlight: Promise<void> | null = null;
   const cachedEffortsByModel = new Map<string, ExternalEffortInfo>();
-  const SLASH_COMMANDS_CACHE_TTL_MS = 60_000;
+  const SLASH_COMMANDS_CACHE_TTL_MS = 5 * 60_000;
   const conversationContextSignature = new Map<number, string>();
   const conversationScopeByKey = new Map<number, BridgeScope>();
-  const TOOL_CACHE_TTL_MS = 60_000;
+  const TOOL_CACHE_TTL_MS = 5 * 60_000;
   let lastToolConfigKey = "";
 
   const resolveToolConfigKey = (): string => {
@@ -1412,7 +1430,8 @@ export function createExternalBackendBridgeRuntime(options: {
     }
     refreshInFlight = (async () => {
       try {
-        cachedTools = await fetchExternalTools(bridgeUrl);
+        const encodedSources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
+        cachedTools = await fetchExternalTools(bridgeUrl, encodedSources);
         cacheExpiresAt = Date.now() + TOOL_CACHE_TTL_MS;
       } catch (error) {
         ztoolkit.log("LLM Agent: Failed to refresh external actions", error);
@@ -1432,7 +1451,8 @@ export function createExternalBackendBridgeRuntime(options: {
     if (cachedEffortsByModel.has(key)) {
       return cachedEffortsByModel.get(key)?.efforts || [];
     }
-    const info = await fetchExternalEfforts(bridgeUrl, model);
+    const encodedSources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
+    const info = await fetchExternalEfforts(bridgeUrl, encodedSources, model);
     cachedEffortsByModel.set(key, info);
     return info.efforts;
   };
@@ -1462,8 +1482,9 @@ export function createExternalBackendBridgeRuntime(options: {
     }
     slashCommandsRefreshInFlight = (async () => {
       try {
+        const encodedSources = encodeURIComponent(getClaudeSettingSourcesByPref().join(","));
         dbg("refreshSlashCommands: fetching from adapter", { bridgeUrl });
-        cachedSlashCommands = await fetchExternalCommands(bridgeUrl);
+        cachedSlashCommands = await fetchExternalCommands(bridgeUrl, encodedSources);
         slashCommandsCacheExpiresAt = Date.now() + SLASH_COMMANDS_CACHE_TTL_MS;
         dbg("refreshSlashCommands: fetched successfully", { count: cachedSlashCommands.length });
       } catch (error) {

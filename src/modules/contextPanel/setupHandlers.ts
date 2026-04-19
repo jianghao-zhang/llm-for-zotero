@@ -351,6 +351,7 @@ import {
   getSelectedClaudeRuntimeEntry,
   listClaudeEfforts,
   rememberClaudeConversationSelection,
+  refreshClaudeBridgeActions,
   resolveRememberedClaudeConversationKey,
   refreshClaudeSlashCommands,
   touchClaudeConversation,
@@ -721,6 +722,19 @@ export function setupHandlers(
       ? `<svg height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z" fill="#D97757" fill-rule="evenodd"></path></svg>`
       : `<svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"></path></svg>`;
   };
+  let claudeWarmupInFlight: Promise<void> | null = null;
+  const warmClaudeModeCaches = () => {
+    if (!isClaudeModeAvailable() || isNoteSession()) return;
+    if (claudeWarmupInFlight) return;
+    const coreRuntime = getCoreAgentRuntime();
+    claudeWarmupInFlight = Promise.allSettled([
+      refreshClaudeSlashCommands(coreRuntime, false),
+      refreshClaudeBridgeActions(coreRuntime, false),
+      listClaudeEfforts(coreRuntime, getSelectedClaudeRuntimeEntry().model),
+    ]).finally(() => {
+      claudeWarmupInFlight = null;
+    }).then(() => undefined);
+  };
   const switchConversationSystem = async (
     nextSystem: "upstream" | "claude_code",
     options?: { forceFresh?: boolean },
@@ -735,6 +749,9 @@ export function setupHandlers(
     currentConversationSystem = nextSystem;
     panelRoot.dataset.conversationSystem = nextSystem;
     updateClaudeSystemToggle();
+    if (nextSystem === "claude_code") {
+      warmClaudeModeCaches();
+    }
     if (isGlobalMode()) {
       if (forceFresh) {
         await createAndSwitchGlobalConversation(true);
@@ -778,6 +795,9 @@ export function setupHandlers(
     item = resolvedState.item || item;
     basePaperItem = resolvedState.basePaperItem || basePaperItem;
     syncConversationIdentity();
+    if (nextSystem === "claude_code") {
+      warmClaudeModeCaches();
+    }
     await ensureConversationLoaded(item as Zotero.Item);
     restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
@@ -1017,6 +1037,9 @@ export function setupHandlers(
     updateClaudeSystemToggle();
   };
   syncConversationIdentity();
+  if (getConversationSystem() === "claude_code") {
+    warmClaudeModeCaches();
+  }
 
   // Keep the agent mode toggle in sync when the preference is changed in the
   // Preferences window (which runs in a separate window context).

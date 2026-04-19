@@ -68,6 +68,7 @@ import {
 } from "../../claudeCode/projectSkills";
 import { getCoreAgentRuntime } from "../../agent";
 import {
+  getConversationSystemPref,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
   removeLastUsedClaudeGlobalConversationKey,
@@ -359,8 +360,11 @@ export function openStandaloneChat(options?: {
   if (!mainWin) return;
 
   const sourceItem = options?.initialItem || null;
-  const sourceConversationSystem =
-    resolveConversationSystemForItem(sourceItem) || "upstream";
+  const sourceConversationSystem = sourceItem
+    ? resolveConversationSystemForItem(sourceItem) || "upstream"
+    : getConversationSystemPref() === "claude_code"
+      ? "claude_code"
+      : "upstream";
   let currentConversationSystem: "upstream" | "claude_code" = sourceConversationSystem;
   const resolvedSourceState = resolveInitialPanelItemState(sourceItem, {
     conversationSystem: sourceConversationSystem,
@@ -1947,7 +1951,11 @@ export function openStandaloneChat(options?: {
       };
 
       const reloadClaudeProjectCommands = async () => {
-        await refreshClaudeSlashCommands(getCoreAgentRuntime(), true);
+        try {
+          await refreshClaudeSlashCommands(getCoreAgentRuntime(), true);
+        } catch (err) {
+          ztoolkit.log("LLM: Claude project command refresh failed", err);
+        }
       };
 
       const resolveSkillPopupSystem = (): "upstream" | "claude_code" =>
