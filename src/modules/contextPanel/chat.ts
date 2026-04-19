@@ -1591,20 +1591,20 @@ function mountClaudeRoseThreeLoader(host: HTMLElement, startedAt: number): void 
   path.setAttribute("stroke", "currentColor");
   path.setAttribute("stroke-linecap", "round");
   path.setAttribute("stroke-linejoin", "round");
-  path.setAttribute("stroke-width", "3.6");
-  path.setAttribute("opacity", "0.12");
+  path.setAttribute("stroke-width", "4.4");
+  path.setAttribute("opacity", "0.1");
   group.appendChild(path);
 
-  const particleCount = 28;
-  const trailSpan = 0.31;
-  const durationMs = 5300;
+  const particleCount = 85;
+  const trailSpan = 0.34;
+  const durationMs = 4600;
   const rotationDurationMs = 28000;
-  const pulseDurationMs = 4400;
-  const roseA = 9.2;
-  const roseABoost = 0.6;
-  const roseBreathBase = 0.72;
-  const roseBreathBoost = 0.28;
-  const roseScale = 3.25;
+  const pulseDurationMs = 4200;
+  const spiralR = 5.0;
+  const spiralr = 1.0;
+  const spiralScale = 2.2;
+  const spiralBreath = 0.45;
+  const spirald = 3.0;
   const particles = Array.from({ length: particleCount }, () => {
     const circle = doc.createElementNS(ROSE_LOADER_SVG_NS, "circle") as unknown as SVGCircleElement;
     circle.setAttribute("fill", "currentColor");
@@ -1625,16 +1625,20 @@ function mountClaudeRoseThreeLoader(host: HTMLElement, startedAt: number): void 
     -((elapsedMs % rotationDurationMs) / rotationDurationMs) * 360;
   const getPoint = (progress: number, detailScale: number) => {
     const t = progress * Math.PI * 2;
-    const r =
-      (roseA + roseABoost * detailScale) *
-      (roseBreathBase + roseBreathBoost * detailScale) *
-      Math.cos(3 * t);
+    const d = spirald + detailScale * 0.25;
+    const baseX =
+      (spiralR - spiralr) * Math.cos(t) +
+      d * Math.cos(((spiralR - spiralr) / spiralr) * t);
+    const baseY =
+      (spiralR - spiralr) * Math.sin(t) -
+      d * Math.sin(((spiralR - spiralr) / spiralr) * t);
+    const scale = spiralScale + detailScale * spiralBreath;
     return {
-      x: 50 + Math.cos(t) * r * roseScale,
-      y: 50 + Math.sin(t) * r * roseScale,
+      x: 50 + baseX * scale,
+      y: 50 + baseY * scale,
     };
   };
-  const buildPath = (detailScale: number, steps = 180) => {
+  const buildPath = (detailScale: number, steps = 480) => {
     let d = "";
     for (let index = 0; index <= steps; index += 1) {
       const point = getPoint(index / steps, detailScale);
@@ -1664,8 +1668,8 @@ function mountClaudeRoseThreeLoader(host: HTMLElement, startedAt: number): void 
       const particle = particles[index]!;
       particle.setAttribute("cx", point.x.toFixed(2));
       particle.setAttribute("cy", point.y.toFixed(2));
-      particle.setAttribute("r", (0.6 + fade * 1.8).toFixed(2));
-      particle.setAttribute("opacity", (0.08 + fade * 0.92).toFixed(3));
+      particle.setAttribute("r", (0.9 + fade * 2.7).toFixed(2));
+      particle.setAttribute("opacity", (0.04 + fade * 0.96).toFixed(3));
     }
     rafId = win.requestAnimationFrame(render);
   };
@@ -4678,10 +4682,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             roseLoader,
             msg.waitingAnimationStartedAt || msg.timestamp || Date.now(),
           );
-          const typingText = doc.createElement("span") as HTMLSpanElement;
-          typingText.className = "llm-typing-text";
-          typingText.textContent = "Claude is preparing the final response… ( •̀ᴗ•́ )✧";
-          typing.append(roseLoader, typingText);
+          typing.append(roseLoader);
         } else {
           typing.innerHTML =
             '<span class="llm-typing-dot"></span><span class="llm-typing-dot"></span><span class="llm-typing-dot"></span>';

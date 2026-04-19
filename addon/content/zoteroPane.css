@@ -4450,13 +4450,13 @@ label.llm-search-results-item:hover {
 }
 
 .llm-rose-loader {
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  color: #D77757;
+  color: #fff;
 }
 
 .llm-rose-loader-svg {
