@@ -186,6 +186,7 @@ export type AgentEngineDeps = {
     fallbackText?: string,
   ) => void;
   sanitizeText: (text: string) => string;
+  appendReasoningPart: (base: string | undefined, next?: string) => string;
 
   // Persistence
   persistConversationMessage: (
@@ -506,6 +507,22 @@ export async function sendAgentTurn(
           case "status":
             setStatusSafely(event.text, "sending");
             break;
+          case "reasoning": {
+            if (event.summary) {
+              assistantMessage.reasoningSummary = deps.appendReasoningPart(
+                assistantMessage.reasoningSummary,
+                event.summary,
+              );
+            }
+            if (event.details) {
+              assistantMessage.reasoningDetails = deps.appendReasoningPart(
+                assistantMessage.reasoningDetails,
+                event.details,
+              );
+            }
+            refreshChatSafely();
+            return;
+          }
           case "fallback":
             setStatusSafely(event.reason, "sending");
             break;
@@ -772,6 +789,22 @@ export async function retryAgentTurn(
           case "status":
             setStatusSafely(event.text, "sending");
             break;
+          case "reasoning": {
+            if (event.summary) {
+              assistantMessage.reasoningSummary = deps.appendReasoningPart(
+                assistantMessage.reasoningSummary,
+                event.summary,
+              );
+            }
+            if (event.details) {
+              assistantMessage.reasoningDetails = deps.appendReasoningPart(
+                assistantMessage.reasoningDetails,
+                event.details,
+              );
+            }
+            refreshChatSafely();
+            return;
+          }
           case "fallback":
             setStatusSafely(event.reason, "sending");
             break;

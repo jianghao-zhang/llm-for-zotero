@@ -109,16 +109,16 @@ function isAgentTraceRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readAgentTraceText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  if (typeof value !== "string") return null;
+  return value.trim() ? value : null;
 }
 
 function appendAgentTraceText(
   base: string | undefined,
   next: unknown,
 ): string | undefined {
-  const chunk =
-    typeof next === "string" && next.trim() ? sanitizeText(next) : null;
-  if (!chunk) return base;
+  const chunk = typeof next === "string" ? sanitizeText(next) : null;
+  if (!chunk || !chunk.trim()) return base;
   return `${base || ""}${chunk}`;
 }
 
@@ -2456,7 +2456,7 @@ export function buildAgentTraceDisplayItems(
           // Accumulate delta chunks; skip if already contained (dedup)
           const prev = existing.summary || "";
           if (!prev.includes(text)) {
-            existing.summary = prev + text;
+            existing.summary = appendAgentTraceText(existing.summary, text);
           }
         } else {
           const label =

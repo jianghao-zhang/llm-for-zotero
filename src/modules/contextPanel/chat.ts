@@ -185,7 +185,12 @@ function getAbortControllerCtor(): new () => AbortController {
 function appendReasoningPart(base: string | undefined, next?: string): string {
   const chunk = sanitizeText(next || "");
   if (!chunk) return base || "";
-  return `${base || ""}${chunk}`;
+  if (!base) return chunk;
+  const startsWithTightPunctuation = /^[,.;:!?%)}\]"'’”]/.test(chunk);
+  const needsSpacer =
+    !startsWithTightPunctuation &&
+    !(/[\s\n]$/.test(base) || /^[\s\n]/.test(chunk));
+  return needsSpacer ? `${base} ${chunk}` : `${base}${chunk}`;
 }
 
 function isReasoningExpandedByDefault(): boolean {
@@ -3037,6 +3042,7 @@ function buildAgentEngineDeps(currentItem?: Zotero.Item): AgentEngineDeps {
     waitForUiStep,
     finalizeCancelledAssistantMessage,
     sanitizeText,
+    appendReasoningPart,
     persistConversationMessage,
     updateStoredLatestUserMessage:
       updateStoredLatestUserMessageByConversation as AgentEngineDeps["updateStoredLatestUserMessage"],
@@ -4589,7 +4595,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
       const hasReasoningSummary = Boolean(msg.reasoningSummary?.trim());
       const hasReasoningDetails = Boolean(msg.reasoningDetails?.trim());
-      if (hasReasoningSummary || hasReasoningDetails) {
+      const showTopReasoningPanel =
+        (hasReasoningSummary || hasReasoningDetails) &&
+        msg.runMode !== "agent";
+      if (showTopReasoningPanel) {
         const details = doc.createElement("details") as HTMLDetailsElement;
         details.className = "llm-agent-reasoning";
         details.open = Boolean(msg.reasoningOpen);
