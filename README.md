@@ -380,7 +380,7 @@ The plugin ships with **8 built-in skills** covering common research workflows:
 3. Edit the `id`, regex `match` patterns, and instruction body in your text editor.
 4. Save — the skill loads immediately, no restart needed.
 
-Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`. Left-click any skill to edit it; right-click for *Show in file system* or *Delete*.
+Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`. Left-click any skill to edit it; right-click for _Show in file system_ or _Delete_.
 
 ---
 
@@ -432,7 +432,12 @@ Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`.
 
 ## Codex Auth Setup (ChatGPT Plus Subscribers)
 
-If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI — a great way to save on token costs.
+If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI - a great way to save on token costs.
+
+There are now two Codex-backed modes in the plugin:
+
+- **Codex Auth** - Uses the ChatGPT/Codex Responses endpoint directly.
+- **Codex App Server** - Spawns the local `codex app-server` CLI and talks to it over stdio (the official way to use Codex in third-party apps).
 
 _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for contributions to this feature._
 
@@ -440,9 +445,11 @@ _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for cont
 
 1. **Install the Codex CLI** (one-time):
    - **macOS:** Install [Node.js 18+](https://nodejs.org/) or `brew install node`, then:
+
      ```bash
      npm install -g @openai/codex
      ```
+
    - **macOS (Homebrew alternative):** `brew install --cask codex` (no Node.js needed).
    - **Windows/Linux:** Install [Node.js 18+](https://nodejs.org/), then `npm install -g @openai/codex`.
 
@@ -455,8 +462,8 @@ _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for cont
    A browser window opens — sign in with your ChatGPT Plus account. Credentials are saved to `~/.codex/auth.json`.
 
 3. **Configure the plugin** (Zotero → Preferences → llm-for-zotero):
-   - **Auth Mode** → `codex auth`
-   - **API URL** → `https://chatgpt.com/backend-api/codex/responses`
+   - **Auth Mode** → `Codex Auth` or `Codex App Server`
+   - **API URL** → `https://chatgpt.com/backend-api/codex/responses` for `Codex Auth`, or leave blank for `Codex App Server`
    - **Model** → a Codex model (e.g. `gpt-5.4`)
    - Click **Test Connection** to verify.
 
