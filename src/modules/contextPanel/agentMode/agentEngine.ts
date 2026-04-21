@@ -35,6 +35,7 @@ import type { ReasoningConfig as LLMReasoningConfig } from "../../../utils/llmCl
 import type { ChatMessage } from "../../../utils/llmClient";
 import type { StoredChatMessage } from "../../../utils/chatStore";
 import type { Message } from "../types";
+import { isClaudeBlockStreamingEnabled } from "../../../claudeCode/prefs";
 
 // ---------------------------------------------------------------------------
 // Types for panel helpers (defined inline to avoid importing from chat.ts)
@@ -143,6 +144,16 @@ export type AgentEngineDeps = {
 
   // Data helpers
   ensureConversationLoaded: (item: Zotero.Item) => Promise<void>;
+  getConversationSystem: () => string;
+  accumulateSessionTokens: (conversationKey: number, delta: number) => number;
+  getContextUsageSnapshot: (conversationKey: number) => { contextTokens: number; contextWindow?: number } | undefined;
+  setContextUsageSnapshot: (conversationKey: number, snapshot: { contextTokens: number; contextWindow?: number }) => void;
+  setTokenUsage: (
+    el: HTMLElement,
+    sessionTokens: number,
+    contextWindow?: number,
+    gaugeEl?: HTMLElement | null,
+  ) => void;
   getConversationKey: (item: Zotero.Item) => number;
   buildLLMHistoryMessages: (history: Message[]) => ChatMessage[];
   buildAgentRuntimeRequest: (
@@ -316,6 +327,7 @@ export async function sendAgentTurn(
     : [];
 
   const historyForRun = deps.chatHistory.get(conversationKey) || [];
+  const isCompactCommand = /^\/compact(?:\s|$)/i.test(question.trim());
   const userMessage: Message = {
     role: "user",
     text: shownQuestion,
@@ -348,19 +360,21 @@ export async function sendAgentTurn(
     screenshotActiveIndex: 0,
     attachments: attachments?.length ? attachments : undefined,
   };
-  historyForRun.push(userMessage);
-  await deps.persistConversationMessage(conversationKey, {
-    role: "user",
-    text: userMessage.text,
-    timestamp: userMessage.timestamp,
-    runMode: "agent",
-    selectedText: userMessage.selectedText,
-    selectedTexts: userMessage.selectedTexts,
-    selectedTextSources: userMessage.selectedTextSources,
-    selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
-    screenshotImages: userMessage.screenshotImages,
-    attachments: userMessage.attachments,
-  });
+  if (!isCompactCommand) {
+    historyForRun.push(userMessage);
+    await deps.persistConversationMessage(conversationKey, {
+      role: "user",
+      text: userMessage.text,
+      timestamp: userMessage.timestamp,
+      runMode: "agent",
+      selectedText: userMessage.selectedText,
+      selectedTexts: userMessage.selectedTexts,
+      selectedTextSources: userMessage.selectedTextSources,
+      selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+      screenshotImages: userMessage.screenshotImages,
+      attachments: userMessage.attachments,
+    });
+  }
 
   const effectiveRequestConfig = deps.resolveEffectiveRequestConfig({
     item,
@@ -395,6 +409,8 @@ export async function sendAgentTurn(
   const { refreshChatSafely, setStatusSafely } =
     deps.createPanelUpdateHelpers(body, item, conversationKey, ui);
   const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
+  const scheduleQueueDrain =
+    (body as any).__llmScheduleClaudeQueueDrain as (() => void) | undefined;
   refreshChatSafely();
 
   await deps.ensureConversationLoaded(item);
@@ -450,9 +466,27 @@ export async function sendAgentTurn(
   if (!capabilities.toolCalls) {
     historyForRun.pop();
     await deps.sendChatFallback({
-      body, item, question, images, model, apiBase, apiKey, reasoning, advanced,
-      displayQuestion, selectedTexts, selectedTextSources, selectedTextPaperContexts,
-      selectedTextNoteContexts, paperContexts, fullTextPaperContexts, attachments,
+      body,
+      item,
+      question,
+      images,
+      model,
+      apiBase,
+      apiKey,
+      authMode,
+      providerProtocol,
+      modelEntryId,
+      modelProviderLabel,
+      reasoning,
+      advanced,
+      displayQuestion,
+      selectedTexts,
+      selectedTextSources,
+      selectedTextPaperContexts,
+      selectedTextNoteContexts,
+      paperContexts,
+      fullTextPaperContexts,
+      attachments,
       runtimeMode: "agent",
       skipAgentDispatch: true,
     });
@@ -463,6 +497,7 @@ export async function sendAgentTurn(
   const persistAssistantOnce = async () => {
     if (assistantPersisted) return;
     assistantPersisted = true;
+    const snapshot = deps.getContextUsageSnapshot?.(conversationKey);
     await deps.persistConversationMessage(conversationKey, {
       role: "assistant",
       text: assistantMessage.text,
@@ -472,6 +507,8 @@ export async function sendAgentTurn(
       modelName: assistantMessage.modelName,
       modelEntryId: assistantMessage.modelEntryId,
       modelProviderLabel: assistantMessage.modelProviderLabel,
+      contextTokens: snapshot?.contextTokens,
+      contextWindow: snapshot?.contextWindow,
     });
   };
   const markCancelled = async () => {
@@ -509,28 +546,64 @@ export async function sendAgentTurn(
         userMessage.agentRunId = runId;
         deps.agentRunTraceCache.set(runId, []);
         refreshChatSafely();
-        await deps.updateStoredLatestUserMessage(conversationKey, {
-          text: userMessage.text,
-          timestamp: userMessage.timestamp,
-          runMode: "agent",
-          agentRunId: runId,
-          selectedText: userMessage.selectedText,
-          selectedTexts: userMessage.selectedTexts,
-          selectedTextSources: userMessage.selectedTextSources,
-          selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
-          screenshotImages: userMessage.screenshotImages,
-          paperContexts: userMessage.paperContexts,
-          fullTextPaperContexts: userMessage.fullTextPaperContexts,
-          attachments: userMessage.attachments,
-        });
+        if (!isCompactCommand) {
+          await deps.updateStoredLatestUserMessage(conversationKey, {
+            text: userMessage.text,
+            timestamp: userMessage.timestamp,
+            runMode: "agent",
+            agentRunId: runId,
+            selectedText: userMessage.selectedText,
+            selectedTexts: userMessage.selectedTexts,
+            selectedTextSources: userMessage.selectedTextSources,
+            selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+            screenshotImages: userMessage.screenshotImages,
+            paperContexts: userMessage.paperContexts,
+            fullTextPaperContexts: userMessage.fullTextPaperContexts,
+            attachments: userMessage.attachments,
+          });
+        }
       },
       onEvent: async (event) => {
         if (assistantMessage.agentRunId) {
           pushTraceEvent(assistantMessage.agentRunId, event);
         }
         switch (event.type) {
+          case "provider_event":
+            break;
+          case "usage": {
+            if (ui.tokenUsageEl) {
+              const previous = deps.getContextUsageSnapshot?.(conversationKey);
+              const nextTokens = Math.max(0, Number(event.contextTokens) || 0);
+              const nextWindow =
+                typeof event.contextWindow === "number" && Number.isFinite(event.contextWindow)
+                  ? event.contextWindow
+                  : previous?.contextWindow;
+              const effectiveTokens =
+                nextTokens > 0
+                  ? nextTokens
+                  : event.contextWindowIsAuthoritative
+                    ? (previous?.contextTokens ?? 0)
+                    : 0;
+              deps.setContextUsageSnapshot?.(conversationKey, {
+                contextTokens: effectiveTokens,
+                contextWindow: nextWindow,
+              });
+              deps.setTokenUsage(
+                ui.tokenUsageEl,
+                effectiveTokens,
+                nextWindow,
+                body.querySelector("#llm-claude-context-gauge") as HTMLElement | null,
+              );
+            }
+            break;
+          }
           case "status":
-            if (!assistantMessage.agentRunId && assistantMessage.pendingAgentTraceEvents) {
+            const isCompactingStatus = /compacting context/i.test(event.text);
+            if (
+              !isCompactingStatus &&
+              !assistantMessage.agentRunId &&
+              assistantMessage.pendingAgentTraceEvents
+            ) {
               assistantMessage.pendingAgentTraceEvents.push({
                 runId: "pending",
                 seq: assistantMessage.pendingAgentTraceEvents.length + 1,
@@ -540,6 +613,10 @@ export async function sendAgentTurn(
               });
             }
             setStatusSafely(event.text, "sending");
+            if (isCompactingStatus) {
+              assistantMessage.pendingAgentTraceEvents = undefined;
+              queueRefresh();
+            }
             break;
           case "reasoning": {
             if (event.summary) {
@@ -558,20 +635,60 @@ export async function sendAgentTurn(
             return;
           }
           case "fallback":
+            if (assistantMessage.text === "Compacting context…") {
+              assistantMessage.text = "";
+            }
             setStatusSafely(event.reason, "sending");
             break;
-          case "message_delta":
+          case "message_delta": {
             assistantMessage.pendingFinalText =
               `${assistantMessage.pendingFinalText || ""}${deps.sanitizeText(event.text)}`;
+            assistantMessage.text = assistantMessage.pendingFinalText || assistantMessage.text;
+            queueRefresh();
             return;
+          }
           case "message_rollback":
             if (typeof event.length === "number" && event.length > 0) {
               assistantMessage.pendingFinalText = (assistantMessage.pendingFinalText || "").slice(
                 0,
                 Math.max(0, (assistantMessage.pendingFinalText || "").length - event.length),
               );
+              if (isClaudeBlockStreamingEnabled()) {
+                assistantMessage.text = assistantMessage.pendingFinalText || "";
+                queueRefresh();
+              }
             }
             return;
+          case "context_compacted": {
+            const compactMarker: Message = {
+              role: "assistant",
+              text: event.automatic ? "Context compacted automatically" : "Conversation compacted",
+              timestamp: Date.now(),
+              runMode: "agent",
+              compactMarker: true,
+              modelName: assistantMessage.modelName,
+              modelEntryId: assistantMessage.modelEntryId,
+              modelProviderLabel: assistantMessage.modelProviderLabel,
+            };
+            const insertIndex = Math.max(0, historyForRun.indexOf(assistantMessage));
+            historyForRun.splice(insertIndex, 0, compactMarker);
+            await deps.persistConversationMessage(conversationKey, {
+              role: "assistant",
+              text: compactMarker.text,
+              timestamp: compactMarker.timestamp,
+              runMode: "agent",
+              modelName: compactMarker.modelName,
+              modelEntryId: compactMarker.modelEntryId,
+              modelProviderLabel: compactMarker.modelProviderLabel,
+              compactMarker: true,
+            });
+            assistantMessage.text = "";
+            assistantMessage.pendingAgentTraceEvents = undefined;
+            refreshChatSafely();
+            scheduleQueueDrain?.();
+            await deps.waitForUiStep();
+            return;
+          }
           case "final":
             assistantMessage.text =
               deps.sanitizeText(event.text) ||
@@ -579,6 +696,7 @@ export async function sendAgentTurn(
               assistantMessage.text;
             assistantMessage.pendingFinalText = undefined;
             assistantMessage.streaming = false;
+            scheduleQueueDrain?.();
             break;
           default:
             break;
@@ -632,6 +750,7 @@ export async function sendAgentTurn(
     deps.restoreRequestUIIdle(body, conversationKey, thisRequestId);
     deps.setCurrentAbortController(conversationKey, null);
     deps.setPendingRequestId(conversationKey, 0);
+    scheduleQueueDrain?.();
   }
 }
 
@@ -679,20 +798,6 @@ export async function retryAgentTurn(
 
   const assistantMessage = retryPair.assistantMessage;
 
-  // Clear the previous agent run so the trace and text reset immediately.
-  assistantMessage.text = "";
-  assistantMessage.agentRunId = undefined;
-  assistantMessage.runMode = "agent";
-  assistantMessage.streaming = true;
-  assistantMessage.waitingAnimationStartedAt = Date.now();
-  assistantMessage.reasoningSummary = undefined;
-  assistantMessage.reasoningDetails = undefined;
-  assistantMessage.reasoningOpen = deps.isReasoningExpandedByDefault();
-  assistantMessage.pendingAgentTraceEvents =
-    assistantMessage.modelProviderLabel === "Claude Code"
-      ? buildPendingAgentTraceEvents()
-      : undefined;
-
   const effectiveRequestConfig = deps.resolveEffectiveRequestConfig({
     item,
     model,
@@ -705,9 +810,24 @@ export async function retryAgentTurn(
     reasoning,
     advanced,
   });
+
+  // Clear the previous agent run so the trace and text reset immediately.
+  assistantMessage.text = "";
+  assistantMessage.agentRunId = undefined;
+  assistantMessage.runMode = "agent";
+  assistantMessage.streaming = true;
   assistantMessage.modelName = effectiveRequestConfig.model;
   assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
   assistantMessage.modelProviderLabel = effectiveRequestConfig.modelProviderLabel;
+  assistantMessage.waitingAnimationStartedAt =
+    assistantMessage.modelProviderLabel === "Claude Code" ? Date.now() : undefined;
+  assistantMessage.reasoningSummary = undefined;
+  assistantMessage.reasoningDetails = undefined;
+  assistantMessage.reasoningOpen = deps.isReasoningExpandedByDefault();
+  assistantMessage.pendingAgentTraceEvents =
+    assistantMessage.modelProviderLabel === "Claude Code"
+      ? buildPendingAgentTraceEvents()
+      : undefined;
 
   const { refreshChatSafely, setStatusSafely } = deps.createPanelUpdateHelpers(
     body,
@@ -716,6 +836,8 @@ export async function retryAgentTurn(
     ui,
   );
   const queueRefresh = deps.createQueuedRefresh(refreshChatSafely);
+  const scheduleQueueDrain =
+    (body as any).__llmScheduleClaudeQueueDrain as (() => void) | undefined;
   refreshChatSafely(); // Immediately clear the old trace from view
 
   const { question, screenshotImages, paperContexts, fullTextPaperContexts } =
@@ -760,6 +882,7 @@ export async function retryAgentTurn(
   const persistAssistantOnce = async () => {
     if (assistantPersisted) return;
     assistantPersisted = true;
+    const snapshot = deps.getContextUsageSnapshot?.(conversationKey);
     await deps.updateStoredLatestAssistantMessage(conversationKey, {
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
@@ -768,6 +891,8 @@ export async function retryAgentTurn(
       modelName: assistantMessage.modelName,
       modelEntryId: assistantMessage.modelEntryId,
       modelProviderLabel: assistantMessage.modelProviderLabel,
+      contextTokens: snapshot?.contextTokens,
+      contextWindow: snapshot?.contextWindow,
     });
   };
   const markCancelled = async () => {
@@ -826,8 +951,42 @@ export async function retryAgentTurn(
           pushTraceEvent(assistantMessage.agentRunId, event);
         }
         switch (event.type) {
+          case "provider_event":
+            break;
+          case "usage": {
+            if (ui.tokenUsageEl) {
+              const previous = deps.getContextUsageSnapshot?.(conversationKey);
+              const nextTokens = Math.max(0, Number(event.contextTokens) || 0);
+              const nextWindow =
+                typeof event.contextWindow === "number" && Number.isFinite(event.contextWindow)
+                  ? event.contextWindow
+                  : previous?.contextWindow;
+              const effectiveTokens =
+                nextTokens > 0
+                  ? nextTokens
+                  : event.contextWindowIsAuthoritative
+                    ? (previous?.contextTokens ?? 0)
+                    : 0;
+              deps.setContextUsageSnapshot?.(conversationKey, {
+                contextTokens: effectiveTokens,
+                contextWindow: nextWindow,
+              });
+              deps.setTokenUsage(
+                ui.tokenUsageEl,
+                effectiveTokens,
+                nextWindow,
+                body.querySelector("#llm-claude-context-gauge") as HTMLElement | null,
+              );
+            }
+            break;
+          }
           case "status":
-            if (!assistantMessage.agentRunId && assistantMessage.pendingAgentTraceEvents) {
+            const isCompactingStatus = /compacting context/i.test(event.text);
+            if (
+              !isCompactingStatus &&
+              !assistantMessage.agentRunId &&
+              assistantMessage.pendingAgentTraceEvents
+            ) {
               assistantMessage.pendingAgentTraceEvents.push({
                 runId: "pending",
                 seq: assistantMessage.pendingAgentTraceEvents.length + 1,
@@ -837,6 +996,10 @@ export async function retryAgentTurn(
               });
             }
             setStatusSafely(event.text, "sending");
+            if (isCompactingStatus) {
+              assistantMessage.pendingAgentTraceEvents = undefined;
+              queueRefresh();
+            }
             break;
           case "reasoning": {
             if (event.summary) {
@@ -855,20 +1018,58 @@ export async function retryAgentTurn(
             return;
           }
           case "fallback":
+            if (assistantMessage.text === "Compacting context…") {
+              assistantMessage.text = "";
+            }
             setStatusSafely(event.reason, "sending");
             break;
-          case "message_delta":
+          case "message_delta": {
             assistantMessage.pendingFinalText =
               `${assistantMessage.pendingFinalText || ""}${deps.sanitizeText(event.text)}`;
+            assistantMessage.text = assistantMessage.pendingFinalText || assistantMessage.text;
+            queueRefresh();
             return;
+          }
           case "message_rollback":
             if (typeof event.length === "number" && event.length > 0) {
               assistantMessage.pendingFinalText = (assistantMessage.pendingFinalText || "").slice(
                 0,
                 Math.max(0, (assistantMessage.pendingFinalText || "").length - event.length),
               );
+              if (isClaudeBlockStreamingEnabled()) {
+                assistantMessage.text = assistantMessage.pendingFinalText || "";
+                queueRefresh();
+              }
             }
             return;
+          case "context_compacted": {
+            const compactMarker: Message = {
+              role: "assistant",
+              text: event.automatic ? "Context compacted automatically" : "Conversation compacted",
+              timestamp: Date.now(),
+              runMode: "agent",
+              compactMarker: true,
+              modelName: assistantMessage.modelName,
+              modelEntryId: assistantMessage.modelEntryId,
+              modelProviderLabel: assistantMessage.modelProviderLabel,
+            };
+            const insertIndex = Math.max(0, history.indexOf(assistantMessage));
+            history.splice(insertIndex, 0, compactMarker);
+            await deps.persistConversationMessage(conversationKey, {
+              role: "assistant",
+              text: compactMarker.text,
+              timestamp: compactMarker.timestamp,
+              runMode: "agent",
+              modelName: compactMarker.modelName,
+              modelEntryId: compactMarker.modelEntryId,
+              modelProviderLabel: compactMarker.modelProviderLabel,
+              compactMarker: true,
+            });
+            refreshChatSafely();
+            scheduleQueueDrain?.();
+            await deps.waitForUiStep();
+            return;
+          }
           case "final":
             assistantMessage.text =
               deps.sanitizeText(event.text) ||
@@ -876,6 +1077,7 @@ export async function retryAgentTurn(
               assistantMessage.text;
             assistantMessage.pendingFinalText = undefined;
             assistantMessage.streaming = false;
+            scheduleQueueDrain?.();
             break;
           default:
             break;
@@ -929,5 +1131,6 @@ export async function retryAgentTurn(
     deps.restoreRequestUIIdle(body, conversationKey, thisRequestId);
     deps.setCurrentAbortController(conversationKey, null);
     deps.setPendingRequestId(conversationKey, 0);
+    scheduleQueueDrain?.();
   }
 }

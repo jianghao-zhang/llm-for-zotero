@@ -98,9 +98,42 @@ export async function initClaudeCodeStore(): Promise<void> {
         webchat_run_state TEXT,
         webchat_completion_reason TEXT,
         reasoning_summary TEXT,
-        reasoning_details TEXT
+        reasoning_details TEXT,
+        compact_marker INTEGER,
+        context_tokens INTEGER,
+        context_window INTEGER
       )`,
     );
+    const columns = (await Zotero.DB.queryAsync(
+      `PRAGMA table_info(${CLAUDE_MESSAGES_TABLE})`,
+    )) as Array<{ name?: unknown }> | undefined;
+    const hasCompactMarkerColumn = Boolean(
+      columns?.some((column) => column?.name === "compact_marker"),
+    );
+    if (!hasCompactMarkerColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CLAUDE_MESSAGES_TABLE}
+         ADD COLUMN compact_marker INTEGER`,
+      );
+    }
+    const hasContextTokensColumn = Boolean(
+      columns?.some((column) => column?.name === "context_tokens"),
+    );
+    if (!hasContextTokensColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CLAUDE_MESSAGES_TABLE}
+         ADD COLUMN context_tokens INTEGER`,
+      );
+    }
+    const hasContextWindowColumn = Boolean(
+      columns?.some((column) => column?.name === "context_window"),
+    );
+    if (!hasContextWindowColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CLAUDE_MESSAGES_TABLE}
+         ADD COLUMN context_window INTEGER`,
+      );
+    }
     await Zotero.DB.queryAsync(
       `CREATE INDEX IF NOT EXISTS ${CLAUDE_MESSAGES_INDEX}
        ON ${CLAUDE_MESSAGES_TABLE} (conversation_key, timestamp, id)`,
@@ -186,8 +219,8 @@ export async function appendClaudeMessage(
 
   await Zotero.DB.queryAsync(
     `INSERT INTO ${CLAUDE_MESSAGES_TABLE}
-      (conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, compact_marker, context_tokens, context_window)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       normalizedKey,
       message.role,
@@ -215,6 +248,13 @@ export async function appendClaudeMessage(
       message.webchatCompletionReason || null,
       message.reasoningSummary || null,
       message.reasoningDetails || null,
+      message.compactMarker ? 1 : 0,
+      Number.isFinite(Number(message.contextTokens))
+        ? Math.floor(Number(message.contextTokens))
+        : null,
+      Number.isFinite(Number(message.contextWindow))
+        ? Math.floor(Number(message.contextWindow))
+        : null,
     ],
   );
 }
@@ -246,7 +286,10 @@ export async function loadClaudeConversation(
             webchat_run_state AS webchatRunState,
             webchat_completion_reason AS webchatCompletionReason,
             reasoning_summary AS reasoningSummary,
-            reasoning_details AS reasoningDetails
+            reasoning_details AS reasoningDetails,
+            compact_marker AS compactMarker,
+            context_tokens AS contextTokens,
+            context_window AS contextWindow
      FROM ${CLAUDE_MESSAGES_TABLE}
      WHERE conversation_key = ?
      ORDER BY timestamp ASC, id ASC
@@ -400,6 +443,15 @@ export async function loadClaudeConversation(
         typeof row.reasoningSummary === "string" ? row.reasoningSummary : undefined,
       reasoningDetails:
         typeof row.reasoningDetails === "string" ? row.reasoningDetails : undefined,
+      compactMarker: Boolean(row.compactMarker),
+      contextTokens:
+        Number.isFinite(Number(row.contextTokens)) && Number(row.contextTokens) > 0
+          ? Math.floor(Number(row.contextTokens))
+          : undefined,
+      contextWindow:
+        Number.isFinite(Number(row.contextWindow)) && Number(row.contextWindow) > 0
+          ? Math.floor(Number(row.contextWindow))
+          : undefined,
     });
   }
   return messages;
@@ -574,6 +626,9 @@ export async function updateLatestClaudeAssistantMessage(
     | "webchatCompletionReason"
     | "reasoningSummary"
     | "reasoningDetails"
+    | "compactMarker"
+    | "contextTokens"
+    | "contextWindow"
   >,
 ): Promise<void> {
   const normalizedKey = normalizeConversationKey(conversationKey);
@@ -590,7 +645,10 @@ export async function updateLatestClaudeAssistantMessage(
          webchat_run_state = ?,
          webchat_completion_reason = ?,
          reasoning_summary = ?,
-         reasoning_details = ?
+         reasoning_details = ?,
+         compact_marker = ?,
+         context_tokens = COALESCE(?, context_tokens),
+         context_window = COALESCE(?, context_window)
      WHERE id = (
        SELECT id
        FROM ${CLAUDE_MESSAGES_TABLE}
@@ -610,6 +668,13 @@ export async function updateLatestClaudeAssistantMessage(
       message.webchatCompletionReason || null,
       message.reasoningSummary || null,
       message.reasoningDetails || null,
+      message.compactMarker ? 1 : 0,
+      Number.isFinite(Number(message.contextTokens)) && Number(message.contextTokens) > 0
+        ? Math.floor(Number(message.contextTokens))
+        : null,
+      Number.isFinite(Number(message.contextWindow)) && Number(message.contextWindow) > 0
+        ? Math.floor(Number(message.contextWindow))
+        : null,
       normalizedKey,
     ],
   );

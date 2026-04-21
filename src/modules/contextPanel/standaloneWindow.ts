@@ -72,11 +72,13 @@ import {
 import { getCoreAgentRuntime } from "../../agent";
 import {
   getConversationSystemPref,
+  getLastUsedClaudeConversationMode,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
   removeLastUsedClaudeGlobalConversationKey,
   removeLastUsedClaudePaperConversationKey,
   setConversationSystemPref,
+  setLastUsedClaudeConversationMode,
 } from "../../claudeCode/prefs";
 import {
   activeClaudeGlobalConversationByLibrary,
@@ -381,12 +383,6 @@ export function openStandaloneChat(options?: {
   );
   const isClaudeConversationSystem = () =>
     currentConversationSystem === "claude_code";
-  const initialMode: "open" | "paper" =
-    initialDisplayConversationKind === "paper"
-      ? "paper"
-      : initialBasePaperItem
-        ? "paper"
-        : "open";
   const initialLibraryID =
     Number(
       resolvedSourceState.item?.libraryID ||
@@ -396,6 +392,20 @@ export function openStandaloneChat(options?: {
     ) || 1;
 
   const libraryID = initialLibraryID > 0 ? Math.floor(initialLibraryID) : 1;
+  const initialRememberedClaudeMode =
+    sourceConversationSystem === "claude_code"
+      ? getLastUsedClaudeConversationMode(libraryID)
+      : null;
+  const initialMode: "open" | "paper" =
+    initialDisplayConversationKind === "paper"
+      ? "paper"
+      : initialDisplayConversationKind === "global"
+        ? "open"
+        : initialRememberedClaudeMode === "global"
+          ? "open"
+          : initialBasePaperItem
+            ? "paper"
+            : "open";
   const lockedKey = isClaudeConversationSystem()
     ? null
     : getLockedGlobalConversationKey(libraryID);
@@ -2943,6 +2953,12 @@ export function openStandaloneChat(options?: {
         if (mode === standaloneMode) return;
 
         standaloneMode = mode;
+        if (isClaudeConversationSystem()) {
+          setLastUsedClaudeConversationMode(
+            getCurrentLibraryScopeID(),
+            mode === "open" ? "global" : "paper",
+          );
+        }
         paperTab.classList.toggle("active", mode === "paper");
         openTab.classList.toggle("active", mode === "open");
 

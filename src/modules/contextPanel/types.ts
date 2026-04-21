@@ -74,6 +74,9 @@ export interface Message {
   webchatCompletionReason?: "settled" | "forced_cancel" | "timeout" | "error" | null;
   webchatChatUrl?: string;
   webchatChatId?: string;
+  compactMarker?: boolean;
+  runtimeMarkerText?: string;
+  modelSwitchMarkerText?: string;
 }
 
 export type ChatRuntimeMode = "chat" | "agent";
@@ -315,6 +318,7 @@ export type SendQuestionOptions = {
   webchatSendPdf?: boolean;
   /** [webchat] When true, send the prompt into a fresh ChatGPT conversation. */
   webchatForceNewChat?: boolean;
+  skipAutoCompact?: boolean;
 };
 
 export type EditRetryOptions = {

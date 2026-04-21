@@ -332,6 +332,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
           selectedFiles,
         );
     const runtimeMode: ChatRuntimeMode = deps.isAgentMode() ? "agent" : "chat";
+
     // Check for command action metadata (set by handleInlineCommand for /command display)
     const commandAction = deps.inputBox.dataset.commandAction;
     const commandParams = deps.inputBox.dataset.commandParams ?? "";

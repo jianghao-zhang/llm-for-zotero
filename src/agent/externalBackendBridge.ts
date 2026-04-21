@@ -1,5 +1,6 @@
 import { config } from "../../package.json";
 import {
+  getClaudeBridgeUrl,
   getClaudeCustomInstructionPref,
   getConversationSystemPref,
 } from "../claudeCode/prefs";
@@ -221,6 +222,27 @@ export type BridgeScopeSnapshot = {
 };
 type BridgeScope = BridgeScopeSnapshot;
 
+function hashProviderIdentityStack(stack: string[]): string {
+  let hash = 2166136261;
+  const input = stack.join("\n");
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16)}`;
+}
+
+async function buildClaudeProviderIdentityStack(): Promise<string[]> {
+  const sources = getClaudeSettingSourcesByPref();
+  const configSource = getClaudeConfigSourcePref();
+  const bridgeUrl = normalizeBaseUrl(getClaudeBridgeUrl());
+  return [
+    `configSource:${configSource}`,
+    `settingSources:${sources.join(",")}`,
+    `bridgeUrl:${bridgeUrl}`,
+  ];
+}
+
 export type LastRunBridgeContext = {
   conversationKey: number;
   scope: BridgeScopeSnapshot;
@@ -254,6 +276,7 @@ type BridgeRuntimeRequest = {
   pinnedPaperContexts?: BridgePaperContext[];
   attachments?: BridgeAttachment[];
   screenshots?: string[];
+  history?: Array<{ role: string; content: string }>;
   activeNoteContext?: {
     noteId: number;
     title: string;
@@ -644,6 +667,8 @@ async function runExternalBridgeTurn(
     params.request.metadata && typeof params.request.metadata === "object"
       ? params.request.metadata
       : undefined;
+  const providerIdentityStack = await buildClaudeProviderIdentityStack();
+  const providerIdentity = hashProviderIdentityStack(providerIdentityStack);
   const payload = {
     conversationKey: params.request.conversationKey,
     userText: userTextForBridge,
@@ -659,6 +684,8 @@ async function runExternalBridgeTurn(
       settingSources: getClaudeSettingSourcesCsvByPref(),
       permissionMode: getAgentPermissionModePref(),
       customInstruction: getClaudeCustomInstructionPref(),
+      providerIdentity,
+      providerIdentityStack,
       model:
         typeof params.request.model === "string" &&
         params.request.model.trim().toLowerCase() !== "default"
@@ -1106,6 +1133,12 @@ async function buildBridgeRuntimeRequest(
           parentItemId: request.activeNoteContext.parentItemId,
           noteText: request.activeNoteContext.noteText,
         }
+      : undefined,
+    history: Array.isArray(request.history)
+      ? request.history.map((entry) => ({
+          role: typeof entry.role === "string" ? entry.role : "user",
+          content: typeof entry.content === "string" ? entry.content : "",
+        }))
       : undefined,
   };
 }
@@ -1659,6 +1692,8 @@ export function createExternalBackendBridgeRuntime(options: {
 
       onProgress({ type: "step_start", step: `Run ${toolName}`, index: 1, total: 1 });
       const doRun = async (approved = false): Promise<ActionResult<unknown>> => {
+        const providerIdentityStack = await buildClaudeProviderIdentityStack();
+        const providerIdentity = hashProviderIdentityStack(providerIdentityStack);
         const outcome = await runExternalBridgeAction(bridgeUrl, {
           conversationKey: actionConversationKey,
           toolName,
@@ -1671,6 +1706,8 @@ export function createExternalBackendBridgeRuntime(options: {
             claudeSettingSources: getClaudeSettingSourcesByPref(),
             settingSources: getClaudeSettingSourcesCsvByPref(),
             permissionMode: getAgentPermissionModePref(),
+            providerIdentity,
+            providerIdentityStack,
             scopeType: actionScope?.scopeType,
             scopeId: actionScope?.scopeId,
             scopeLabel: actionScope?.scopeLabel,
@@ -1728,8 +1765,16 @@ export function createExternalBackendBridgeRuntime(options: {
     runTurn: async (params: RunTurnParams): Promise<AgentRuntimeOutcome> => {
       const bridgeUrl = normalizeBaseUrl(getBridgeUrl());
       if (!bridgeUrl) {
+        await params.onEvent?.({
+          type: "status",
+          text: "Claude bridge URL is empty. Falling back to local runtime.",
+        });
         return coreRuntime.runTurn(params);
       }
+      await params.onEvent?.({
+        type: "status",
+        text: `Claude bridge URL: ${bridgeUrl}`,
+      });
       let persistedRunId = "";
       let persistedRunCreated = false;
       let persistedSeq = 0;

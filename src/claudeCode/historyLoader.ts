@@ -1,8 +1,5 @@
 import type { ClaudeConversationSummary } from "../shared/types";
-import {
-  ensureClaudeConversationForScope,
-  listClaudeConversationsForScope,
-} from "./runtime";
+import { listClaudeConversationsForScope } from "./runtime";
 import {
   listAllClaudePaperConversationsByLibrary,
   listClaudeGlobalConversations,
@@ -55,15 +52,7 @@ export async function loadClaudeConversationHistoryScope(params: {
     paperItemID: params.paperItemID,
     limit: params.limit,
   });
-  if (summaries.length) {
-    return summaries.map(toEntry);
-  }
-  const ensured = await ensureClaudeConversationForScope({
-    libraryID: params.libraryID,
-    kind: params.kind,
-    paperItemID: params.paperItemID,
-  });
-  return ensured ? [toEntry(ensured)] : [];
+  return summaries.map(toEntry);
 }
 
 export async function loadAllClaudeConversationHistory(params: {

@@ -50,6 +50,11 @@ export type StoredChatMessage = {
   webchatChatId?: string;
   reasoningSummary?: string;
   reasoningDetails?: string;
+  compactMarker?: boolean;
+  contextTokens?: number;
+  contextWindow?: number;
+  runtimeMarkerText?: string;
+  modelSwitchMarkerText?: string;
 };
 
 const CHAT_MESSAGES_TABLE = "llm_for_zotero_chat_messages";
@@ -305,7 +310,9 @@ export async function initChatStore(): Promise<void> {
         webchat_run_state TEXT,
         webchat_completion_reason TEXT,
         reasoning_summary TEXT,
-        reasoning_details TEXT
+        reasoning_details TEXT,
+        context_tokens INTEGER,
+        context_window INTEGER
       )`,
     );
 
@@ -355,6 +362,24 @@ export async function initChatStore(): Promise<void> {
       await Zotero.DB.queryAsync(
         `ALTER TABLE ${CHAT_MESSAGES_TABLE}
          ADD COLUMN webchat_completion_reason TEXT`,
+      );
+    }
+    const hasContextTokensColumn = Boolean(
+      columns?.some((column) => column?.name === "context_tokens"),
+    );
+    if (!hasContextTokensColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+         ADD COLUMN context_tokens INTEGER`,
+      );
+    }
+    const hasContextWindowColumn = Boolean(
+      columns?.some((column) => column?.name === "context_window"),
+    );
+    if (!hasContextWindowColumn) {
+      await Zotero.DB.queryAsync(
+        `ALTER TABLE ${CHAT_MESSAGES_TABLE}
+         ADD COLUMN context_window INTEGER`,
       );
     }
     const hasRunModeColumn = Boolean(
@@ -548,7 +573,9 @@ export async function loadConversation(
             webchat_run_state AS webchatRunState,
             webchat_completion_reason AS webchatCompletionReason,
             reasoning_summary AS reasoningSummary,
-            reasoning_details AS reasoningDetails
+            reasoning_details AS reasoningDetails,
+            context_tokens AS contextTokens,
+            context_window AS contextWindow
      FROM ${CHAT_MESSAGES_TABLE}
      WHERE conversation_key = ?
      ORDER BY timestamp ASC, id ASC
@@ -577,6 +604,8 @@ export async function loadConversation(
         webchatCompletionReason?: unknown;
         reasoningSummary?: unknown;
         reasoningDetails?: unknown;
+        contextTokens?: unknown;
+        contextWindow?: unknown;
       }>
     | undefined;
 
@@ -907,8 +936,8 @@ export async function appendMessage(
     : [];
   await Zotero.DB.queryAsync(
     `INSERT INTO ${CHAT_MESSAGES_TABLE}
-      (conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (conversation_key, role, text, timestamp, run_mode, agent_run_id, selected_text, selected_texts_json, selected_text_sources_json, selected_text_paper_contexts_json, selected_text_note_contexts_json, paper_contexts_json, full_text_paper_contexts_json, screenshot_images, attachments_json, model_name, model_entry_id, model_provider_label, webchat_run_state, webchat_completion_reason, reasoning_summary, reasoning_details, context_tokens, context_window)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       normalizedKey,
       message.role,
@@ -1072,6 +1101,9 @@ export async function updateLatestAssistantMessage(
     | "webchatCompletionReason"
     | "reasoningSummary"
     | "reasoningDetails"
+    | "compactMarker"
+    | "contextTokens"
+    | "contextWindow"
   >,
 ): Promise<void> {
   const normalizedKey = normalizeConversationKey(conversationKey);
@@ -1090,7 +1122,9 @@ export async function updateLatestAssistantMessage(
          webchat_run_state = ?,
          webchat_completion_reason = ?,
          reasoning_summary = ?,
-         reasoning_details = ?
+         reasoning_details = ?,
+         context_tokens = ?,
+         context_window = ?
      WHERE id = (
        SELECT id
        FROM ${CHAT_MESSAGES_TABLE}
@@ -1110,6 +1144,12 @@ export async function updateLatestAssistantMessage(
       message.webchatCompletionReason || null,
       message.reasoningSummary || null,
       message.reasoningDetails || null,
+      Number.isFinite(Number(message.contextTokens))
+        ? Math.floor(Number(message.contextTokens))
+        : null,
+      Number.isFinite(Number(message.contextWindow))
+        ? Math.floor(Number(message.contextWindow))
+        : null,
       normalizedKey,
     ],
   );

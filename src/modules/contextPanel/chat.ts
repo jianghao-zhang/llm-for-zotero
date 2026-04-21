@@ -12,9 +12,14 @@ import {
 } from "../../utils/chatStore";
 import { loadClaudeConversation } from "../../claudeCode/store";
 import {
+  getClaudeAutoCompactThresholdPercent,
+  isClaudeAutoCompactEnabled,
+} from "../../claudeCode/prefs";
+import {
   appendClaudeConversationMessage,
   deleteClaudeConversationTurnMessages,
   getClaudeBridgeRuntime,
+  isClaudeConversationSystemActive,
   updateLatestClaudeConversationAssistantMessage,
   updateLatestClaudeConversationUserMessage,
 } from "../../claudeCode/runtime";
@@ -31,7 +36,10 @@ import {
   UsageStats,
   checkEmbeddingAvailability,
 } from "../../utils/llmClient";
-import { estimateConversationTokens } from "../../utils/modelInputCap";
+import {
+  estimateConversationTokens,
+  getModelInputTokenLimit,
+} from "../../utils/modelInputCap";
 import type { ProviderProtocol } from "../../utils/providerProtocol";
 import {
   PERSISTED_HISTORY_LIMIT,
@@ -566,6 +574,14 @@ const followBottomStabilizers = new Map<
 
 /** Cumulative API token usage per conversation key for the current session. */
 const sessionTokenTotals = new Map<number, number>();
+const contextUsageSnapshots = new Map<number, { contextTokens: number; contextWindow?: number }>();
+function getContextInputWindow(effectiveRequestConfig: EffectiveRequestConfig): number | undefined {
+  const advancedCap = effectiveRequestConfig.advanced?.inputTokenCap;
+  if (typeof advancedCap === "number" && Number.isFinite(advancedCap) && advancedCap > 0) {
+    return advancedCap;
+  }
+  return getModelInputTokenLimit(effectiveRequestConfig.model || "");
+}
 
 function accumulateSessionTokens(
   conversationKey: number,
@@ -597,6 +613,10 @@ function getOrSeedSessionTokens(
   );
   sessionTokenTotals.set(conversationKey, estimated);
   return estimated;
+}
+
+export function getSessionTokenTotal(conversationKey: number): number {
+  return sessionTokenTotals.get(conversationKey) ?? 0;
 }
 
 export function resetSessionTokens(conversationKey: number): void {
@@ -820,7 +840,18 @@ async function updateStoredLatestAssistantMessageByConversation(
   message: Parameters<typeof updateStoredLatestAssistantMessage>[1],
 ): Promise<void> {
   if (isClaudeConversationKey(conversationKey)) {
-    await updateLatestClaudeConversationAssistantMessage(conversationKey, message);
+    const latestContextSnapshot = contextUsageSnapshots.get(conversationKey);
+    await updateLatestClaudeConversationAssistantMessage(conversationKey, {
+      ...message,
+      contextTokens:
+        Number.isFinite(Number(message.contextTokens)) && Number(message.contextTokens) > 0
+          ? Math.floor(Number(message.contextTokens))
+          : latestContextSnapshot?.contextTokens,
+      contextWindow:
+        Number.isFinite(Number(message.contextWindow)) && Number(message.contextWindow) > 0
+          ? Math.floor(Number(message.contextWindow))
+          : latestContextSnapshot?.contextWindow,
+    });
     return;
   }
   await updateStoredLatestAssistantMessage(conversationKey, message);
@@ -927,6 +958,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
     reasoningSummary: message.reasoningSummary,
     reasoningDetails: message.reasoningDetails,
     reasoningOpen: isReasoningExpandedByDefault(),
+    compactMarker: Boolean((message as StoredChatMessage).compactMarker),
     webchatRunState: message.webchatRunState,
     webchatCompletionReason: message.webchatCompletionReason,
   };
@@ -955,10 +987,17 @@ export async function ensureConversationLoaded(
         conversationKey,
         PERSISTED_HISTORY_LIMIT,
       );
-      chatHistory.set(
-        conversationKey,
-        storedMessages.map((message) => toPanelMessage(message)),
-      );
+      const panelMessages = storedMessages.map((message) => toPanelMessage(message));
+      const latestAssistantWithContext = [...storedMessages]
+        .reverse()
+        .find((message) => message.role === "assistant" && typeof message.contextTokens === "number");
+      if (latestAssistantWithContext?.contextTokens) {
+        contextUsageSnapshots.set(conversationKey, {
+          contextTokens: latestAssistantWithContext.contextTokens,
+          contextWindow: latestAssistantWithContext.contextWindow,
+        });
+      }
+      chatHistory.set(conversationKey, panelMessages);
     } catch (err) {
       ztoolkit.log("LLM: Failed to load chat history", err);
       if (!chatHistory.has(conversationKey)) {
@@ -2211,7 +2250,8 @@ export async function editLatestUserMessageAndRetry(
     selectedTextPaperContexts, selectedTextNoteContexts, screenshotImages,
     paperContexts, fullTextPaperContexts, attachments, pdfUploadSystemMessages,
     targetRuntimeMode,
-    expected, model, apiBase, apiKey, reasoning, advanced,
+    expected, model, apiBase, apiKey, authMode, providerProtocol,
+    modelEntryId, modelProviderLabel, reasoning, advanced,
   } = opts;
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
@@ -2353,10 +2393,10 @@ export async function editLatestUserMessageAndRetry(
       model,
       apiBase,
       apiKey,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      authMode,
+      providerProtocol,
+      modelEntryId,
+      modelProviderLabel,
       reasoning,
       advanced,
     );
@@ -2367,6 +2407,10 @@ export async function editLatestUserMessageAndRetry(
       model,
       apiBase,
       apiKey,
+      authMode,
+      providerProtocol,
+      modelEntryId,
+      modelProviderLabel,
       reasoning,
       advanced,
       pdfUploadSystemMessages,
@@ -2381,6 +2425,10 @@ export async function retryLatestAssistantResponse(
   model?: string,
   apiBase?: string,
   apiKey?: string,
+  authMode?: "api_key" | "codex_auth" | "copilot_auth" | "webchat",
+  providerProtocol?: ProviderProtocol,
+  modelEntryId?: string,
+  modelProviderLabel?: string,
   reasoning?: LLMReasoningConfig,
   advanced?: AdvancedModelParams,
   pdfUploadSystemMessages?: string[],
@@ -2408,6 +2456,24 @@ export async function retryLatestAssistantResponse(
   assistantMessage.runMode = "chat";
   assistantMessage.agentRunId = undefined;
   assistantMessage.streaming = true;
+  const effectiveRequestConfig = resolveEffectiveRequestConfig({
+    item,
+    model,
+    apiBase,
+    apiKey,
+    authMode,
+    providerProtocol,
+    modelEntryId,
+    modelProviderLabel,
+    reasoning,
+    advanced,
+  });
+  assistantMessage.modelName = effectiveRequestConfig.model;
+  assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
+  assistantMessage.modelProviderLabel =
+    effectiveRequestConfig.modelProviderLabel;
+  assistantMessage.waitingAnimationStartedAt =
+    assistantMessage.modelProviderLabel === "Claude Code" ? Date.now() : undefined;
   const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
     body,
     item,
@@ -2429,19 +2495,6 @@ export async function retryLatestAssistantResponse(
     return;
   }
 
-  const effectiveRequestConfig = resolveEffectiveRequestConfig({
-    item,
-    model,
-    apiBase,
-    apiKey,
-    reasoning,
-    advanced,
-  });
-  // Update model name before first refresh so streaming UI shows the correct model immediately
-  assistantMessage.modelName = effectiveRequestConfig.model;
-  assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
-  assistantMessage.modelProviderLabel =
-    effectiveRequestConfig.modelProviderLabel;
   refreshChatSafely();
   let streamedAnswer = "";
   let streamedReasoningSummary: string | undefined;
@@ -2454,6 +2507,7 @@ export async function retryLatestAssistantResponse(
   const finalizeCancelledAssistant = async () => {
     finalizeCancelledAssistantMessage(assistantMessage);
     refreshChatSafely();
+    const latestContextSnapshot = contextUsageSnapshots.get(conversationKey);
     await updateStoredLatestAssistantMessageByConversation(conversationKey, {
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
@@ -2464,6 +2518,9 @@ export async function retryLatestAssistantResponse(
       modelProviderLabel: assistantMessage.modelProviderLabel,
       reasoningSummary: assistantMessage.reasoningSummary,
       reasoningDetails: assistantMessage.reasoningDetails,
+      compactMarker: assistantMessage.compactMarker,
+      contextTokens: latestContextSnapshot?.contextTokens,
+      contextWindow: latestContextSnapshot?.contextWindow,
     });
     setStatusSafely("Cancelled", "ready");
   };
@@ -2607,7 +2664,18 @@ export async function retryLatestAssistantResponse(
           conversationKey,
           usage.totalTokens,
         );
-        if (ui.tokenUsageEl) setTokenUsage(ui.tokenUsageEl, total);
+        if (ui.tokenUsageEl) {
+          const contextWindow =
+            isClaudeConversationSystemActive()
+              ? getContextInputWindow(effectiveRequestConfig)
+              : undefined;
+          setTokenUsage(
+            ui.tokenUsageEl,
+            total,
+            contextWindow,
+            body.querySelector("#llm-claude-context-gauge") as HTMLElement | null,
+          );
+        }
       },
     );
 
@@ -2629,9 +2697,14 @@ export async function retryLatestAssistantResponse(
     assistantMessage.reasoningSummary = streamedReasoningSummary;
     assistantMessage.reasoningDetails = streamedReasoningDetails;
     assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
+    assistantMessage.compactMarker = /^\/compact(?:\s|$)/i.test(question.trim());
+    if (assistantMessage.compactMarker && !assistantMessage.text.trim()) {
+      assistantMessage.text = "Conversation compacted";
+    }
     assistantMessage.streaming = false;
     refreshChatSafely();
 
+    const latestContextSnapshot = contextUsageSnapshots.get(conversationKey);
     await updateStoredLatestAssistantMessageByConversation(conversationKey, {
       text: assistantMessage.text,
       timestamp: assistantMessage.timestamp,
@@ -2642,6 +2715,9 @@ export async function retryLatestAssistantResponse(
       modelProviderLabel: assistantMessage.modelProviderLabel,
       reasoningSummary: assistantMessage.reasoningSummary,
       reasoningDetails: assistantMessage.reasoningDetails,
+      compactMarker: assistantMessage.compactMarker,
+      contextTokens: latestContextSnapshot?.contextTokens,
+      contextWindow: latestContextSnapshot?.contextWindow,
     });
 
     setStatusSafely("Ready", "ready");
@@ -2696,6 +2772,10 @@ export async function editUserTurnAndRetry(opts: {
   model?: string;
   apiBase?: string;
   apiKey?: string;
+  authMode?: "api_key" | "codex_auth" | "copilot_auth" | "webchat";
+  providerProtocol?: ProviderProtocol;
+  modelEntryId?: string;
+  modelProviderLabel?: string;
   reasoning?: LLMReasoningConfig;
   advanced?: AdvancedModelParams;
 }): Promise<void> {
@@ -2705,7 +2785,8 @@ export async function editUserTurnAndRetry(opts: {
     selectedTextNoteContexts, screenshotImages, paperContexts,
     fullTextPaperContexts, attachments, pdfUploadSystemMessages,
     targetRuntimeMode,
-    model, apiBase, apiKey, reasoning, advanced,
+    model, apiBase, apiKey, authMode, providerProtocol,
+    modelEntryId, modelProviderLabel, reasoning, advanced,
   } = opts;
   await ensureConversationLoaded(item);
   const conversationKey = getConversationKey(item);
@@ -2874,6 +2955,10 @@ export async function editUserTurnAndRetry(opts: {
   const resolvedModel = model || profile?.model;
   const resolvedApiBase = apiBase ?? profile?.apiBase;
   const resolvedApiKey = apiKey ?? profile?.apiKey;
+  const resolvedAuthMode = opts.authMode ?? profile?.authMode;
+  const resolvedProviderProtocol = opts.providerProtocol ?? profile?.providerProtocol;
+  const resolvedModelEntryId = opts.modelEntryId ?? profile?.entryId;
+  const resolvedModelProviderLabel = opts.modelProviderLabel ?? profile?.providerLabel;
   const resolvedReasoning =
     reasoning ||
     getSelectedReasoningForItem(item.id, resolvedModel || "", resolvedApiBase);
@@ -2890,10 +2975,10 @@ export async function editUserTurnAndRetry(opts: {
       resolvedModel,
       resolvedApiBase,
       resolvedApiKey,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      resolvedAuthMode,
+      resolvedProviderProtocol,
+      resolvedModelEntryId,
+      resolvedModelProviderLabel,
       resolvedReasoning,
       resolvedAdvanced,
     );
@@ -2904,6 +2989,10 @@ export async function editUserTurnAndRetry(opts: {
       resolvedModel,
       resolvedApiBase,
       resolvedApiKey,
+      resolvedAuthMode,
+      resolvedProviderProtocol,
+      resolvedModelEntryId,
+      resolvedModelProviderLabel,
       resolvedReasoning,
       resolvedAdvanced,
       pdfUploadSystemMessages,
@@ -3017,6 +3106,19 @@ async function buildAgentRuntimeRequest(
     activeNoteContext: buildActiveNoteRuntimeContext(params.item),
     metadata: {
       forceFreshSession: params.history.length === 0,
+      claudeAutoCompactEligible:
+        params.effectiveRequestConfig.modelProviderLabel === "Claude Code" &&
+        isClaudeAutoCompactEnabled() &&
+        !/^\/compact(?:\s|$)/i.test(params.userText.trim()),
+      claudeAutoCompactThresholdPercent:
+        params.effectiveRequestConfig.modelProviderLabel === "Claude Code"
+          ? getClaudeAutoCompactThresholdPercent()
+          : undefined,
+      claudeHistoryLength: params.history.length,
+      claudeEstimatedContextTokens:
+        params.effectiveRequestConfig.modelProviderLabel === "Claude Code"
+          ? estimateConversationTokens(params.history)
+          : undefined,
     },
   };
 }
@@ -3040,6 +3142,17 @@ function buildAgentEngineDeps(currentItem?: Zotero.Item): AgentEngineDeps {
     buildLLMHistoryMessages,
     buildAgentRuntimeRequest,
     resolveEffectiveRequestConfig,
+    getConversationSystem: () => resolveConversationSystemForItem(currentItem) || "upstream",
+    accumulateSessionTokens,
+    getContextUsageSnapshot: (conversationKey: number) =>
+      contextUsageSnapshots.get(conversationKey),
+    setContextUsageSnapshot: (
+      conversationKey: number,
+      snapshot: { contextTokens: number; contextWindow?: number },
+    ) => {
+      contextUsageSnapshots.set(conversationKey, snapshot);
+    },
+    setTokenUsage,
     normalizeSelectedTexts,
     normalizeSelectedTextSources,
     normalizeSelectedTextPaperContextsByIndex,
@@ -3591,7 +3704,18 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
           conversationKey,
           usage.totalTokens,
         );
-        if (ui.tokenUsageEl) setTokenUsage(ui.tokenUsageEl, total);
+        if (ui.tokenUsageEl) {
+          const contextWindow =
+            isClaudeConversationSystemActive()
+              ? getContextInputWindow(effectiveRequestConfig)
+              : undefined;
+          setTokenUsage(
+            ui.tokenUsageEl,
+            total,
+            contextWindow,
+            body.querySelector("#llm-claude-context-gauge") as HTMLElement | null,
+          );
+        }
       },
     );
 
@@ -3607,6 +3731,10 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
       sanitizeText(answer) || assistantMessage.text || "No response.";
     assistantMessage.runMode = runtimeMode;
     assistantMessage.agentRunId = agentRunId || assistantMessage.agentRunId;
+    assistantMessage.compactMarker = /^\/compact(?:\s|$)/i.test(question.trim());
+    if (assistantMessage.compactMarker && !assistantMessage.text.trim()) {
+      assistantMessage.text = "Conversation compacted";
+    }
     assistantMessage.streaming = false;
     refreshChatSafely();
     await persistAssistantOnce();
@@ -3817,18 +3945,29 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       ? cachedSnapshot
       : buildChatScrollSnapshot(chatBox);
   const history = chatHistory.get(conversationKey) || [];
-  if (tokenUsageEl)
+  if (tokenUsageEl) {
+    const snapshot = contextUsageSnapshots.get(conversationKey);
+    const contextWindow =
+      snapshot?.contextWindow ??
+      (isClaudeConversationSystemActive()
+        ? getContextInputWindow(resolveEffectiveRequestConfig({ item }))
+        : undefined);
+    const contextTokens =
+      snapshot?.contextTokens ?? getOrSeedSessionTokens(conversationKey, history);
     setTokenUsage(
       tokenUsageEl,
-      getOrSeedSessionTokens(conversationKey, history),
+      contextTokens,
+      contextWindow,
+      body.querySelector("#llm-claude-context-gauge") as HTMLElement | null,
     );
+  }
 
   if (history.length === 0) {
     // [webchat] Show webchat-specific welcome instead of generic instructions
-    const effectiveConfig = resolveEffectiveRequestConfig({ item });
-    if (effectiveConfig.providerProtocol === "web_sync") {
+    const effectiveRequestConfig = resolveEffectiveRequestConfig({ item });
+    if (effectiveRequestConfig.providerProtocol === "web_sync") {
       const { getWebChatTargetByModelName } = require("../../webchat/types") as typeof import("../../webchat/types");
-      const targetEntry = getWebChatTargetByModelName(effectiveConfig.model || "");
+      const targetEntry = getWebChatTargetByModelName(effectiveRequestConfig.model || "");
       chatBox.innerHTML = getWebChatWelcomeHtml(targetEntry?.label, targetEntry?.modelName);
     } else {
       const isStandalone = panelRoot?.dataset?.standalone === "true" || (body as HTMLElement).dataset?.standalone === "true";
@@ -4474,6 +4613,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         index > 0 && history[index - 1]?.role === "user"
           ? history[index - 1]
           : null;
+      const isClaudeStreamingConversation = isClaudeConversationSystemActive();
       const agentRunId = msg.agentRunId?.trim();
       const traceEvents = agentRunId
         ? getCachedAgentRunEvents(agentRunId)
@@ -4495,7 +4635,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       if (hasAnswerText) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
-        try {
+        if (msg.compactMarker) {
+          bubble.textContent = safeText || "Conversation compacted";
+          bubble.classList.add("llm-compact-marker");
+        } else try {
           // Build image resolver for MinerU figures (if applicable)
           const contextSource = resolveContextSourceItem(item);
           const ctxItem = contextSource.contextItem;
@@ -4609,7 +4752,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         );
         modelHeader.appendChild(modelName);
 
-        if (!hasAnswerText && msg.streaming && msg.modelProviderLabel === "Claude Code") {
+        if (!hasAnswerText && msg.streaming && isClaudeStreamingConversation) {
           const roseLoader = doc.createElement("span") as HTMLSpanElement;
           roseLoader.className = "llm-rose-loader llm-rose-loader-inline";
           mountClaudeRoseThreeLoader(
@@ -4710,7 +4853,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         bubble.insertBefore(bubbleHeaderNodes[i], bubble.firstChild);
       }
 
-      if (!hasAnswerText && !(msg.streaming && msg.modelProviderLabel === "Claude Code")) {
+      if (!hasAnswerText && !(msg.streaming && isClaudeStreamingConversation)) {
         const typing = doc.createElement("div") as HTMLDivElement;
         typing.className = "llm-typing";
         typing.innerHTML =

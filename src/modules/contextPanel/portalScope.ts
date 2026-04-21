@@ -32,6 +32,7 @@ import {
 } from "../../claudeCode/portal";
 import {
   getConversationSystemPref,
+  getLastUsedClaudeConversationMode,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
 } from "../../claudeCode/prefs";
@@ -370,7 +371,9 @@ function resolvePreferredConversationMode(
   system: ConversationSystem,
 ): "global" | "paper" {
   if (system === "claude_code") {
-    const rememberedMode = activeClaudeConversationModeByLibrary.get(libraryID);
+    const rememberedMode =
+      activeClaudeConversationModeByLibrary.get(libraryID) ||
+      getLastUsedClaudeConversationMode(libraryID);
     return rememberedMode === "global" ? "global" : "paper";
   }
   if (getLockedGlobalConversationKey(libraryID) !== null) {

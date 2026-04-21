@@ -366,6 +366,7 @@ import {
   removeLastUsedClaudePaperConversationKey,
   setClaudeReasoningModePref,
   setClaudeRuntimeModelPref,
+  setLastUsedClaudeConversationMode,
 } from "../../claudeCode/prefs";
 import {
   activeClaudeConversationModeByLibrary,
@@ -921,6 +922,7 @@ export function setupHandlers(
     if (item && libraryID > 0 && mode && !noteSession) {
       if (isClaudeConversationSystem()) {
         activeClaudeConversationModeByLibrary.set(libraryID, mode);
+        setLastUsedClaudeConversationMode(libraryID, mode);
         if (mode === "paper") {
           const normalizedConversationKey = Number.isFinite(conversationKey)
             ? Math.floor(conversationKey as number)
@@ -4020,6 +4022,18 @@ export function setupHandlers(
       if (paperItemID > 0) {
         try {
           if (isClaudeConversationSystem()) {
+            const activePaperKey =
+              !isGlobalMode() && item && Number.isFinite(getConversationKey(item))
+                ? Math.floor(getConversationKey(item))
+                : 0;
+            if (activePaperKey > 0) {
+              await ensureClaudeConversationCatalogEntry({
+                conversationKey: activePaperKey,
+                libraryID,
+                kind: "paper",
+                paperItemID,
+              });
+            }
             const summaries = await loadClaudeConversationHistoryScope({
               libraryID,
               kind: "paper",
@@ -4280,39 +4294,20 @@ export function setupHandlers(
       globalEntries.splice(0, globalEntries.length, ...dedupedGlobalEntries);
     }
 
-    const allEntries = [...paperEntries, ...globalEntries];
+    const activeHistorySection = isGlobalMode() ? "open" : "paper";
+    const allEntries = activeHistorySection === "paper" ? paperEntries : globalEntries;
     const visibleEntries = allEntries.filter(
       (entry) => !pendingHistoryDeletionKeys.has(entry.conversationKey),
     );
-    const visibleSections = [
-      {
-        section: "paper" as const,
-        latestActivity: paperEntries.reduce(
-          (max, entry) => Math.max(max, entry.lastActivityAt || 0),
-          0,
-        ),
-      },
-      {
-        section: "open" as const,
-        latestActivity: globalEntries.reduce(
-          (max, entry) => Math.max(max, entry.lastActivityAt || 0),
-          0,
-        ),
-      },
-    ]
-      .filter((entry) =>
-        visibleEntries.some((row) => row.section === entry.section),
-      )
-      .sort((a, b) => {
-        if (b.latestActivity !== a.latestActivity) {
-          return b.latestActivity - a.latestActivity;
-        }
-        if (a.section === b.section) return 0;
-        return a.section === "paper" ? -1 : 1;
-      });
-    latestConversationHistory = visibleSections.flatMap((section) =>
-      visibleEntries.filter((entry) => entry.section === section.section),
-    );
+    latestConversationHistory = [...visibleEntries].sort((a, b) => {
+      if (b.lastActivityAt !== a.lastActivityAt) {
+        return b.lastActivityAt - a.lastActivityAt;
+      }
+      if (a.isDraft !== b.isDraft) {
+        return a.isDraft ? 1 : -1;
+      }
+      return b.conversationKey - a.conversationKey;
+    });
 
     titleStatic.style.display = "none";
     historyBar.style.display = "inline-flex";
@@ -6928,6 +6923,10 @@ export function setupHandlers(
             entry.model,
             entry.apiBase,
             entry.apiKey,
+            entry.authMode,
+            entry.providerProtocol,
+            entry.entryId,
+            entry.providerLabel,
             retryReasoning,
             retryAdvanced,
           );
@@ -10160,12 +10159,29 @@ export function setupHandlers(
   };
 
   let queuedClaudeInputSeq = 0;
-  let queuedClaudeInputs: QueuedClaudeInput[] = [];
+  const queuedClaudeInputsByConversation = new Map<number, QueuedClaudeInput[]>();
   let queuedClaudeDrainTimer: number | null = null;
+
+  const getQueuedClaudeInputs = (): QueuedClaudeInput[] => {
+    const activeConversationKey = item ? getConversationKey(item) : null;
+    if (activeConversationKey === null) return [];
+    return queuedClaudeInputsByConversation.get(activeConversationKey) || [];
+  };
+
+  const setQueuedClaudeInputs = (entries: QueuedClaudeInput[]): void => {
+    const activeConversationKey = item ? getConversationKey(item) : null;
+    if (activeConversationKey === null) return;
+    if (!entries.length) {
+      queuedClaudeInputsByConversation.delete(activeConversationKey);
+      return;
+    }
+    queuedClaudeInputsByConversation.set(activeConversationKey, entries);
+  };
 
   renderQueuedClaudeInputs = () => {
     if (!queueBar) return;
     const isClaudeMode = panelRoot.dataset.conversationSystem === "claude_code";
+    const queuedClaudeInputs = getQueuedClaudeInputs();
     if (!isClaudeMode || !queuedClaudeInputs.length) {
       queueBar.textContent = "";
       queueBar.style.display = "none";
@@ -10199,7 +10215,9 @@ export function setupHandlers(
       removeBtn.addEventListener("click", (event: Event) => {
         event.preventDefault();
         event.stopPropagation();
-        queuedClaudeInputs = queuedClaudeInputs.filter((item) => item.id !== entry.id);
+        setQueuedClaudeInputs(
+          getQueuedClaudeInputs().filter((item) => item.id !== entry.id),
+        );
         renderQueuedClaudeInputs();
       });
 
@@ -10220,6 +10238,7 @@ export function setupHandlers(
       void drainQueuedClaudeInput();
     }, 220) as unknown as number;
   };
+  (body as any).__llmScheduleClaudeQueueDrain = scheduleClaudeQueueDrain;
 
   isClaudeQueueSendAvailable = () => {
     const activeConversationKey = item ? getConversationKey(item) : null;
@@ -10233,17 +10252,21 @@ export function setupHandlers(
   queueClaudeInput = (text: string) => {
     const normalized = text.trim();
     if (!normalized) return;
-    queuedClaudeInputs.push({
-      id: ++queuedClaudeInputSeq,
-      text: normalized,
-    });
+    const nextQueue = [
+      ...getQueuedClaudeInputs(),
+      {
+        id: ++queuedClaudeInputSeq,
+        text: normalized,
+      },
+    ];
+    setQueuedClaudeInputs(nextQueue);
     inputBox.value = "";
     persistDraftInputForCurrentConversation();
     renderQueuedClaudeInputs();
     if (status) {
       setStatus(
         status,
-        queuedClaudeInputs.length === 1 ? t("Queued 1 follow-up") : t(`Queued ${queuedClaudeInputs.length} follow-ups`),
+        nextQueue.length === 1 ? t("Queued 1 follow-up") : t(`Queued ${nextQueue.length} follow-ups`),
         "ready",
       );
     }
@@ -10789,19 +10812,21 @@ export function setupHandlers(
   };
 
   async function drainQueuedClaudeInput(): Promise<void> {
+    const queuedClaudeInputs = getQueuedClaudeInputs();
     if (!queuedClaudeInputs.length) {
       renderQueuedClaudeInputs();
       return;
     }
     const activeConversationKey = item ? getConversationKey(item) : null;
-    if (
-      !isClaudeConversationSystem() ||
-      activeConversationKey === null ||
-      isRequestPending(activeConversationKey)
-    ) {
+    if (!isClaudeConversationSystem() || activeConversationKey === null) {
       return;
     }
-    const next = queuedClaudeInputs.shift();
+    if (isRequestPending(activeConversationKey)) {
+      scheduleClaudeQueueDrain();
+      return;
+    }
+    const [next, ...rest] = queuedClaudeInputs;
+    setQueuedClaudeInputs(rest);
     renderQueuedClaudeInputs();
     if (!next) return;
     await executeSend({ fromQueue: true, queuedText: next.text });

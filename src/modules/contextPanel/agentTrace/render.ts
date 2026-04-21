@@ -2442,6 +2442,9 @@ export function buildAgentTraceDisplayItems(
         if (statusText === "Initializing Claude session" && !sawSessionResume) {
           break;
         }
+        if (statusText === "Compacting context…") {
+          break;
+        }
         lastMeaningfulStatus = statusText;
         items.push({
           type: "action",
