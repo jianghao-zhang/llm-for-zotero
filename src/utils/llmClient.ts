@@ -2512,7 +2512,8 @@ function getTemperatureRecoveryPolicy(
     text.includes("not allowed") ||
     text.includes("unknown parameter") ||
     text.includes("invalid parameter") ||
-    text.includes("invalid temperature")
+    text.includes("invalid temperature") ||
+    text.includes("deprecated")
   ) {
     return { mode: "omit" };
   }
