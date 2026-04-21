@@ -230,7 +230,13 @@ function buildUI(body: Element, item?: Zotero.Item | null) {
   claudeToggleIcon.setAttribute("aria-hidden", "true");
   claudeToggleBtn.appendChild(claudeToggleIcon);
 
-  headerModeControls.append(modeSwitchWrap, claudeToggleBtn);
+  const claudeContextGauge = createElement(doc, "div", "llm-claude-context-gauge", {
+    id: "llm-claude-context-gauge",
+  }) as HTMLDivElement;
+  claudeContextGauge.style.display = "none";
+  claudeContextGauge.setAttribute("aria-hidden", "true");
+
+  headerModeControls.append(modeSwitchWrap, claudeToggleBtn, claudeContextGauge);
   historyBar.append(historyNewBtn, historyToggle, headerModeControls);
 
   headerInfo.append(title, historyBar);

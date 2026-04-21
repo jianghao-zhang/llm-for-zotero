@@ -477,6 +477,30 @@
                       <html:option value="max">max</html:option>
                     </html:select>
                   </html:div>
+
+                  <html:div style="display: flex; flex-direction: column; gap: 6px;">
+                    <html:label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
+                      <html:input id="__addonRef__-claude-code-block-streaming" type="checkbox"></html:input>
+                      Enable block streaming
+                    </html:label>
+                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
+                      Show Claude answers chunk by chunk while they stream, instead of waiting until the final answer is assembled.
+                    </html:span>
+                  </html:div>
+
+                  <html:div style="display: flex; flex-direction: column; gap: 6px;">
+                    <html:label style="display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 12px; color: var(--fill-primary, inherit);">
+                      <html:input id="__addonRef__-claude-code-auto-compact" type="checkbox"></html:input>
+                      Enable auto-compact
+                    </html:label>
+                    <html:span style="font-size: 11px; color: var(--fill-secondary, #777); line-height: 1.45;">
+                      Automatically send <html:code>/compact</html:code> before a new Claude turn when context usage crosses the threshold below.
+                    </html:span>
+                    <html:div style="display:flex; align-items:center; gap:10px;">
+                      <html:input id="__addonRef__-claude-code-auto-compact-threshold" type="range" min="30" max="80" step="1" style="flex:1 1 auto;" />
+                      <html:span id="__addonRef__-claude-code-auto-compact-threshold-value" style="min-width:48px; text-align:right; font-size:11px; color: var(--fill-secondary, #777);"></html:span>
+                    </html:div>
+                  </html:div>
                 </html:div>
               </html:div>
             </html:div>

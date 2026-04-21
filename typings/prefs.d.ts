@@ -32,8 +32,12 @@ declare namespace _ZoteroTypes {
       "agentClaudeConfigSource": string;
       "agentPermissionMode": string;
       "conversationSystem": string;
+      "claudeCodeConversationModeMap": string;
       "claudeCodeModel": string;
       "claudeCodeReasoning": string;
+      "claudeCodeBlockStreaming": boolean;
+      "claudeCodeAutoCompact": boolean;
+      "claudeCodeAutoCompactThreshold": number;
       "obsidianVaultPath": string;
       "obsidianTargetFolder": string;
       "obsidianAttachmentsFolder": string;

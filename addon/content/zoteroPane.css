@@ -127,6 +127,32 @@
   min-height: 22px;
 }
 
+.llm-claude-context-gauge {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--stroke-secondary) 80%, transparent);
+  background: transparent;
+  position: relative;
+  flex: 0 0 auto;
+  display: none;
+}
+
+.llm-claude-context-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 999px;
+  background: var(--material-background);
+  pointer-events: none;
+}
+
+.llm-claude-context-gauge[data-warning="true"] {
+  border-color: #f39c12;
+}
+
 .llm-history-new,
 .llm-history-toggle {
   appearance: none;
@@ -306,6 +332,10 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.llm-header-mode-controls > .llm-claude-context-gauge {
+  align-self: center;
 }
 
 .llm-mode-switch {
@@ -1884,6 +1914,7 @@
   padding: calc(6px * var(--llm-font-scale, 1));
   box-sizing: border-box;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+  align-items: stretch;
 }
 
 /* --- Day-grouped history items (matches standalone sidebar style) --- */
@@ -1896,7 +1927,9 @@
   overflow-x: hidden;
   min-height: 0;
   min-width: 0;
+  width: 100%;
   max-width: 100%;
+  align-self: stretch;
 }
 
 .llm-history-day-label {
@@ -1907,6 +1940,8 @@
   letter-spacing: 0.04em;
   padding: 8px 6px 3px;
   user-select: none;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .llm-history-item {
@@ -1914,6 +1949,7 @@
   flex-direction: column;
   width: 100%;
   min-width: 0;
+  flex: 0 0 auto;
   padding: 6px 8px;
   border-radius: 6px;
   background: none;
@@ -6488,6 +6524,15 @@ label.llm-search-results-item:hover {
   white-space: nowrap;
   flex-shrink: 0;
   display: none;
+}
+
+.llm-token-usage[data-warning="true"] {
+  color: #f39c12;
+}
+
+.llm-compact-marker {
+  color: var(--fill-secondary);
+  font-style: italic;
 }
 
 /* Scrollbar Styling */

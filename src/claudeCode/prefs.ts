@@ -61,6 +61,28 @@ function setJsonPref(key: string, value: Record<string, number>): void {
   setPref(key, JSON.stringify(value));
 }
 
+function getJsonStringPref(key: string): Record<string, string> {
+  const raw = getStringPref(key).trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const normalized: Record<string, string> = {};
+    for (const [entryKey, entryValue] of Object.entries(parsed)) {
+      if (typeof entryValue !== "string") continue;
+      const trimmed = entryValue.trim();
+      if (!trimmed) continue;
+      normalized[entryKey] = trimmed;
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function setJsonStringPref(key: string, value: Record<string, string>): void {
+  setPref(key, JSON.stringify(value));
+}
+
 export function getConversationSystemPref(): ConversationSystem {
   const raw = getStringPref("conversationSystem").trim().toLowerCase();
   return raw === "claude_code" ? "claude_code" : "upstream";
@@ -68,6 +90,33 @@ export function getConversationSystemPref(): ConversationSystem {
 
 export function setConversationSystemPref(system: ConversationSystem): void {
   setPref("conversationSystem", system === "claude_code" ? "claude_code" : "upstream");
+}
+
+export function getLastUsedClaudeConversationMode(
+  libraryID: number,
+): "global" | "paper" | null {
+  if (!Number.isFinite(libraryID) || libraryID <= 0) return null;
+  const map = getJsonStringPref("claudeCodeConversationModeMap");
+  const value = map[String(Math.floor(libraryID))];
+  return value === "global" || value === "paper" ? value : null;
+}
+
+export function setLastUsedClaudeConversationMode(
+  libraryID: number,
+  mode: "global" | "paper",
+): void {
+  if (!Number.isFinite(libraryID) || libraryID <= 0) return;
+  const normalizedMode = mode === "global" ? "global" : "paper";
+  const map = getJsonStringPref("claudeCodeConversationModeMap");
+  map[String(Math.floor(libraryID))] = normalizedMode;
+  setJsonStringPref("claudeCodeConversationModeMap", map);
+}
+
+export function removeLastUsedClaudeConversationMode(libraryID: number): void {
+  if (!Number.isFinite(libraryID) || libraryID <= 0) return;
+  const map = getJsonStringPref("claudeCodeConversationModeMap");
+  delete map[String(Math.floor(libraryID))];
+  setJsonStringPref("claudeCodeConversationModeMap", map);
 }
 
 export function isClaudeCodeModeEnabled(): boolean {
@@ -86,7 +135,10 @@ export function setClaudeCodeModeEnabled(enabled: boolean): void {
 }
 
 export function getClaudeBridgeUrl(): string {
-  return getStringPref("agentBackendBridgeUrl").trim();
+  const raw = getStringPref("agentBackendBridgeUrl").trim();
+  if (!raw) return "http://127.0.0.1:19787";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `http://${raw}`;
 }
 
 export function setClaudeBridgeUrl(url: string): void {
@@ -148,6 +200,48 @@ export function getClaudeReasoningModePref(): ClaudeReasoningMode {
 export function setClaudeReasoningModePref(mode: ClaudeReasoningMode): void {
   if (!CLAUDE_REASONING_OPTIONS.includes(mode)) return;
   setPref("claudeCodeReasoning", mode);
+}
+
+export function isClaudeBlockStreamingEnabled(): boolean {
+  const value = getZoteroPrefs()?.get?.(prefKey("claudeCodeBlockStreaming"), true);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return false;
+}
+
+export function setClaudeBlockStreamingEnabled(enabled: boolean): void {
+  setPref("claudeCodeBlockStreaming", Boolean(enabled));
+}
+
+export function isClaudeAutoCompactEnabled(): boolean {
+  const value = getZoteroPrefs()?.get?.(prefKey("claudeCodeAutoCompact"), true);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  return false;
+}
+
+export function setClaudeAutoCompactEnabled(enabled: boolean): void {
+  setPref("claudeCodeAutoCompact", Boolean(enabled));
+}
+
+export function getClaudeAutoCompactThresholdPercent(): number {
+  const value = getZoteroPrefs()?.get?.(prefKey("claudeCodeAutoCompactThreshold"), true);
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 50;
+  return Math.min(80, Math.max(30, Math.round(parsed)));
+}
+
+export function setClaudeAutoCompactThresholdPercent(value: number): void {
+  const normalized = Math.min(80, Math.max(30, Math.round(value)));
+  setPref("claudeCodeAutoCompactThreshold", normalized);
 }
 
 function buildPaperConversationMapKey(

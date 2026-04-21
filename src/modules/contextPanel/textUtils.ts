@@ -354,13 +354,54 @@ export function setStatus(
 export function formatTokenCount(tokens: number): string {
   if (tokens < 0) return "0";
   if (tokens < 1000) return `${tokens}`;
-  if (tokens < 10000) return `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-  return `${Math.round(tokens / 1000)}k`;
+  if (tokens < 1_000_000) {
+    if (tokens < 10_000) return `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+    return `${Math.round(tokens / 1000)}k`;
+  }
+  if (tokens < 10_000_000) return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `${Math.round(tokens / 1_000_000)}M`;
 }
 
-export function setTokenUsage(el: HTMLElement, sessionTokens: number): void {
-  el.textContent = `${formatTokenCount(Math.max(0, sessionTokens))} tokens`;
-  el.style.display = "inline";
+export function setTokenUsage(
+  el: HTMLElement,
+  sessionTokens: number,
+  contextWindow?: number,
+  gaugeEl?: HTMLElement | null,
+): void {
+  const normalizedTokens = Math.max(0, sessionTokens);
+  if (
+    typeof contextWindow === "number" &&
+    Number.isFinite(contextWindow) &&
+    contextWindow > 0 &&
+    normalizedTokens > 0
+  ) {
+    const percentage = Math.max(0, Math.min(100, Math.round((normalizedTokens / contextWindow) * 100)));
+    const title =
+      percentage > 80
+        ? `Context window usage: ${formatTokenCount(normalizedTokens)} / ${formatTokenCount(contextWindow)} input tokens — approaching limit, run /compact`
+        : `Context window usage: ${formatTokenCount(normalizedTokens)} / ${formatTokenCount(contextWindow)} input tokens`;
+    el.textContent = `${formatTokenCount(normalizedTokens)} / ${formatTokenCount(contextWindow)} (${percentage}%)`;
+    el.title = title;
+    el.dataset.warning = percentage > 80 ? "true" : "false";
+    el.style.display = "inline";
+    if (gaugeEl) {
+      gaugeEl.style.display = "none";
+      gaugeEl.style.background = "transparent";
+      delete gaugeEl.dataset.warning;
+      gaugeEl.title = "";
+    }
+    return;
+  }
+  el.textContent = "";
+  el.title = "";
+  delete el.dataset.warning;
+  el.style.display = "none";
+  if (gaugeEl) {
+    gaugeEl.style.display = "none";
+    gaugeEl.style.background = "transparent";
+    delete gaugeEl.dataset.warning;
+    gaugeEl.title = "";
+  }
 }
 
 export function clampNumber(value: number, min: number, max: number): number {

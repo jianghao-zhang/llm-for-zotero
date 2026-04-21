@@ -69,21 +69,27 @@ import {
 import { testMineruConnection } from "../utils/mineruClient";
 import { registerMineruManagerScript } from "./mineruManagerScript";
 import {
+  getClaudeAutoCompactThresholdPercent,
   getClaudeBridgeUrl,
   getClaudeConfigSourcePref,
   getClaudePermissionModePref,
   getClaudeReasoningModePref,
   getClaudeRuntimeModelPref,
+  isClaudeAutoCompactEnabled,
+  isClaudeBlockStreamingEnabled,
   getConversationSystemPref,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
   isClaudeCodeModeEnabled,
+  setClaudeAutoCompactEnabled,
+  setClaudeAutoCompactThresholdPercent,
   setClaudeBridgeUrl,
   setClaudeCodeModeEnabled,
   setConversationSystemPref,
   setClaudePermissionModePref,
   setClaudeReasoningModePref,
   setClaudeRuntimeModelPref,
+  setClaudeBlockStreamingEnabled,
 } from "../claudeCode/prefs";
 
 type PrefKey = "systemPrompt";
@@ -1786,6 +1792,18 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const claudeCodeReasoningSelect = doc.querySelector(
     `#${config.addonRef}-claude-code-reasoning`,
   ) as HTMLSelectElement | null;
+  const claudeCodeBlockStreamingInput = doc.querySelector(
+    `#${config.addonRef}-claude-code-block-streaming`,
+  ) as HTMLInputElement | null;
+  const claudeCodeAutoCompactInput = doc.querySelector(
+    `#${config.addonRef}-claude-code-auto-compact`,
+  ) as HTMLInputElement | null;
+  const claudeCodeAutoCompactThresholdInput = doc.querySelector(
+    `#${config.addonRef}-claude-code-auto-compact-threshold`,
+  ) as HTMLInputElement | null;
+  const claudeCodeAutoCompactThresholdValue = doc.querySelector(
+    `#${config.addonRef}-claude-code-auto-compact-threshold-value`,
+  ) as HTMLSpanElement | null;
   const claudeConfigDocLink = doc.querySelector(
     `#${config.addonRef}-claude-config-doc-link`,
   ) as HTMLAnchorElement | null;
@@ -2145,6 +2163,42 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           ? claudeCodeReasoningSelect.value
           : "auto";
       setClaudeReasoningModePref(next);
+    });
+  }
+
+  if (claudeCodeBlockStreamingInput) {
+    claudeCodeBlockStreamingInput.checked = isClaudeBlockStreamingEnabled();
+    claudeCodeBlockStreamingInput.addEventListener("change", () => {
+      setClaudeBlockStreamingEnabled(claudeCodeBlockStreamingInput.checked);
+    });
+  }
+
+  if (claudeCodeAutoCompactInput) {
+    claudeCodeAutoCompactInput.checked = isClaudeAutoCompactEnabled();
+    claudeCodeAutoCompactInput.addEventListener("change", () => {
+      setClaudeAutoCompactEnabled(claudeCodeAutoCompactInput.checked);
+    });
+  }
+  if (claudeCodeAutoCompactThresholdInput) {
+    const syncThresholdLabel = (value: number) => {
+      if (claudeCodeAutoCompactThresholdValue) {
+        claudeCodeAutoCompactThresholdValue.textContent = `${value}%`;
+      }
+    };
+    const persistThreshold = () => {
+      setClaudeAutoCompactThresholdPercent(
+        Number(claudeCodeAutoCompactThresholdInput.value),
+      );
+      syncThresholdLabel(getClaudeAutoCompactThresholdPercent());
+    };
+    const initialValue = getClaudeAutoCompactThresholdPercent();
+    claudeCodeAutoCompactThresholdInput.value = String(initialValue);
+    syncThresholdLabel(initialValue);
+    claudeCodeAutoCompactThresholdInput.addEventListener("input", () => {
+      persistThreshold();
+    });
+    claudeCodeAutoCompactThresholdInput.addEventListener("change", () => {
+      persistThreshold();
     });
   }
 
