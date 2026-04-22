@@ -120,6 +120,7 @@ type SendFlowControllerDeps = {
   sendQuestion: (
     opts: import("../../types").SendQuestionOptions,
   ) => Promise<void>;
+  retainClaudeRuntime?: (body: Element, item: Zotero.Item) => Promise<void>;
   retainPinnedImageState: (itemId: number) => void;
   retainPaperState: (itemId: number) => void;
   consumePaperModeState: (itemId: number) => void;
@@ -489,6 +490,9 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       : false;
 
     const forcedSkillIds = deps.consumeForcedSkillIds?.();
+    if (deps.isClaudeConversationSystem()) {
+      await deps.retainClaudeRuntime?.(deps.body, item);
+    }
     const sendTask = deps.sendQuestion({
       body: deps.body,
       item,

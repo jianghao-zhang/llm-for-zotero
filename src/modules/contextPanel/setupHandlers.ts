@@ -10567,6 +10567,9 @@ export function setupHandlers(
     getLatestEditablePair,
     editLatestUserMessageAndRetry,
     sendQuestion,
+    retainClaudeRuntime: async (sendBody, sendItem) => {
+      await retainClaudeRuntimeForBody(sendBody, sendItem);
+    },
     retainPinnedImageState,
     retainPaperState,
     consumePaperModeState,

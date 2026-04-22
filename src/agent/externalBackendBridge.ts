@@ -109,6 +109,18 @@ type BridgeLine =
   | { type: "outcome"; outcome: AgentRuntimeOutcome }
   | { type: "error"; error: string };
 
+function makeProfilingEvent(stage: string, payload?: Record<string, unknown>): AgentEvent {
+  return {
+    type: "provider_event",
+    providerType: "profiling",
+    ts: Date.now(),
+    payload: {
+      stage,
+      ...(payload || {}),
+    },
+  };
+}
+
 type ToolMutability = "read" | "write";
 type ToolRiskLevel = "low" | "medium" | "high";
 type ToolSource = "claude-runtime" | "zotero-bridge" | "mcp";
@@ -744,6 +756,7 @@ async function runExternalBridgeTurn(
     },
   };
 
+  await params.onEvent?.(makeProfilingEvent("frontend.bridge_fetch.dispatch"));
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -756,8 +769,13 @@ async function runExternalBridgeTurn(
   }
 
   let finalOutcome: AgentRuntimeOutcome | null = null;
+  let sawFirstBridgeLine = false;
 
   await streamBridgeLines(response, async (line) => {
+    if (!sawFirstBridgeLine) {
+      sawFirstBridgeLine = true;
+      await params.onEvent?.(makeProfilingEvent("frontend.bridge_stream.first_line"));
+    }
     if (line.type === "start") {
       await params.onStart?.(line.runId);
       return;
@@ -1704,7 +1722,7 @@ export function createExternalBackendBridgeRuntime(options: {
     listEfforts,
     updateRuntimeRetention: async ({ conversationKey, scope, mountId, retain }) => {
       const bridgeUrl = normalizeBaseUrl(getBridgeUrl());
-      if (!bridgeUrl || !isClaudeBridgeActive()) {
+      if (!bridgeUrl) {
         return null;
       }
       return updateExternalRuntimeRetention({
@@ -1717,7 +1735,7 @@ export function createExternalBackendBridgeRuntime(options: {
     },
     invalidateSession: async ({ conversationKey, scope, metadata }) => {
       const bridgeUrl = normalizeBaseUrl(getBridgeUrl());
-      if (!bridgeUrl || !isClaudeBridgeActive()) {
+      if (!bridgeUrl) {
         clearLastRunBridgeContext(conversationKey);
         conversationScopeByKey.delete(conversationKey);
         return null;
@@ -1862,8 +1880,14 @@ export function createExternalBackendBridgeRuntime(options: {
         persistedSeq += 1;
         await appendAgentRunEvent(persistedRunId, persistedSeq, event);
       };
+      await appendPersistedEvent(makeProfilingEvent("frontend.run_turn.enter"));
+      await params.onEvent?.(makeProfilingEvent("frontend.run_turn.enter"));
       const contextEnvelope = buildContextEnvelope(params.request);
+      await appendPersistedEvent(makeProfilingEvent("frontend.context_envelope.ready"));
+      await params.onEvent?.(makeProfilingEvent("frontend.context_envelope.ready"));
       const runtimeRequest = await buildBridgeRuntimeRequest(params.request);
+      await appendPersistedEvent(makeProfilingEvent("frontend.bridge_runtime_request.ready"));
+      await params.onEvent?.(makeProfilingEvent("frontend.bridge_runtime_request.ready"));
       const scope = resolveBridgeScope(params.request);
       rememberLastRunBridgeContext(params.request.conversationKey, scope);
       if (isBridgeDebugEnabled()) {
