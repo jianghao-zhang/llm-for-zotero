@@ -27,7 +27,10 @@ import { classifyRequest } from "./model/requestClassifier";
 import { buildAgentInitialMessages } from "./model/messageBuilder";
 import { detectSkillIntent } from "./model/skillClassifier";
 import { getAllSkills, getMatchedSkillIds } from "./skills";
-import { isNotesDirectoryConfigured } from "../utils/notesDirectoryConfig";
+import {
+  getNotesDirectoryNickname,
+  isNotesDirectoryConfigured,
+} from "../utils/notesDirectoryConfig";
 import {
   appendAgentRunEvent,
   createAgentRun,
@@ -903,15 +906,23 @@ export class AgentRuntime {
           await rollbackCommittedStreamedText(stepStreamedText);
           if (!noteWriteCorrectionUsed) {
             noteWriteCorrectionUsed = true;
+            messages.push(
+              step.assistantMessage ?? {
+                role: "assistant",
+                content: stepStreamedText,
+              },
+            );
             messages.push({
               role: "user",
               content:
-                'Correction for this turn: the user\'s request requires writing a Markdown note to Obsidian or the configured notes directory. Call `file_io` with `action: "write"` now, using the configured notes directory/default target path and a clear `.md` filename. Do not put the note body in chat. If a write is impossible, explain the setup problem briefly.',
+                'Correction for this turn: the user\'s request requires writing a Markdown note to the configured notes directory. Call `file_io` with `action: "write"` now, using the configured notes directory/default target path and a clear `.md` filename. Do not put the note body in chat. If a write is impossible, explain the setup problem briefly.',
             });
             continue;
           }
+          const nickname = getNotesDirectoryNickname().trim();
+          const targetLabel = nickname ? `${nickname} note` : "note";
           return completeRun(
-            "I could not complete the Obsidian note write because the model did not call `file_io(write, ...)` after being corrected.",
+            `I could not complete the ${targetLabel} write because the model did not call \`file_io(write, ...)\` after being corrected.`,
             "failed",
           );
         }
