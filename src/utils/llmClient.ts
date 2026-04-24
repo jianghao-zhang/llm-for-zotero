@@ -69,10 +69,14 @@ import {
   extractCodexAppServerThreadId,
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
+  resolveCodexAppServerTurnInputWithFallback,
   resolveCodexAppServerReasoningParams,
   waitForCodexAppServerTurnCompletion,
 } from "./codexAppServerProcess";
-import { buildCodexAppServerChatInput } from "./codexAppServerInput";
+import {
+  buildLegacyCodexAppServerChatInput,
+  prepareCodexAppServerChatTurn,
+} from "./codexAppServerInput";
 import {
   applyModelInputTokenCap,
   estimateConversationTokens,
@@ -2914,7 +2918,17 @@ async function callCodexAppServerChat(params: {
     if (!threadId) {
       throw new Error("Codex app-server did not return a thread ID");
     }
-    const input = await buildCodexAppServerChatInput(params.messages);
+    const { historyItemsToInject, turnInput } =
+      await prepareCodexAppServerChatTurn(params.messages);
+    const input = await resolveCodexAppServerTurnInputWithFallback({
+      proc,
+      threadId,
+      historyItemsToInject,
+      turnInput,
+      legacyInputFactory: () =>
+        buildLegacyCodexAppServerChatInput(params.messages),
+      logContext: "chat",
+    });
     const appServerReasoning = resolveCodexAppServerReasoningParams(
       params.reasoning,
       params.model,

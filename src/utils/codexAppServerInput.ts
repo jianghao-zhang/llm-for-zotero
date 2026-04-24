@@ -9,6 +9,29 @@ export type CodexAppServerUserInput =
   | { type: "image"; url: string }
   | { type: "localImage"; path: string };
 
+type CodexAppServerHistoryInputPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string; detail?: "low" | "high" | "auto" };
+
+type CodexAppServerHistoryOutputPart = { type: "output_text"; text: string };
+
+export type CodexAppServerHistoryItem =
+  | {
+      type: "message";
+      role: "system" | "user";
+      content: CodexAppServerHistoryInputPart[];
+    }
+  | {
+      type: "message";
+      role: "assistant";
+      content: CodexAppServerHistoryOutputPart[];
+    };
+
+export type CodexAppServerPreparedTurn = {
+  historyItemsToInject: CodexAppServerHistoryItem[];
+  turnInput: CodexAppServerUserInput[];
+};
+
 const MAX_APP_SERVER_IMAGE_FILES = 128;
 
 type IOUtilsLike = {
@@ -285,6 +308,138 @@ function splitChatContent(content: MessageContent): {
   };
 }
 
+function pushHistoryTextPart(
+  target:
+    | CodexAppServerHistoryInputPart[]
+    | CodexAppServerHistoryOutputPart[],
+  role: "system" | "user" | "assistant",
+  text: string,
+): void {
+  const body = text.trim();
+  if (role === "assistant") {
+    (target as CodexAppServerHistoryOutputPart[]).push({
+      type: "output_text",
+      text: body || "[Empty message]",
+    });
+    return;
+  }
+  (target as CodexAppServerHistoryInputPart[]).push({
+    type: "input_text",
+    text: body || "[Empty message]",
+  });
+}
+
+function canInjectHistoryImage(url: string): boolean {
+  const normalized = url.trim();
+  if (!normalized) return false;
+  return !fileUrlToPath(normalized);
+}
+
+function buildHistoryImagePlaceholder(count: number): string {
+  return `[${count} image(s) attached]`;
+}
+
+async function buildHistoryMessageItem(params: {
+  role: "system" | "user" | "assistant";
+  text: string;
+  imageUrls: string[];
+}): Promise<CodexAppServerHistoryItem> {
+  const { role, text, imageUrls } = params;
+  if (role === "assistant") {
+    const content: CodexAppServerHistoryOutputPart[] = [];
+    if (text.trim()) {
+      pushHistoryTextPart(content, role, text);
+    }
+    if (!content.length || imageUrls.length > 0) {
+      pushHistoryTextPart(
+        content,
+        role,
+        imageUrls.length > 0
+          ? buildHistoryImagePlaceholder(imageUrls.length)
+          : "",
+      );
+    }
+    return {
+      type: "message",
+      role,
+      content,
+    };
+  }
+
+  const content: CodexAppServerHistoryInputPart[] = [];
+  if (text.trim()) {
+    pushHistoryTextPart(content, role, text);
+  }
+
+  let omittedImages = 0;
+  for (const rawUrl of imageUrls) {
+    const url = rawUrl.trim();
+    if (!url) continue;
+    if (!canInjectHistoryImage(url)) {
+      omittedImages += 1;
+      continue;
+    }
+    content.push({
+      type: "input_image",
+      image_url: url,
+      detail: "high",
+    });
+  }
+
+  if (!content.length || omittedImages > 0) {
+    pushHistoryTextPart(
+      content,
+      role,
+      omittedImages > 0 ? buildHistoryImagePlaceholder(omittedImages) : "",
+    );
+  }
+
+  return {
+    type: "message",
+    role,
+    content,
+  };
+}
+
+async function buildTurnInput(params: {
+  text: string;
+  imageUrls: string[];
+}): Promise<CodexAppServerUserInput[]> {
+  const input: CodexAppServerUserInput[] = [];
+  if (params.text || !params.imageUrls.length) {
+    pushTextInput(input, params.text);
+  }
+  for (const url of params.imageUrls) {
+    input.push(await buildImageInput(url));
+  }
+  return input.length ? input : [{ type: "text", text: "" }];
+}
+
+function getChatRoleLabel(
+  role: ChatMessage["role"],
+): "System" | "Assistant" | "User" {
+  return role === "system"
+    ? "System"
+    : role === "assistant"
+      ? "Assistant"
+      : "User";
+}
+
+async function buildLegacyChatMessageInput(
+  message: ChatMessage,
+): Promise<CodexAppServerUserInput[]> {
+  const { text, imageUrls } = splitChatContent(message.content);
+  const fallbackText = imageUrls.length
+    ? `[${imageUrls.length} image(s) attached]`
+    : "";
+  const input: CodexAppServerUserInput[] = [];
+  pushTextInput(input, text || fallbackText, getChatRoleLabel(message.role));
+  for (const url of imageUrls) {
+    input.push(await buildImageInput(url));
+  }
+  return input;
+}
+
 function splitAgentContent(content: AgentModelMessage["content"]): {
   text: string;
   imageUrls: string[];
@@ -314,27 +469,76 @@ function splitAgentContent(content: AgentModelMessage["content"]): {
   };
 }
 
-export async function buildCodexAppServerChatInput(
+function getAgentRoleLabel(
+  role: Exclude<AgentModelMessage, { role: "tool" }>["role"],
+): "System" | "Assistant" | "User" {
+  return role === "system"
+    ? "System"
+    : role === "assistant"
+      ? "Assistant"
+      : "User";
+}
+
+async function buildLegacyAgentMessageInput(
+  message: Exclude<AgentModelMessage, { role: "tool" }>,
+): Promise<CodexAppServerUserInput[]> {
+  const { text, imageUrls } = splitAgentContent(message.content);
+  const fallbackText = imageUrls.length
+    ? `[${imageUrls.length} image(s) attached]`
+    : "";
+  const input: CodexAppServerUserInput[] = [];
+  pushTextInput(input, text || fallbackText, getAgentRoleLabel(message.role));
+  for (const url of imageUrls) {
+    input.push(await buildImageInput(url));
+  }
+  return input;
+}
+
+export async function prepareCodexAppServerChatTurn(
+  messages: ChatMessage[],
+): Promise<CodexAppServerPreparedTurn> {
+  let latestUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "user") {
+      latestUserIndex = i;
+      break;
+    }
+  }
+
+  const historyItemsToInject: CodexAppServerHistoryItem[] = [];
+  const historyMessages =
+    latestUserIndex >= 0 ? messages.slice(0, latestUserIndex) : messages;
+  for (const message of historyMessages) {
+    const { text, imageUrls } = splitChatContent(message.content);
+    historyItemsToInject.push(
+      await buildHistoryMessageItem({
+        role: message.role,
+        text,
+        imageUrls,
+      }),
+    );
+  }
+
+  const latestUserMessage =
+    latestUserIndex >= 0 ? messages[latestUserIndex] : undefined;
+  const turnInput = latestUserMessage
+    ? await buildTurnInput(splitChatContent(latestUserMessage.content))
+    : [{ type: "text" as const, text: "" }];
+
+  return {
+    historyItemsToInject,
+    turnInput,
+  };
+}
+
+export async function buildLegacyCodexAppServerChatInput(
   messages: ChatMessage[],
 ): Promise<CodexAppServerUserInput[]> {
   const input: CodexAppServerUserInput[] = [];
   for (const message of messages) {
-    const label =
-      message.role === "system"
-        ? "System"
-        : message.role === "assistant"
-          ? "Assistant"
-          : "User";
-    const { text, imageUrls } = splitChatContent(message.content);
-    const fallbackText = imageUrls.length
-      ? `[${imageUrls.length} image(s) attached]`
-      : "";
-    pushTextInput(input, text || fallbackText, label);
-    for (const url of imageUrls) {
-      input.push(await buildImageInput(url));
-    }
+    input.push(...(await buildLegacyChatMessageInput(message)));
   }
-  return input;
+  return input.length ? input : [{ type: "text", text: "" }];
 }
 
 export async function extractLatestCodexAppServerUserInput(
@@ -343,47 +547,62 @@ export async function extractLatestCodexAppServerUserInput(
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (message.role !== "user") continue;
-    const { text, imageUrls } = splitAgentContent(message.content);
-    const input: CodexAppServerUserInput[] = [];
-    if (text || !imageUrls.length) {
-      pushTextInput(input, text);
-    }
-    for (const url of imageUrls) {
-      input.push(await buildImageInput(url));
-    }
-    return input;
+    return buildTurnInput(splitAgentContent(message.content));
   }
   return [{ type: "text", text: "" }];
 }
 
-async function buildAgentMessageInput(
-  message: Exclude<AgentModelMessage, { role: "tool" }>,
-): Promise<CodexAppServerUserInput[]> {
-  const label =
-    message.role === "system"
-      ? "System"
-      : message.role === "assistant"
-        ? "Assistant"
-        : "User";
-  const { text, imageUrls } = splitAgentContent(message.content);
-  const fallbackText = imageUrls.length
-    ? `[${imageUrls.length} image(s) attached]`
-    : "";
-  const input: CodexAppServerUserInput[] = [];
-  pushTextInput(input, text || fallbackText, label);
-  for (const url of imageUrls) {
-    input.push(await buildImageInput(url));
+export async function prepareCodexAppServerAgentTurn(
+  messages: AgentModelMessage[],
+): Promise<CodexAppServerPreparedTurn> {
+  const seededMessages = messages.filter(
+    (message): message is Exclude<AgentModelMessage, { role: "tool" }> =>
+      message.role !== "tool",
+  );
+
+  let latestUserIndex = -1;
+  for (let i = seededMessages.length - 1; i >= 0; i -= 1) {
+    if (seededMessages[i]?.role === "user") {
+      latestUserIndex = i;
+      break;
+    }
   }
-  return input;
+
+  const historyItemsToInject: CodexAppServerHistoryItem[] = [];
+  const historyMessages =
+    latestUserIndex >= 0
+      ? seededMessages.slice(0, latestUserIndex)
+      : seededMessages;
+  for (const message of historyMessages) {
+    const { text, imageUrls } = splitAgentContent(message.content);
+    historyItemsToInject.push(
+      await buildHistoryMessageItem({
+        role: message.role,
+        text,
+        imageUrls,
+      }),
+    );
+  }
+
+  const latestUserMessage =
+    latestUserIndex >= 0 ? seededMessages[latestUserIndex] : undefined;
+  const turnInput = latestUserMessage
+    ? await buildTurnInput(splitAgentContent(latestUserMessage.content))
+    : [{ type: "text" as const, text: "" }];
+
+  return {
+    historyItemsToInject,
+    turnInput,
+  };
 }
 
-export async function buildCodexAppServerAgentInitialInput(
+export async function buildLegacyCodexAppServerAgentInitialInput(
   messages: AgentModelMessage[],
 ): Promise<CodexAppServerUserInput[]> {
   const input: CodexAppServerUserInput[] = [];
   for (const message of messages) {
     if (message.role === "tool") continue;
-    input.push(...(await buildAgentMessageInput(message)));
+    input.push(...(await buildLegacyAgentMessageInput(message)));
   }
   return input.length ? input : [{ type: "text", text: "" }];
 }

@@ -307,6 +307,12 @@ describe("llmClient prepareChatRequest", function () {
                         );
                         continue;
                       }
+                      if (message.method === "thread/inject_items") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
                       if (message.method === "turn/start") {
                         stdout.push(
                           `${JSON.stringify({ id: message.id, result: { id: "turn-1" } })}\n`,
@@ -369,6 +375,7 @@ describe("llmClient prepareChatRequest", function () {
     const originalCodexPath = globalThis.process?.env?.CODEX_PATH;
     const stdout = new MockStdout();
     let lastTurnInput: unknown = "";
+    let lastInjectedItems: unknown = null;
     let lastTurnParams: Record<string, unknown> | null = null;
     const reasoning: string[] = [];
     const usage: Array<{
@@ -419,6 +426,13 @@ describe("llmClient prepareChatRequest", function () {
                         );
                         continue;
                       }
+                      if (message.method === "thread/inject_items") {
+                        lastInjectedItems = message.params?.items ?? null;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
                       if (message.method === "turn/start") {
                         lastTurnParams = (message.params || {}) as Record<
                           string,
@@ -454,6 +468,21 @@ describe("llmClient prepareChatRequest", function () {
       };
 
       const chunks: string[] = [];
+      const prepared = prepareChatRequest({
+        prompt: "What changed?",
+        image: "file:///C:/Users/alice/figure.png",
+        history: [
+          { role: "user", content: "Earlier question." },
+          { role: "assistant", content: "Earlier answer." },
+        ],
+        model: "gpt-5.4",
+        authMode: "codex_app_server",
+        apiBase: "https://chatgpt.com/backend-api/codex/responses",
+        reasoning: {
+          provider: "openai",
+          level: "high",
+        },
+      });
       const output = await callLLMStream(
         {
           prompt: "What changed?",
@@ -501,14 +530,322 @@ describe("llmClient prepareChatRequest", function () {
       const textParts = input
         .filter((part) => part.type === "text")
         .map((part) => String(part.text || ""));
-      assert.include(textParts.join("\n\n"), "System:");
-      assert.include(textParts.join("\n\n"), "User:\nEarlier question.");
-      assert.include(textParts.join("\n\n"), "Assistant:\nEarlier answer.");
-      assert.include(textParts.join("\n\n"), "User:\nWhat changed?");
+      assert.deepEqual(textParts, ["What changed?"]);
       assert.deepInclude(input, {
         type: "localImage",
         path: "C:\\Users\\alice\\figure.png",
       });
+      assert.deepEqual(lastInjectedItems, [
+        {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: (prepared.messages[0] as { content: string }).content,
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Earlier question." }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Earlier answer." }],
+        },
+      ]);
+    } finally {
+      destroyCachedCodexAppServerProcess("codex_app_server_chat");
+      if (globalThis.process?.env) {
+        if (typeof originalCodexPath === "string") {
+          globalThis.process.env.CODEX_PATH = originalCodexPath;
+        } else {
+          delete globalThis.process.env.CODEX_PATH;
+        }
+      }
+      (
+        globalThis as typeof globalThis & { ChromeUtils?: unknown }
+      ).ChromeUtils = originalChromeUtils;
+    }
+  });
+
+  it("falls back to legacy flattened chat input when thread/inject_items is unsupported", async function () {
+    const originalChromeUtils = (globalThis as typeof globalThis & {
+      ChromeUtils?: unknown;
+    }).ChromeUtils;
+    const originalCodexPath = globalThis.process?.env?.CODEX_PATH;
+    const originalToolkit = (
+      globalThis as typeof globalThis & { ztoolkit?: unknown }
+    ).ztoolkit;
+    const stdout = new MockStdout();
+    const turnInputs: unknown[] = [];
+    let injectAttemptCount = 0;
+
+    try {
+      if (globalThis.process?.env) {
+        globalThis.process.env.CODEX_PATH = "/mock/codex";
+      }
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit?: { log: () => void };
+        }
+      ).ztoolkit = {
+        log: () => undefined,
+      };
+
+      (
+        globalThis as typeof globalThis & {
+          ChromeUtils?: {
+            importESModule: (
+              path: string,
+            ) => { Subprocess: { call: () => Promise<unknown> } };
+          };
+        }
+      ).ChromeUtils = {
+        importESModule: (path: string) => {
+          assert.include(path, "Subprocess");
+          return {
+            Subprocess: {
+              call: async () => ({
+                stdout,
+                stdin: {
+                  write: (chunk: string) => {
+                    for (const line of chunk.split("\n")) {
+                      if (!line.trim()) continue;
+                      const message = JSON.parse(line) as {
+                        id?: number;
+                        method?: string;
+                        params?: { input?: unknown };
+                      };
+                      if (message.method === "initialize") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/start") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: "thread-1" } })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/inject_items") {
+                        injectAttemptCount += 1;
+                        stdout.push(
+                          `${JSON.stringify({
+                            id: message.id,
+                            error: {
+                              code: -32601,
+                              message:
+                                "Invalid request: unknown variant `thread/inject_items`, expected one of initialize, thread/start",
+                            },
+                          })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "turn/start") {
+                        turnInputs.push(message.params?.input ?? null);
+                        const turnId = `turn-${turnInputs.length}`;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: turnId } })}\n`,
+                        );
+                        queueMicrotask(() => {
+                          stdout.push(
+                            `${JSON.stringify({ method: "item/agentMessage/delta", params: { turnId, delta: turnInputs.length === 1 ? "First." : "Second." } })}\n`,
+                          );
+                          stdout.push(
+                            `${JSON.stringify({ method: "turn/completed", params: { turnId, status: "completed" } })}\n`,
+                          );
+                        });
+                      }
+                    }
+                  },
+                },
+                kill: () => undefined,
+              }),
+            },
+          };
+        },
+      };
+
+      const firstParams = {
+        prompt: "What changed?",
+        history: [
+          { role: "user" as const, content: "Earlier question." },
+          { role: "assistant" as const, content: "Earlier answer." },
+        ],
+        model: "gpt-5.4",
+        authMode: "codex_app_server" as const,
+        apiBase: "https://chatgpt.com/backend-api/codex/responses",
+      };
+      const secondParams = {
+        prompt: "Focus on action items.",
+        history: [
+          { role: "user" as const, content: "Earlier question." },
+          { role: "assistant" as const, content: "Earlier answer." },
+        ],
+        model: "gpt-5.4",
+        authMode: "codex_app_server" as const,
+        apiBase: "https://chatgpt.com/backend-api/codex/responses",
+      };
+      const firstPrepared = prepareChatRequest(firstParams);
+      const secondPrepared = prepareChatRequest(secondParams);
+
+      const first = await callLLMStream(firstParams, () => undefined);
+      const second = await callLLMStream(secondParams, () => undefined);
+
+      assert.equal(first, "First.");
+      assert.equal(second, "Second.");
+      assert.equal(injectAttemptCount, 1);
+      assert.deepEqual(
+        turnInputs[0],
+        firstPrepared.messages.map((message) => ({
+          type: "text",
+          text: `${
+            message.role === "system"
+              ? "System"
+              : message.role === "assistant"
+                ? "Assistant"
+                : "User"
+          }:\n${String(message.content)}`,
+        })),
+      );
+      assert.deepEqual(
+        turnInputs[1],
+        secondPrepared.messages.map((message) => ({
+          type: "text",
+          text: `${
+            message.role === "system"
+              ? "System"
+              : message.role === "assistant"
+                ? "Assistant"
+                : "User"
+          }:\n${String(message.content)}`,
+        })),
+      );
+    } finally {
+      destroyCachedCodexAppServerProcess("codex_app_server_chat");
+      if (globalThis.process?.env) {
+        if (typeof originalCodexPath === "string") {
+          globalThis.process.env.CODEX_PATH = originalCodexPath;
+        } else {
+          delete globalThis.process.env.CODEX_PATH;
+        }
+      }
+      (
+        globalThis as typeof globalThis & { ChromeUtils?: unknown }
+      ).ChromeUtils = originalChromeUtils;
+      (
+        globalThis as typeof globalThis & { ztoolkit?: unknown }
+      ).ztoolkit = originalToolkit;
+    }
+  });
+
+  it("surfaces non-compatibility inject failures instead of falling back", async function () {
+    const originalChromeUtils = (globalThis as typeof globalThis & {
+      ChromeUtils?: unknown;
+    }).ChromeUtils;
+    const originalCodexPath = globalThis.process?.env?.CODEX_PATH;
+    const stdout = new MockStdout();
+    let injectAttemptCount = 0;
+
+    try {
+      if (globalThis.process?.env) {
+        globalThis.process.env.CODEX_PATH = "/mock/codex";
+      }
+
+      (
+        globalThis as typeof globalThis & {
+          ChromeUtils?: {
+            importESModule: (
+              path: string,
+            ) => { Subprocess: { call: () => Promise<unknown> } };
+          };
+        }
+      ).ChromeUtils = {
+        importESModule: (path: string) => {
+          assert.include(path, "Subprocess");
+          return {
+            Subprocess: {
+              call: async () => ({
+                stdout,
+                stdin: {
+                  write: (chunk: string) => {
+                    for (const line of chunk.split("\n")) {
+                      if (!line.trim()) continue;
+                      const message = JSON.parse(line) as {
+                        id?: number;
+                        method?: string;
+                      };
+                      if (message.method === "initialize") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/start") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: "thread-1" } })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/inject_items") {
+                        injectAttemptCount += 1;
+                        stdout.push(
+                          `${JSON.stringify({
+                            id: message.id,
+                            error: {
+                              code: -32000,
+                              message: "permission denied while updating thread metadata",
+                            },
+                          })}\n`,
+                        );
+                      }
+                    }
+                  },
+                },
+                kill: () => undefined,
+              }),
+            },
+          };
+        },
+      };
+
+      const request = {
+        prompt: "What changed?",
+        history: [
+          { role: "user" as const, content: "Earlier question." },
+          { role: "assistant" as const, content: "Earlier answer." },
+        ],
+        model: "gpt-5.4",
+        authMode: "codex_app_server" as const,
+        apiBase: "https://chatgpt.com/backend-api/codex/responses",
+      };
+
+      try {
+        await callLLMStream(request, () => undefined);
+        assert.fail("expected inject failure to reject");
+      } catch (error) {
+        assert.include(
+          (error as Error).message,
+          "permission denied while updating thread metadata",
+        );
+      }
+
+      try {
+        await callLLMStream(request, () => undefined);
+        assert.fail("expected inject failure to reject");
+      } catch (error) {
+        assert.include(
+          (error as Error).message,
+          "permission denied while updating thread metadata",
+        );
+      }
+
+      assert.equal(injectAttemptCount, 2);
     } finally {
       destroyCachedCodexAppServerProcess("codex_app_server_chat");
       if (globalThis.process?.env) {

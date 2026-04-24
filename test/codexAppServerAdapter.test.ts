@@ -86,6 +86,382 @@ describe("CodexAppServerAdapter", function () {
     );
   });
 
+  it("injects seeded history on the first turn and sends only live user input later", async function () {
+    const originalChromeUtils = (globalThis as typeof globalThis & {
+      ChromeUtils?: unknown;
+    }).ChromeUtils;
+    const originalCodexPath = globalThis.process?.env?.CODEX_PATH;
+    const stdout = new MockStdout();
+    const processKey = "codex_app_server_seeded_history_test";
+    let threadStartCount = 0;
+    let injectCount = 0;
+    const turnInputs: unknown[] = [];
+    let injectedItems: unknown = null;
+
+    try {
+      if (globalThis.process?.env) {
+        globalThis.process.env.CODEX_PATH = "/mock/codex";
+      }
+
+      (
+        globalThis as typeof globalThis & {
+          ChromeUtils?: {
+            importESModule: (
+              path: string,
+            ) => { Subprocess: { call: () => Promise<unknown> } };
+          };
+        }
+      ).ChromeUtils = {
+        importESModule: (path: string) => {
+          assert.include(path, "Subprocess");
+          return {
+            Subprocess: {
+              call: async () => ({
+                stdout,
+                stdin: {
+                  write: (chunk: string) => {
+                    for (const line of chunk.split("\n")) {
+                      if (!line.trim()) continue;
+                      const message = JSON.parse(line) as {
+                        id?: number;
+                        method?: string;
+                        params?: { input?: unknown; items?: unknown };
+                      };
+                      if (message.method === "initialize") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/start") {
+                        threadStartCount += 1;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: "thread-1" } })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/inject_items") {
+                        injectCount += 1;
+                        injectedItems = message.params?.items ?? null;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "turn/start") {
+                        turnInputs.push(message.params?.input ?? null);
+                        const turnId = `turn-${turnInputs.length}`;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: turnId } })}\n`,
+                        );
+                        setTimeout(() => {
+                          stdout.push(
+                            `${JSON.stringify({ method: "item/agentMessage/delta", params: { turnId, delta: turnInputs.length === 1 ? "First." : "Second." } })}\n`,
+                          );
+                          stdout.push(
+                            `${JSON.stringify({ method: "turn/completed", params: { turnId, status: "completed" } })}\n`,
+                          );
+                        }, 0);
+                      }
+                    }
+                  },
+                },
+                kill: () => undefined,
+              }),
+            },
+          };
+        },
+      };
+
+      const adapter = new CodexAppServerAdapter(processKey);
+      const first = await adapter.runStep({
+        request: makeRequest(),
+        messages: [
+          {
+            role: "system",
+            content: "Follow Zotero-specific tool guidance.",
+          },
+          {
+            role: "assistant",
+            content: "I can inspect your library.",
+          },
+          {
+            role: "user",
+            content: "Summarize this note.",
+          },
+        ],
+        tools: [],
+      });
+      const second = await adapter.runStep({
+        request: makeRequest(),
+        messages: [
+          {
+            role: "system",
+            content: "Follow Zotero-specific tool guidance.",
+          },
+          {
+            role: "assistant",
+            content: "I can inspect your library.",
+          },
+          {
+            role: "user",
+            content: "Summarize this note.",
+          },
+          {
+            role: "assistant",
+            content: "First.",
+          },
+          {
+            role: "user",
+            content: "Focus on action items.",
+          },
+        ],
+        tools: [],
+      });
+
+      assert.equal(first.kind, "final");
+      assert.equal(second.kind, "final");
+      assert.equal(threadStartCount, 1);
+      assert.equal(injectCount, 1);
+      assert.deepEqual(injectedItems, [
+        {
+          type: "message",
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: "Follow Zotero-specific tool guidance.",
+            },
+          ],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "I can inspect your library.",
+            },
+          ],
+        },
+      ]);
+      assert.deepEqual(turnInputs[0], [
+        {
+          type: "text",
+          text: "Summarize this note.",
+        },
+      ]);
+      assert.deepEqual(turnInputs[1], [
+        {
+          type: "text",
+          text: "Focus on action items.",
+        },
+      ]);
+    } finally {
+      destroyCachedCodexAppServerProcess(processKey);
+      if (globalThis.process?.env) {
+        if (typeof originalCodexPath === "string") {
+          globalThis.process.env.CODEX_PATH = originalCodexPath;
+        } else {
+          delete globalThis.process.env.CODEX_PATH;
+        }
+      }
+      (
+        globalThis as typeof globalThis & { ChromeUtils?: unknown }
+      ).ChromeUtils = originalChromeUtils;
+    }
+  });
+
+  it("falls back to legacy flattened first-turn input on older app-server binaries", async function () {
+    const originalChromeUtils = (globalThis as typeof globalThis & {
+      ChromeUtils?: unknown;
+    }).ChromeUtils;
+    const originalCodexPath = globalThis.process?.env?.CODEX_PATH;
+    const originalToolkit = (
+      globalThis as typeof globalThis & { ztoolkit?: unknown }
+    ).ztoolkit;
+    const stdout = new MockStdout();
+    const processKey = "codex_app_server_legacy_fallback_test";
+    let threadStartCount = 0;
+    let injectCount = 0;
+    const turnInputs: unknown[] = [];
+
+    try {
+      if (globalThis.process?.env) {
+        globalThis.process.env.CODEX_PATH = "/mock/codex";
+      }
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit?: { log: () => void };
+        }
+      ).ztoolkit = {
+        log: () => undefined,
+      };
+
+      (
+        globalThis as typeof globalThis & {
+          ChromeUtils?: {
+            importESModule: (
+              path: string,
+            ) => { Subprocess: { call: () => Promise<unknown> } };
+          };
+        }
+      ).ChromeUtils = {
+        importESModule: (path: string) => {
+          assert.include(path, "Subprocess");
+          return {
+            Subprocess: {
+              call: async () => ({
+                stdout,
+                stdin: {
+                  write: (chunk: string) => {
+                    for (const line of chunk.split("\n")) {
+                      if (!line.trim()) continue;
+                      const message = JSON.parse(line) as {
+                        id?: number;
+                        method?: string;
+                        params?: { input?: unknown };
+                      };
+                      if (message.method === "initialize") {
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: {} })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/start") {
+                        threadStartCount += 1;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: "thread-1" } })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "thread/inject_items") {
+                        injectCount += 1;
+                        stdout.push(
+                          `${JSON.stringify({
+                            id: message.id,
+                            error: {
+                              code: -32601,
+                              message:
+                                "Invalid request: unknown variant `thread/inject_items`, expected one of initialize, thread/start",
+                            },
+                          })}\n`,
+                        );
+                        continue;
+                      }
+                      if (message.method === "turn/start") {
+                        turnInputs.push(message.params?.input ?? null);
+                        const turnId = `turn-${turnInputs.length}`;
+                        stdout.push(
+                          `${JSON.stringify({ id: message.id, result: { id: turnId } })}\n`,
+                        );
+                        setTimeout(() => {
+                          stdout.push(
+                            `${JSON.stringify({ method: "item/agentMessage/delta", params: { turnId, delta: turnInputs.length === 1 ? "First." : "Second." } })}\n`,
+                          );
+                          stdout.push(
+                            `${JSON.stringify({ method: "turn/completed", params: { turnId, status: "completed" } })}\n`,
+                          );
+                        }, 0);
+                      }
+                    }
+                  },
+                },
+                kill: () => undefined,
+              }),
+            },
+          };
+        },
+      };
+
+      const adapter = new CodexAppServerAdapter(processKey);
+      const first = await adapter.runStep({
+        request: makeRequest(),
+        messages: [
+          {
+            role: "system",
+            content: "Follow Zotero-specific tool guidance.",
+          },
+          {
+            role: "assistant",
+            content: "I can inspect your library.",
+          },
+          {
+            role: "user",
+            content: "Summarize this note.",
+          },
+        ],
+        tools: [],
+      });
+      const second = await adapter.runStep({
+        request: makeRequest(),
+        messages: [
+          {
+            role: "system",
+            content: "Follow Zotero-specific tool guidance.",
+          },
+          {
+            role: "assistant",
+            content: "I can inspect your library.",
+          },
+          {
+            role: "user",
+            content: "Summarize this note.",
+          },
+          {
+            role: "assistant",
+            content: "First.",
+          },
+          {
+            role: "user",
+            content: "Focus on action items.",
+          },
+        ],
+        tools: [],
+      });
+
+      assert.equal(first.kind, "final");
+      assert.equal(second.kind, "final");
+      assert.equal(threadStartCount, 1);
+      assert.equal(injectCount, 1);
+      assert.deepEqual(turnInputs[0], [
+        {
+          type: "text",
+          text: "System:\nFollow Zotero-specific tool guidance.",
+        },
+        {
+          type: "text",
+          text: "Assistant:\nI can inspect your library.",
+        },
+        {
+          type: "text",
+          text: "User:\nSummarize this note.",
+        },
+      ]);
+      assert.deepEqual(turnInputs[1], [
+        {
+          type: "text",
+          text: "Focus on action items.",
+        },
+      ]);
+    } finally {
+      destroyCachedCodexAppServerProcess(processKey);
+      if (globalThis.process?.env) {
+        if (typeof originalCodexPath === "string") {
+          globalThis.process.env.CODEX_PATH = originalCodexPath;
+        } else {
+          delete globalThis.process.env.CODEX_PATH;
+        }
+      }
+      (
+        globalThis as typeof globalThis & { ChromeUtils?: unknown }
+      ).ChromeUtils = originalChromeUtils;
+      (
+        globalThis as typeof globalThis & { ztoolkit?: unknown }
+      ).ztoolkit = originalToolkit;
+    }
+  });
+
   it("forwards app-server reasoning events into the shared reasoning callback", async function () {
     const originalChromeUtils = (globalThis as typeof globalThis & {
       ChromeUtils?: unknown;

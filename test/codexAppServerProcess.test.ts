@@ -5,6 +5,10 @@ import {
   extractCodexAppServerThreadId,
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
+  isCodexAppServerInjectItemsUnsupportedError,
+  listNvmCodexCandidates,
+  resolveCodexBinary,
+  resolveCodexAppServerTurnInputWithFallback,
   resolveCodexAppServerReasoningParams,
   waitForCodexAppServerTurnCompletion,
 } from "../src/utils/codexAppServerProcess";
@@ -72,6 +76,88 @@ describe("codexAppServerProcess", function () {
         summary: "detailed",
       },
     );
+  });
+
+  it("recognizes older-server thread/inject_items compatibility errors", function () {
+    assert.isTrue(
+      isCodexAppServerInjectItemsUnsupportedError(
+        new Error(
+          "Invalid request: unknown variant `thread/inject_items`, expected one of initialize, thread/start, thread/resume",
+        ),
+      ),
+    );
+    assert.isTrue(
+      isCodexAppServerInjectItemsUnsupportedError(
+        new Error("Method not found: thread/inject_items (-32601)"),
+      ),
+    );
+    assert.isFalse(
+      isCodexAppServerInjectItemsUnsupportedError(
+        new Error("permission denied while updating thread metadata"),
+      ),
+    );
+  });
+
+  it("caches unsupported inject_items capability after the first compatibility failure", async function () {
+    const originalToolkit = (
+      globalThis as typeof globalThis & { ztoolkit?: unknown }
+    ).ztoolkit;
+    const proc = createProcess();
+    const requests: string[] = [];
+    try {
+      (
+        globalThis as typeof globalThis & {
+          ztoolkit?: { log: () => void };
+        }
+      ).ztoolkit = {
+        log: () => undefined,
+      };
+      proc.sendRequest = async (method: string) => {
+        requests.push(method);
+        if (method === "thread/inject_items") {
+          throw new Error(
+            "Invalid request: unknown variant `thread/inject_items`, expected one of initialize, thread/start",
+          );
+        }
+        return {};
+      };
+
+      const legacyInput = [{ type: "text" as const, text: "User:\nHello" }];
+      const historyItemsToInject = [
+        {
+          type: "message" as const,
+          role: "user" as const,
+          content: [{ type: "input_text" as const, text: "Earlier question." }],
+        },
+      ];
+      const turnInput = [{ type: "text" as const, text: "Hello" }];
+
+      const first = await resolveCodexAppServerTurnInputWithFallback({
+        proc,
+        threadId: "thread-1",
+        historyItemsToInject,
+        turnInput,
+        legacyInputFactory: async () => legacyInput,
+        logContext: "test",
+      });
+      const second = await resolveCodexAppServerTurnInputWithFallback({
+        proc,
+        threadId: "thread-1",
+        historyItemsToInject,
+        turnInput,
+        legacyInputFactory: async () => legacyInput,
+        logContext: "test",
+      });
+
+      assert.deepEqual(first, legacyInput);
+      assert.deepEqual(second, legacyInput);
+      assert.equal(proc.getInjectItemsSupport(), "unsupported");
+      assert.deepEqual(requests, ["thread/inject_items"]);
+    } finally {
+      (
+        globalThis as typeof globalThis & { ztoolkit?: unknown }
+      ).ztoolkit = originalToolkit;
+    }
   });
 
   it("serializes turn work on a shared process", async function () {
@@ -762,6 +848,8 @@ describe("codexAppServerProcess", function () {
       env: {
         ...originalProcess?.env,
         HOME: "/Users/alice",
+        NVM_DIR: "/Users/alice/.nvm",
+        CODEX_PATH: "",
       },
     } as typeof process;
     (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils = {
@@ -827,5 +915,143 @@ describe("codexAppServerProcess", function () {
     });
     assert.equal(calls[1]?.command, "/opt/homebrew/bin/codex");
     assert.deepEqual(calls[1]?.arguments, ["app-server"]);
+  });
+
+  it("finds codex in an npm prefix bin without relying on PATH", async function () {
+    const originalZotero = globalThis.Zotero;
+    const originalProcess = globalThis.process;
+    const originalIOUtils = (
+      globalThis as typeof globalThis & { IOUtils?: unknown }
+    ).IOUtils;
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      isMac: true,
+    } as unknown;
+    (globalThis as typeof globalThis & { process?: typeof process }).process = {
+      ...originalProcess,
+      env: {
+        ...originalProcess?.env,
+        HOME: "/Users/alice",
+        NPM_CONFIG_PREFIX: "/Users/alice/.npm-global",
+        CODEX_PATH: "",
+      },
+    } as typeof process;
+    (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) =>
+        path === "/Users/alice/.npm-global/bin/codex",
+      getChildren: async () => [],
+    };
+
+    try {
+      const binary = await resolveCodexBinary();
+      assert.equal(binary, "/Users/alice/.npm-global/bin/codex");
+    } finally {
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      (globalThis as typeof globalThis & { process?: typeof process }).process =
+        originalProcess;
+      (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils =
+        originalIOUtils;
+    }
+  });
+
+  it("finds codex in common Volta fallback locations", async function () {
+    const originalZotero = globalThis.Zotero;
+    const originalProcess = globalThis.process;
+    const originalIOUtils = (
+      globalThis as typeof globalThis & { IOUtils?: unknown }
+    ).IOUtils;
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      isMac: true,
+    } as unknown;
+    (globalThis as typeof globalThis & { process?: typeof process }).process = {
+      ...originalProcess,
+      env: {
+        ...originalProcess?.env,
+        HOME: "/Users/alice",
+        CODEX_PATH: "",
+      },
+    } as typeof process;
+    (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === "/Users/alice/.volta/bin/codex",
+      getChildren: async () => [],
+    };
+
+    try {
+      const binary = await resolveCodexBinary();
+      assert.equal(binary, "/Users/alice/.volta/bin/codex");
+    } finally {
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      (globalThis as typeof globalThis & { process?: typeof process }).process =
+        originalProcess;
+      (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils =
+        originalIOUtils;
+    }
+  });
+
+  it("prefers the newest nvm-installed codex binary", async function () {
+    const originalIOUtils = (
+      globalThis as typeof globalThis & { IOUtils?: unknown }
+    ).IOUtils;
+
+    (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils = {
+      getChildren: async (path: string) =>
+        path === "/Users/alice/.nvm/versions/node"
+          ? ["v20.18.0", "v22.2.0"]
+          : [],
+    };
+
+    try {
+      const candidates = await listNvmCodexCandidates({
+        homeDir: "/Users/alice",
+        nvmDir: "/Users/alice/.nvm",
+        separator: "/",
+      });
+      assert.deepEqual(candidates, [
+        "/Users/alice/.nvm/versions/node/v22.2.0/bin/codex",
+        "/Users/alice/.nvm/versions/node/v20.18.0/bin/codex",
+      ]);
+    } finally {
+      (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils =
+        originalIOUtils;
+    }
+  });
+
+  it("falls back to the cargo install path when no other candidate exists", async function () {
+    const originalZotero = globalThis.Zotero;
+    const originalProcess = globalThis.process;
+    const originalIOUtils = (
+      globalThis as typeof globalThis & { IOUtils?: unknown }
+    ).IOUtils;
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      isMac: true,
+    } as unknown;
+    (globalThis as typeof globalThis & { process?: typeof process }).process = {
+      ...originalProcess,
+      env: {
+        ...originalProcess?.env,
+        HOME: "/Users/alice",
+        CODEX_PATH: "",
+      },
+    } as typeof process;
+    (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils = {
+      exists: async (path: string) => path === "/Users/alice/.cargo/bin/codex",
+      getChildren: async () => [],
+    };
+
+    try {
+      const binary = await resolveCodexBinary();
+      assert.equal(binary, "/Users/alice/.cargo/bin/codex");
+    } finally {
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      (globalThis as typeof globalThis & { process?: typeof process }).process =
+        originalProcess;
+      (globalThis as typeof globalThis & { IOUtils?: unknown }).IOUtils =
+        originalIOUtils;
+    }
   });
 });

@@ -99,6 +99,11 @@ import {
   resolvePromptText,
 } from "./textUtils";
 import {
+  buildCodexAppServerAttachmentBlockMessage,
+  getBlockedCodexAppServerChatAttachments,
+  shouldApplyCodexAppServerChatAttachmentPolicy,
+} from "./codexAppServerAttachmentPolicy";
+import {
   normalizeSelectedTextNoteContexts,
   normalizeSelectedTextPaperContexts as normalizeSelectedTextPaperContextEntries,
   normalizeSelectedTextSources,
@@ -1594,7 +1599,7 @@ function getWebChatRunStateLabel(message: Message): string | null {
 function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
-  fileAttachments: ChatFileAttachment[];
+  attachments: ChatAttachment[];
   paperContexts: PaperContextRef[];
   fullTextPaperContexts: PaperContextRef[];
 } {
@@ -1608,19 +1613,7 @@ function reconstructRetryPayload(userMessage: Message): {
     selectedTexts.length,
   );
   const primarySelectedText = selectedTexts[0] || "";
-  const fileAttachments = (
-    Array.isArray(userMessage.attachments)
-      ? userMessage.attachments.filter(
-          (attachment) =>
-            Boolean(attachment) &&
-            typeof attachment === "object" &&
-            typeof attachment.id === "string" &&
-            attachment.id.trim() &&
-            typeof attachment.name === "string" &&
-            attachment.category !== "image",
-        )
-      : []
-  ) as ChatAttachment[];
+  const fileAttachments = normalizeEditableAttachments(userMessage.attachments);
   const promptText = resolvePromptText(
     sanitizeText(userMessage.text || ""),
     primarySelectedText,
@@ -1654,26 +1647,10 @@ function reconstructRetryPayload(userMessage: Message): {
   const fullTextPaperContexts = normalizePaperContexts(
     userMessage.fullTextPaperContexts || userMessage.pinnedPaperContexts,
   );
-  const fileAttachmentsForModel: ChatFileAttachment[] = [];
-  for (const attachment of fileAttachments) {
-    if (
-      !attachment.name ||
-      typeof attachment.storedPath !== "string" ||
-      !attachment.storedPath.trim()
-    ) {
-      continue;
-    }
-    fileAttachmentsForModel.push({
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      storedPath: attachment.storedPath.trim(),
-      contentHash: attachment.contentHash,
-    });
-  }
   return {
     question,
     screenshotImages,
-    fileAttachments: fileAttachmentsForModel,
+    attachments: fileAttachments,
     paperContexts,
     fullTextPaperContexts,
   };
@@ -1699,7 +1676,19 @@ function buildLLMHistoryMessages(history: Message[]): ChatMessage[] {
 
 function normalizeModelFileAttachments(
   attachments?: ChatAttachment[],
+  options?: {
+    authMode?: string;
+    runtimeMode?: ChatRuntimeMode;
+  },
 ): ChatFileAttachment[] {
+  if (
+    shouldApplyCodexAppServerChatAttachmentPolicy({
+      authMode: options?.authMode,
+      runtimeMode: options?.runtimeMode,
+    })
+  ) {
+    return [];
+  }
   if (!Array.isArray(attachments) || !attachments.length) return [];
   return attachments
     .filter(
@@ -2161,7 +2150,7 @@ export async function retryLatestAssistantResponse(
   const {
     question,
     screenshotImages,
-    fileAttachments,
+    attachments,
     paperContexts,
     fullTextPaperContexts,
   } = reconstructRetryPayload(retryPair.userMessage);
@@ -2209,6 +2198,28 @@ export async function retryLatestAssistantResponse(
     });
     setStatusSafely("Cancelled", "ready");
   };
+  if (
+    shouldApplyCodexAppServerChatAttachmentPolicy({
+      authMode: effectiveRequestConfig.authMode,
+      runtimeMode: "chat",
+    })
+  ) {
+    const blockedAttachments =
+      getBlockedCodexAppServerChatAttachments(attachments);
+    if (blockedAttachments.length) {
+      restoreOriginalAssistant();
+      restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      setStatusSafely(
+        buildCodexAppServerAttachmentBlockMessage(blockedAttachments),
+        "error",
+      );
+      return;
+    }
+  }
+  const requestFileAttachments = normalizeModelFileAttachments(attachments, {
+    authMode: effectiveRequestConfig.authMode,
+    runtimeMode: "chat",
+  });
 
   try {
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
@@ -2290,7 +2301,7 @@ export async function retryLatestAssistantResponse(
       history: llmHistory,
       signal: getAbortController(conversationKey)?.signal,
       images: allImages.length ? allImages : undefined,
-      attachments: fileAttachments,
+      attachments: requestFileAttachments,
       model: effectiveRequestConfig.model,
       apiBase: effectiveRequestConfig.apiBase,
       apiKey: effectiveRequestConfig.apiKey,
@@ -2860,7 +2871,6 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   }
   const history = chatHistory.get(conversationKey)!;
   const historyForLLM = history.slice();
-  const requestFileAttachments = normalizeModelFileAttachments(attachments);
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
     model,
@@ -2868,6 +2878,10 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     apiKey,
     reasoning,
     advanced,
+  });
+  const requestFileAttachments = normalizeModelFileAttachments(attachments, {
+    authMode: effectiveRequestConfig.authMode,
+    runtimeMode,
   });
   const shownQuestion = displayQuestion || question;
   const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);

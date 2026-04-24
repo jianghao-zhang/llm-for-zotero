@@ -1,4 +1,8 @@
 import type { ReasoningConfig, ReasoningEvent, UsageStats } from "./llmClient";
+import type {
+  CodexAppServerHistoryItem,
+  CodexAppServerUserInput,
+} from "./codexAppServerInput";
 import { getRuntimePlatformInfo } from "./runtimePlatform";
 import { getReasoningDefaultLevelForModel } from "./reasoningProfiles";
 
@@ -16,6 +20,11 @@ type RequestHandler = (
   params: unknown,
   id: number,
 ) => unknown | Promise<unknown>;
+
+export type CodexAppServerInjectItemsSupport =
+  | "unknown"
+  | "supported"
+  | "unsupported";
 
 function createAbortError(): Error {
   const err = new Error("Aborted");
@@ -36,6 +45,7 @@ export class CodexAppServerProcess {
   private lineBuffer = "";
   private destroyed = false;
   private didNotifyClose = false;
+  private injectItemsSupport: CodexAppServerInjectItemsSupport = "unknown";
 
   private constructor(proc: unknown) {
     this.proc = proc;
@@ -327,6 +337,16 @@ export class CodexAppServerProcess {
     };
   }
 
+  getInjectItemsSupport(): CodexAppServerInjectItemsSupport {
+    return this.injectItemsSupport;
+  }
+
+  setInjectItemsSupport(
+    value: CodexAppServerInjectItemsSupport,
+  ): void {
+    this.injectItemsSupport = value;
+  }
+
   private async initialize(): Promise<void> {
     await this.sendRequest("initialize", {
       clientInfo: { name: "llm-for-zotero", version: "1.0" },
@@ -369,6 +389,59 @@ export class CodexAppServerProcess {
       }
     }
     this.closeHandlers.clear();
+  }
+}
+
+export function isCodexAppServerInjectItemsUnsupportedError(
+  error: unknown,
+): boolean {
+  const message =
+    error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+  if (!normalized.includes("thread/inject_items")) return false;
+  return (
+    normalized.includes("unknown variant") ||
+    normalized.includes("expected one of") ||
+    normalized.includes("method not found") ||
+    normalized.includes("unknown method") ||
+    normalized.includes("no handler registered") ||
+    normalized.includes("-32601")
+  );
+}
+
+export async function resolveCodexAppServerTurnInputWithFallback(params: {
+  proc: CodexAppServerProcess;
+  threadId: string;
+  historyItemsToInject: CodexAppServerHistoryItem[];
+  turnInput: CodexAppServerUserInput[];
+  legacyInputFactory: () => Promise<CodexAppServerUserInput[]>;
+  logContext: string;
+}): Promise<CodexAppServerUserInput[]> {
+  const support = params.proc.getInjectItemsSupport();
+  if (!params.historyItemsToInject.length) {
+    return params.turnInput;
+  }
+  if (support === "unsupported") {
+    return params.legacyInputFactory();
+  }
+
+  try {
+    await params.proc.sendRequest("thread/inject_items", {
+      threadId: params.threadId,
+      items: params.historyItemsToInject,
+    });
+    params.proc.setInjectItemsSupport("supported");
+    return params.turnInput;
+  } catch (error) {
+    if (!isCodexAppServerInjectItemsUnsupportedError(error)) {
+      throw error;
+    }
+    params.proc.setInjectItemsSupport("unsupported");
+    ztoolkit.log(
+      "Codex app-server: thread/inject_items unsupported; using legacy flattened input",
+      { context: params.logContext },
+    );
+    return params.legacyInputFactory();
   }
 }
 
@@ -771,7 +844,130 @@ export function waitForCodexAppServerTurnCompletion(params: {
   });
 }
 
-async function resolveCodexBinary(): Promise<string> {
+function getNonEmptyEnvValue(
+  env: Record<string, string | undefined>,
+  key: string,
+): string | undefined {
+  const value = env[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function joinRuntimePath(
+  separator: "/" | "\\",
+  base: string,
+  ...parts: string[]
+): string {
+  let current = base.replace(/[\\/]+$/, "");
+  for (const part of parts) {
+    const normalized = part.replace(/^[\\/]+|[\\/]+$/g, "");
+    if (!normalized) continue;
+    current = current ? `${current}${separator}${normalized}` : normalized;
+  }
+  return current;
+}
+
+function resolveListedChildPath(
+  separator: "/" | "\\",
+  parent: string,
+  child: string,
+): string {
+  const trimmed = child.trim();
+  if (!trimmed) return trimmed;
+  if (
+    trimmed.startsWith(parent) ||
+    trimmed.includes(separator) ||
+    (separator === "\\" && /^[a-z]:\\/i.test(trimmed))
+  ) {
+    return trimmed;
+  }
+  return joinRuntimePath(separator, parent, trimmed);
+}
+
+function uniquePaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of paths) {
+    const normalized = path.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  const IOUtils = (globalThis as any).IOUtils;
+  if (IOUtils?.exists) {
+    try {
+      return Boolean(await IOUtils.exists(path));
+    } catch {
+      return false;
+    }
+  }
+  const OSFile = (globalThis as any).OS?.File;
+  if (OSFile?.exists) {
+    try {
+      return Boolean(await OSFile.exists(path));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+async function listChildren(path: string): Promise<string[]> {
+  const IOUtils = (globalThis as any).IOUtils;
+  if (!IOUtils?.getChildren) return [];
+  try {
+    const children = await IOUtils.getChildren(path);
+    return Array.isArray(children)
+      ? children.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildPrefixCodexCandidates(params: {
+  prefix: string;
+  platform: "windows" | "macos" | "linux";
+  separator: "/" | "\\";
+}): string[] {
+  const prefix = params.prefix.trim();
+  if (!prefix) return [];
+  if (params.platform === "windows") {
+    return [
+      joinRuntimePath(params.separator, prefix, "codex.cmd"),
+      joinRuntimePath(params.separator, prefix, "codex.exe"),
+      joinRuntimePath(params.separator, prefix, "bin", "codex.cmd"),
+      joinRuntimePath(params.separator, prefix, "bin", "codex.exe"),
+    ];
+  }
+  return [
+    joinRuntimePath(params.separator, prefix, "bin", "codex"),
+    joinRuntimePath(params.separator, prefix, "codex"),
+  ];
+}
+
+export async function listNvmCodexCandidates(params: {
+  homeDir: string;
+  nvmDir?: string;
+  separator: "/";
+}): Promise<string[]> {
+  const root = params.nvmDir?.trim() || joinRuntimePath("/", params.homeDir, ".nvm");
+  const versionsDir = joinRuntimePath(params.separator, root, "versions", "node");
+  const versionDirs = await listChildren(versionsDir);
+  return versionDirs
+    .map((entry) =>
+      resolveListedChildPath(params.separator, versionsDir, entry),
+    )
+    .sort((a, b) => b.localeCompare(a))
+    .map((versionDir) =>
+      joinRuntimePath(params.separator, versionDir, "bin", "codex"),
+    );
+}
+
+export async function resolveCodexBinary(): Promise<string> {
   const info = getRuntimePlatformInfo();
   const env = (globalThis as any).process?.env ?? {};
 
@@ -812,35 +1008,126 @@ async function resolveCodexBinary(): Promise<string> {
     }
   }
 
-  // 3. Common install paths
-  const candidates =
+  // 3. Deterministic common install paths
+  const homeDir =
+    getNonEmptyEnvValue(env, "HOME") ||
+    getNonEmptyEnvValue(env, "USERPROFILE") ||
+    "";
+  const prefixCandidates = uniquePaths(
+    [
+      getNonEmptyEnvValue(env, "NPM_CONFIG_PREFIX"),
+      getNonEmptyEnvValue(env, "npm_config_prefix"),
+      getNonEmptyEnvValue(env, "PREFIX"),
+    ]
+      .filter((entry): entry is string => Boolean(entry))
+      .flatMap((prefix) =>
+        buildPrefixCodexCandidates({
+          prefix,
+          platform: info.platform,
+          separator: info.pathSeparator,
+        }),
+      ),
+  );
+  const commonCandidates =
     info.platform === "windows"
-      ? [
-          `${env.USERPROFILE ?? "C:\\Users\\User"}\\.cargo\\bin\\codex.exe`,
+      ? uniquePaths([
+          joinRuntimePath(
+            info.pathSeparator,
+            getNonEmptyEnvValue(env, "USERPROFILE") ?? "C:\\Users\\User",
+            ".cargo",
+            "bin",
+            "codex.exe",
+          ),
+          joinRuntimePath(
+            info.pathSeparator,
+            getNonEmptyEnvValue(env, "APPDATA") ??
+              joinRuntimePath(
+                info.pathSeparator,
+                getNonEmptyEnvValue(env, "USERPROFILE") ?? "C:\\Users\\User",
+                "AppData",
+                "Roaming",
+              ),
+            "npm",
+            "codex.cmd",
+          ),
+          joinRuntimePath(
+            info.pathSeparator,
+            getNonEmptyEnvValue(env, "APPDATA") ??
+              joinRuntimePath(
+                info.pathSeparator,
+                getNonEmptyEnvValue(env, "USERPROFILE") ?? "C:\\Users\\User",
+                "AppData",
+                "Roaming",
+              ),
+            "npm",
+            "codex.exe",
+          ),
+          joinRuntimePath(
+            info.pathSeparator,
+            getNonEmptyEnvValue(env, "LOCALAPPDATA") ??
+              joinRuntimePath(
+                info.pathSeparator,
+                getNonEmptyEnvValue(env, "USERPROFILE") ?? "C:\\Users\\User",
+                "AppData",
+                "Local",
+              ),
+            "Volta",
+            "bin",
+            "codex.cmd",
+          ),
+          joinRuntimePath(
+            info.pathSeparator,
+            getNonEmptyEnvValue(env, "LOCALAPPDATA") ??
+              joinRuntimePath(
+                info.pathSeparator,
+                getNonEmptyEnvValue(env, "USERPROFILE") ?? "C:\\Users\\User",
+                "AppData",
+                "Local",
+              ),
+            "Volta",
+            "bin",
+            "codex.exe",
+          ),
           "C:\\Program Files\\codex\\codex.exe",
-        ]
-      : info.platform === "macos"
-        ? [
-            `${env.HOME ?? "~"}/.cargo/bin/codex`,
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/usr/bin/codex",
-          ]
-        : [
-            `${env.HOME ?? "~"}/.cargo/bin/codex`,
-            "/usr/local/bin/codex",
-            "/usr/bin/codex",
-          ];
+        ])
+      : uniquePaths([
+          homeDir
+            ? joinRuntimePath(info.pathSeparator, homeDir, ".cargo", "bin", "codex")
+            : "",
+          homeDir
+            ? joinRuntimePath(
+                info.pathSeparator,
+                homeDir,
+                ".npm-global",
+                "bin",
+                "codex",
+              )
+            : "",
+          homeDir
+            ? joinRuntimePath(info.pathSeparator, homeDir, ".local", "bin", "codex")
+            : "",
+          homeDir
+            ? joinRuntimePath(info.pathSeparator, homeDir, ".volta", "bin", "codex")
+            : "",
+          homeDir
+            ? joinRuntimePath(info.pathSeparator, homeDir, ".asdf", "shims", "codex")
+            : "",
+          ...(info.platform === "macos" ? ["/opt/homebrew/bin/codex"] : []),
+          "/usr/local/bin/codex",
+          "/usr/bin/codex",
+        ]);
 
-  const IOUtils = (globalThis as any).IOUtils;
-  if (IOUtils?.exists) {
-    for (const candidate of candidates) {
-      try {
-        if (await IOUtils.exists(candidate)) return candidate;
-      } catch {
-        /* continue */
-      }
-    }
+  const nvmCandidates =
+    info.platform === "windows" || !homeDir
+      ? []
+      : await listNvmCodexCandidates({
+          homeDir,
+          nvmDir: getNonEmptyEnvValue(env, "NVM_DIR"),
+          separator: "/",
+        });
+
+  for (const candidate of [...prefixCandidates, ...commonCandidates, ...nvmCandidates]) {
+    if (await pathExists(candidate)) return candidate;
   }
 
   throw new Error(

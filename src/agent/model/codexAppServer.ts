@@ -10,12 +10,14 @@ import {
   extractCodexAppServerThreadId,
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
+  resolveCodexAppServerTurnInputWithFallback,
   resolveCodexAppServerReasoningParams,
   waitForCodexAppServerTurnCompletion,
 } from "../../utils/codexAppServerProcess";
 import {
-  buildCodexAppServerAgentInitialInput,
+  buildLegacyCodexAppServerAgentInitialInput,
   extractLatestCodexAppServerUserInput,
+  prepareCodexAppServerAgentTurn,
 } from "../../utils/codexAppServerInput";
 import { isMultimodalRequestSupported } from "./messageBuilder";
 
@@ -114,12 +116,27 @@ export class CodexAppServerAdapter implements AgentModelAdapter {
               throw new Error("Codex app-server did not return a thread ID");
             }
           }
-          const userInput = isFirstTurn
-            ? await buildCodexAppServerAgentInitialInput(params.messages)
+          const activeThreadId = this.threadId;
+          if (!activeThreadId) {
+            throw new Error("Codex app-server thread is not initialized");
+          }
+          const preparedTurn = isFirstTurn
+            ? await prepareCodexAppServerAgentTurn(params.messages)
+            : null;
+          const userInput = preparedTurn
+            ? await resolveCodexAppServerTurnInputWithFallback({
+                proc,
+                threadId: activeThreadId,
+                historyItemsToInject: preparedTurn.historyItemsToInject,
+                turnInput: preparedTurn.turnInput,
+                legacyInputFactory: () =>
+                  buildLegacyCodexAppServerAgentInitialInput(params.messages),
+                logContext: "agent-first-turn",
+              })
             : await extractLatestCodexAppServerUserInput(params.messages);
 
           const turnResp = await proc.sendRequest("turn/start", {
-            threadId: this.threadId,
+            threadId: activeThreadId,
             input: userInput,
             model: request.model,
             ...resolveCodexAppServerReasoningParams(
