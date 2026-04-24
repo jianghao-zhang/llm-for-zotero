@@ -32,7 +32,7 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const items = buildAgentTraceDisplayItems(events, null);
+    const { items } = buildAgentTraceDisplayItems(events, null);
     const reasoningItem = items.find(
       (item) => item.type === "reasoning",
     );
@@ -162,7 +162,7 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const items = buildAgentTraceDisplayItems(events, null);
+    const { items } = buildAgentTraceDisplayItems(events, null);
     const messageTexts = items
       .filter(
         (item): item is Extract<(typeof items)[number], { type: "message" }> =>
@@ -185,5 +185,84 @@ describe("agentTrace render", function () {
       "I have enough grounded information now",
     );
     assert.include(actionTexts, "Drafting answer");
+  });
+
+  it("does not mark rolled-back scratch text as interleaved", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "message_delta",
+        payload: {
+          type: "message_delta",
+          text: "Let me inspect this first.",
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "message_rollback",
+        payload: {
+          type: "message_rollback",
+          length: "Let me inspect this first.".length,
+          text: "Let me inspect this first.",
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "read_paper",
+          args: { operation: "front_matter" },
+        },
+        createdAt: 3,
+      },
+    ];
+
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null);
+
+    assert.isFalse(isInterleaved);
+    assert.isFalse(items.some((item) => item.type === "inline_text"));
+  });
+
+  it("keeps visible text before a tool call marked as interleaved", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "message_delta",
+        payload: {
+          type: "message_delta",
+          text: "Working through the evidence.",
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "read_paper",
+          args: { operation: "front_matter" },
+        },
+        createdAt: 2,
+      },
+    ];
+
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null);
+    const inlineText = items.find((item) => item.type === "inline_text");
+
+    assert.isTrue(isInterleaved);
+    assert.deepEqual(inlineText, {
+      type: "inline_text",
+      text: "Working through the evidence.",
+    });
   });
 });

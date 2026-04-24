@@ -50,7 +50,8 @@ type AgentTraceDisplayItem =
       label: string;
       summary?: string;
       details?: string;
-    };
+    }
+  | { type: "inline_text"; text: string };
 
 type RenderAgentTraceParams = {
   doc: Document;
@@ -58,6 +59,7 @@ type RenderAgentTraceParams = {
   userMessage?: Message | null;
   events: AgentRunEventRecord[];
   onTraceMissing?: () => void;
+  onInterleavedText?: () => void;
 };
 
 function normalizeSelectedTexts(
@@ -2330,7 +2332,13 @@ function compactAgentTraceEvents(
       entry.payload.type === "message_delta" &&
       previous?.payload.type === "message_delta"
     ) {
-      compact[compact.length - 1] = entry;
+      compact[compact.length - 1] = {
+        ...entry,
+        payload: {
+          type: "message_delta",
+          text: (previous.payload.text || "") + (entry.payload.text || ""),
+        },
+      };
       continue;
     }
     if (
@@ -2360,12 +2368,35 @@ function compactAgentTraceEvents(
   return compact;
 }
 
+function hasInterleavedTextAndTools(events: AgentRunEventRecord[]): boolean {
+  let visibleDraftLength = 0;
+  for (const entry of events) {
+    if (entry.payload.type === "message_delta") {
+      visibleDraftLength += (entry.payload.text || "").length;
+      continue;
+    }
+    if (entry.payload.type === "message_rollback") {
+      const rollbackLength =
+        typeof entry.payload.length === "number" && entry.payload.length > 0
+          ? entry.payload.length
+          : (entry.payload.text || "").length;
+      visibleDraftLength = Math.max(0, visibleDraftLength - rollbackLength);
+      continue;
+    }
+    if (entry.payload.type === "tool_call" && visibleDraftLength > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function buildAgentTraceDisplayItems(
   events: AgentRunEventRecord[],
   userMessage: Message | null | undefined,
-): AgentTraceDisplayItem[] {
+): { items: AgentTraceDisplayItem[]; isInterleaved: boolean } {
   const items: AgentTraceDisplayItem[] = [];
   const compactedEvents = compactAgentTraceEvents(events);
+  const isInterleaved = hasInterleavedTextAndTools(events);
   const requestChips = buildAgentTraceRequestChips(userMessage);
   const requestSummary = buildAgentTraceRequestSummary(userMessage);
   const pendingActions = new Map<string, AgentPendingAction>();
@@ -2515,19 +2546,27 @@ export function buildAgentTraceDisplayItems(
         });
         break;
       }
-      case "message_delta":
-        if (!announcedWriting) {
-          announcedWriting = true;
-          items.push({
-            type: "action",
-            row: {
-              kind: "plan",
-              icon: "✎",
-              text: "Drafting answer",
-            },
-          });
+      case "message_delta": {
+        if (isInterleaved) {
+          const deltaText = (entry.payload.text || "").trim();
+          if (deltaText) {
+            items.push({ type: "inline_text", text: deltaText });
+          }
+        } else {
+          if (!announcedWriting) {
+            announcedWriting = true;
+            items.push({
+              type: "action",
+              row: {
+                kind: "plan",
+                icon: "✎",
+                text: "Drafting answer",
+              },
+            });
+          }
         }
         break;
+      }
       case "message_rollback": {
         announcedWriting = false;
         const rollbackText = (entry.payload.text || "").trim();
@@ -2560,7 +2599,7 @@ export function buildAgentTraceDisplayItems(
     }
   }
 
-  return items;
+  return { items, isInterleaved };
 }
 
 export function renderAgentTrace({
@@ -2569,6 +2608,7 @@ export function renderAgentTrace({
   userMessage,
   events,
   onTraceMissing,
+  onInterleavedText,
 }: RenderAgentTraceParams): HTMLElement | null {
   const runId = message.agentRunId?.trim();
   if (!runId) return null;
@@ -2592,10 +2632,25 @@ export function renderAgentTrace({
     wrap.appendChild(list);
     return wrap;
   }
-  const processItems = buildAgentTraceDisplayItems(events, userMessage);
+  const { items: processItems, isInterleaved } = buildAgentTraceDisplayItems(events, userMessage);
+  if (isInterleaved) {
+    onInterleavedText?.();
+  }
   const pending = getPendingConfirmation(events);
   const hasFinalResponse = events.some((entry) => entry.payload.type === "final");
   for (const itemEntry of processItems) {
+    if (itemEntry.type === "inline_text") {
+      const inlineEl = doc.createElement("div");
+      inlineEl.className = "llm-agent-inline-text";
+      try {
+        inlineEl.innerHTML = renderMarkdown(itemEntry.text);
+      } catch {
+        inlineEl.textContent = itemEntry.text;
+      }
+      list.appendChild(inlineEl);
+      continue;
+    }
+
     if (itemEntry.type === "message") {
       const messageEl = doc.createElement("div");
       messageEl.className = `llm-agent-process-message llm-agent-process-message-${itemEntry.tone}`;
@@ -2712,7 +2767,7 @@ export function renderAgentTrace({
   }
   wrap.appendChild(list);
 
-  if (hasFinalResponse) {
+  if (hasFinalResponse && !isInterleaved) {
     const divider = doc.createElement("div");
     divider.className = "llm-agent-output-divider";
     divider.setAttribute("aria-hidden", "true");

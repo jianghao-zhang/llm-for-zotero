@@ -3314,6 +3314,18 @@
   border-top: 1px solid color-mix(in srgb, var(--stroke-secondary) 72%, transparent);
 }
 
+.llm-agent-inline-text {
+  color: var(--fill-primary);
+  font-size: var(--llm-fs-13);
+  line-height: 1.55;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-top: 2px;
+}
+
+.llm-agent-inline-text > p:first-child { margin-top: 0; }
+.llm-agent-inline-text > p:last-child  { margin-bottom: 0; }
+
 .llm-agent-process-action {
   display: flex;
   flex-direction: column;

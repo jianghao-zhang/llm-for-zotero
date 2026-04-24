@@ -23,6 +23,7 @@ import {
   checkEmbeddingAvailability,
 } from "../../utils/llmClient";
 import { estimateConversationTokens } from "../../utils/modelInputCap";
+import { formatDisplayModelName } from "../../utils/modelDisplayLabel";
 import type { ProviderProtocol } from "../../utils/providerProtocol";
 import {
   PERSISTED_HISTORY_LIMIT,
@@ -97,6 +98,11 @@ import {
   getSelectedTextSourceIcon,
   resolvePromptText,
 } from "./textUtils";
+import {
+  buildCodexAppServerAttachmentBlockMessage,
+  getBlockedCodexAppServerChatAttachments,
+  shouldApplyCodexAppServerChatAttachmentPolicy,
+} from "./codexAppServerAttachmentPolicy";
 import {
   normalizeSelectedTextNoteContexts,
   normalizeSelectedTextPaperContexts as normalizeSelectedTextPaperContextEntries,
@@ -950,22 +956,6 @@ export function detectReasoningProvider(
   return "unsupported";
 }
 
-function formatDisplayModelName(
-  modelName: string | undefined,
-  modelProviderLabel: string | undefined,
-): string {
-  const normalizedModel = (modelName || "").trim();
-  if (!normalizedModel) return "";
-  const provider = (modelProviderLabel || "").trim().toLowerCase();
-  if (provider.includes("(codex auth)")) {
-    return `codex/${normalizedModel}`;
-  }
-  if (provider.includes("(copilot auth)")) {
-    return `copilot/${normalizedModel}`;
-  }
-  return normalizedModel;
-}
-
 export function getReasoningOptions(
   provider: ReasoningProviderKind,
   modelName: string,
@@ -1209,7 +1199,7 @@ export type EffectiveRequestConfig = {
   model: string;
   apiBase: string;
   apiKey: string;
-  authMode: "api_key" | "codex_auth" | "webchat"; // [webchat]
+  authMode: "api_key" | "codex_auth" | "codex_app_server" | "webchat"; // [webchat]
   providerProtocol?: ProviderProtocol;
   modelEntryId?: string;
   modelProviderLabel?: string;
@@ -1251,7 +1241,8 @@ function resolveEffectiveRequestConfig(params: {
   const authMode =
     params.authMode ||
     (fallbackEntry?.authMode === "webchat" ? "webchat" :
-     fallbackEntry?.authMode === "codex_auth" ? "codex_auth" : "api_key");
+     fallbackEntry?.authMode === "codex_auth" ? "codex_auth" :
+     fallbackEntry?.authMode === "codex_app_server" ? "codex_app_server" : "api_key");
   const reasoning =
     params.reasoning ||
     getSelectedReasoningForItem(params.item.id, model, apiBase);
@@ -1608,7 +1599,7 @@ function getWebChatRunStateLabel(message: Message): string | null {
 function reconstructRetryPayload(userMessage: Message): {
   question: string;
   screenshotImages: string[];
-  fileAttachments: ChatFileAttachment[];
+  attachments: ChatAttachment[];
   paperContexts: PaperContextRef[];
   fullTextPaperContexts: PaperContextRef[];
 } {
@@ -1622,19 +1613,7 @@ function reconstructRetryPayload(userMessage: Message): {
     selectedTexts.length,
   );
   const primarySelectedText = selectedTexts[0] || "";
-  const fileAttachments = (
-    Array.isArray(userMessage.attachments)
-      ? userMessage.attachments.filter(
-          (attachment) =>
-            Boolean(attachment) &&
-            typeof attachment === "object" &&
-            typeof attachment.id === "string" &&
-            attachment.id.trim() &&
-            typeof attachment.name === "string" &&
-            attachment.category !== "image",
-        )
-      : []
-  ) as ChatAttachment[];
+  const fileAttachments = normalizeEditableAttachments(userMessage.attachments);
   const promptText = resolvePromptText(
     sanitizeText(userMessage.text || ""),
     primarySelectedText,
@@ -1668,26 +1647,10 @@ function reconstructRetryPayload(userMessage: Message): {
   const fullTextPaperContexts = normalizePaperContexts(
     userMessage.fullTextPaperContexts || userMessage.pinnedPaperContexts,
   );
-  const fileAttachmentsForModel: ChatFileAttachment[] = [];
-  for (const attachment of fileAttachments) {
-    if (
-      !attachment.name ||
-      typeof attachment.storedPath !== "string" ||
-      !attachment.storedPath.trim()
-    ) {
-      continue;
-    }
-    fileAttachmentsForModel.push({
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      storedPath: attachment.storedPath.trim(),
-      contentHash: attachment.contentHash,
-    });
-  }
   return {
     question,
     screenshotImages,
-    fileAttachments: fileAttachmentsForModel,
+    attachments: fileAttachments,
     paperContexts,
     fullTextPaperContexts,
   };
@@ -1713,7 +1676,19 @@ function buildLLMHistoryMessages(history: Message[]): ChatMessage[] {
 
 function normalizeModelFileAttachments(
   attachments?: ChatAttachment[],
+  options?: {
+    authMode?: string;
+    runtimeMode?: ChatRuntimeMode;
+  },
 ): ChatFileAttachment[] {
+  if (
+    shouldApplyCodexAppServerChatAttachmentPolicy({
+      authMode: options?.authMode,
+      runtimeMode: options?.runtimeMode,
+    })
+  ) {
+    return [];
+  }
   if (!Array.isArray(attachments) || !attachments.length) return [];
   return attachments
     .filter(
@@ -2175,7 +2150,7 @@ export async function retryLatestAssistantResponse(
   const {
     question,
     screenshotImages,
-    fileAttachments,
+    attachments,
     paperContexts,
     fullTextPaperContexts,
   } = reconstructRetryPayload(retryPair.userMessage);
@@ -2223,6 +2198,28 @@ export async function retryLatestAssistantResponse(
     });
     setStatusSafely("Cancelled", "ready");
   };
+  if (
+    shouldApplyCodexAppServerChatAttachmentPolicy({
+      authMode: effectiveRequestConfig.authMode,
+      runtimeMode: "chat",
+    })
+  ) {
+    const blockedAttachments =
+      getBlockedCodexAppServerChatAttachments(attachments);
+    if (blockedAttachments.length) {
+      restoreOriginalAssistant();
+      restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      setStatusSafely(
+        buildCodexAppServerAttachmentBlockMessage(blockedAttachments),
+        "error",
+      );
+      return;
+    }
+  }
+  const requestFileAttachments = normalizeModelFileAttachments(attachments, {
+    authMode: effectiveRequestConfig.authMode,
+    runtimeMode: "chat",
+  });
 
   try {
     const llmHistory = buildLLMHistoryMessages(historyForLLM);
@@ -2304,7 +2301,7 @@ export async function retryLatestAssistantResponse(
       history: llmHistory,
       signal: getAbortController(conversationKey)?.signal,
       images: allImages.length ? allImages : undefined,
-      attachments: fileAttachments,
+      attachments: requestFileAttachments,
       model: effectiveRequestConfig.model,
       apiBase: effectiveRequestConfig.apiBase,
       apiKey: effectiveRequestConfig.apiKey,
@@ -2783,6 +2780,8 @@ function buildAgentEngineDeps(): AgentEngineDeps {
     waitForUiStep,
     finalizeCancelledAssistantMessage,
     sanitizeText,
+    accumulateSessionTokens,
+    setTokenUsage,
     persistConversationMessage,
     updateStoredLatestUserMessage: updateStoredLatestUserMessage as AgentEngineDeps["updateStoredLatestUserMessage"],
     updateStoredLatestAssistantMessage: updateStoredLatestAssistantMessage as AgentEngineDeps["updateStoredLatestAssistantMessage"],
@@ -2872,7 +2871,6 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   }
   const history = chatHistory.get(conversationKey)!;
   const historyForLLM = history.slice();
-  const requestFileAttachments = normalizeModelFileAttachments(attachments);
   const effectiveRequestConfig = resolveEffectiveRequestConfig({
     item,
     model,
@@ -2880,6 +2878,10 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     apiKey,
     reasoning,
     advanced,
+  });
+  const requestFileAttachments = normalizeModelFileAttachments(attachments, {
+    authMode: effectiveRequestConfig.authMode,
+    runtimeMode,
   });
   const shownQuestion = displayQuestion || question;
   const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
@@ -4155,6 +4157,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           ? history[index - 1]
           : null;
       const agentRunId = msg.agentRunId?.trim();
+      let agentUsesInterleavedText = false;
       const agentTraceEl =
         msg.runMode === "agent"
           ? renderAgentTrace({
@@ -4167,9 +4170,10 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
                     void ensureAgentRunTraceLoaded(agentRunId, body, item);
                   }
                 : undefined,
+              onInterleavedText: () => { agentUsesInterleavedText = true; },
             })
           : null;
-      if (hasAnswerText) {
+      if (hasAnswerText && !agentUsesInterleavedText) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
         try {
@@ -4366,7 +4370,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         bubble.insertBefore(bubbleHeaderNodes[i], bubble.firstChild);
       }
 
-      if (!hasAnswerText) {
+      if (msg.streaming || !hasAnswerText) {
         const typing = doc.createElement("div") as HTMLDivElement;
         typing.className = "llm-typing";
         typing.innerHTML =

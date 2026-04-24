@@ -11,6 +11,11 @@ import type {
 import type { SelectedTextSource } from "../../types";
 import type { EditLatestTurnMarker, EditLatestTurnResult } from "../../chat";
 import type { ReasoningConfig as LLMReasoningConfig } from "../../../../utils/llmClient";
+import {
+  buildCodexAppServerAttachmentBlockMessage,
+  getBlockedCodexAppServerChatAttachments,
+  shouldApplyCodexAppServerChatAttachmentPolicy,
+} from "../../codexAppServerAttachmentPolicy";
 
 type StatusLevel = "ready" | "warning" | "error";
 
@@ -20,7 +25,7 @@ type SelectedProfile = {
   apiBase: string;
   apiKey: string;
   providerLabel: string;
-  authMode?: "api_key" | "codex_auth" | "copilot_auth" | "webchat";
+  authMode?: "api_key" | "codex_auth" | "codex_app_server" | "copilot_auth" | "webchat";
   providerProtocol?: ProviderProtocol;
 };
 
@@ -279,6 +284,23 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       ...deps.getSelectedFiles(item.id),
       ...pdfFileAttachments,
     ];
+    const runtimeMode: ChatRuntimeMode = deps.isAgentMode() ? "agent" : "chat";
+    if (
+      shouldApplyCodexAppServerChatAttachmentPolicy({
+        authMode: earlyProfile?.authMode,
+        runtimeMode,
+      })
+    ) {
+      const blockedAttachments =
+        getBlockedCodexAppServerChatAttachments(selectedFiles);
+      if (blockedAttachments.length) {
+        deps.setStatusMessage?.(
+          buildCodexAppServerAttachmentBlockMessage(blockedAttachments),
+          "error",
+        );
+        return;
+      }
+    }
     const hasPaperComposeState = allSelectedPaperContexts.length > 0 || !deps.isGlobalMode();
 
     if (
@@ -323,7 +345,6 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
           composedQuestionBase,
           selectedFiles,
         );
-    const runtimeMode: ChatRuntimeMode = deps.isAgentMode() ? "agent" : "chat";
     // Check for command action metadata (set by handleInlineCommand for /command display)
     const commandAction = deps.inputBox.dataset.commandAction;
     const commandParams = deps.inputBox.dataset.commandParams ?? "";

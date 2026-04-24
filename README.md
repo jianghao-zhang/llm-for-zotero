@@ -34,7 +34,7 @@ Documentation:
 - **Standalone Window Mode** — Open the LLM Assistant in its own dedicated window, separate from the Zotero reader sidebar. See [Standalone Window Mode](#standalone-window-mode).
 - **File-Based Notes** — Save research notes as Markdown files in any local directory — works with Obsidian, Logseq, or any plain markdown folder. See [File-Based Notes](#file-based-notes).
 - **Agent Mode (beta)** — LLM-for-Zotero can now act as an autonomous agent inside your Zotero library. See [Agent Mode](#agent-mode-beta) for details.
-- **Codex auth** — ChatGPT Plus subscribers can use their Codex quota to access Codex models (e.g. `gpt-5.4`) without an API key. See [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers).
+- **Codex App Server (recommended)** — ChatGPT Plus subscribers can use Codex models (e.g. `gpt-5.4`) without an API key through the official local Codex CLI integration. The older direct backend flow remains available as a legacy option for current users. See [Codex Setup](#codex-setup-chatgpt-plus-subscribers).
 - **MinerU PDF parsing** — High-fidelity PDF extraction that preserves tables, equations, and figures. See [MinerU PDF Parsing](#mineru-pdf-parsing).
 
 ---
@@ -49,7 +49,7 @@ Documentation:
 - [Agent Mode (beta)](#agent-mode-beta)
 - [Skills](#skills)
 - [WebChat Setup](#webchat-setup-chatgpt-web-sync)
-- [Codex Auth Setup](#codex-auth-setup-chatgpt-plus-subscribers)
+- [Codex Setup](#codex-setup-chatgpt-plus-subscribers)
 - [MinerU PDF Parsing](#mineru-pdf-parsing)
 - [Roadmap](#roadmap)
 - [FAQ](#faq)
@@ -380,7 +380,7 @@ The plugin ships with **8 built-in skills** covering common research workflows:
 3. Edit the `id`, regex `match` patterns, and instruction body in your text editor.
 4. Save — the skill loads immediately, no restart needed.
 
-Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`. Left-click any skill to edit it; right-click for *Show in file system* or *Delete*.
+Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`. Left-click any skill to edit it; right-click for _Show in file system_ or _Delete_.
 
 ---
 
@@ -430,9 +430,14 @@ Skills are stored as Markdown files in `{ZoteroDataDir}/llm-for-zotero/skills/`.
 
 ---
 
-## Codex Auth Setup (ChatGPT Plus Subscribers)
+## Codex Setup (ChatGPT Plus Subscribers)
 
-If you have a ChatGPT Plus subscription, you can use **Codex auth** to access Codex models (e.g. `gpt-5.4`) without an API key. The plugin reuses your ChatGPT login via the Codex CLI — a great way to save on token costs.
+If you have a ChatGPT Plus subscription, you can use Codex models (e.g. `gpt-5.4`) in the plugin without a separate API key by signing in through the Codex CLI.
+
+There are now two Codex-backed modes in the plugin:
+
+- **Codex App Server (Recommended)** - Spawns the local `codex app-server` CLI and talks to it over stdio. This is the official way to use Codex in third-party apps, and it is the preferred setup for new users.
+- **Codex Auth (Legacy)** - Uses the ChatGPT/Codex Responses backend directly. Existing users can keep using it in the next release, but new users should choose `Codex App Server`. This legacy mode is planned for deprecation in a future release after app-server validation.
 
 _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for contributions to this feature._
 
@@ -440,9 +445,11 @@ _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for cont
 
 1. **Install the Codex CLI** (one-time):
    - **macOS:** Install [Node.js 18+](https://nodejs.org/) or `brew install node`, then:
+
      ```bash
      npm install -g @openai/codex
      ```
+
    - **macOS (Homebrew alternative):** `brew install --cask codex` (no Node.js needed).
    - **Windows/Linux:** Install [Node.js 18+](https://nodejs.org/), then `npm install -g @openai/codex`.
 
@@ -454,21 +461,27 @@ _Special thanks to [@jianghao-zhang](https://github.com/jianghao-zhang) for cont
 
    A browser window opens — sign in with your ChatGPT Plus account. Credentials are saved to `~/.codex/auth.json`.
 
-3. **Configure the plugin** (Zotero → Preferences → llm-for-zotero):
-   - **Auth Mode** → `codex auth`
-   - **API URL** → `https://chatgpt.com/backend-api/codex/responses`
-   - **Model** → a Codex model (e.g. `gpt-5.4`)
-   - Click **Test Connection** to verify.
+3. **Configure the plugin** (Zotero → Preferences → `llm-for-zotero`):
+   - **Recommended setup**
+     - **Auth Mode** → `Codex App Server`
+     - **API URL** → leave blank
+     - **Model** → a Codex model (e.g. `gpt-5.4`)
+     - Click **Test Connection** to verify.
+   - **Legacy fallback for existing users**
+     - **Auth Mode** → `Codex Auth (Legacy)`
+     - **API URL** → `https://chatgpt.com/backend-api/codex/responses`
+     - **Model** → a Codex model (e.g. `gpt-5.4`)
+     - Existing users can keep this configuration unchanged in the next release while `Codex App Server` is validated as the long-term replacement.
 
 <p align="center">
-  <img src="./assets/codex.png" alt="Screenshot showing Codex auth configuration in plugin settings" width="1024" />
+  <img src="./assets/codex.png" alt="Screenshot showing recommended Codex App Server configuration in plugin settings" width="1024" />
 </p>
 
-### Codex Auth Technical Notes
+### Codex Auth (Legacy) Technical Notes
 
 - Reads local credentials from `~/.codex/auth.json` (or `$CODEX_HOME/auth.json`).
 - Automatically attempts token refresh on 401 responses.
-- Embeddings are not supported in codex auth mode yet.
+- Embeddings are not supported in this legacy direct mode yet.
 - Local PDF/reference text grounding and screenshot/image inputs are supported.
 - The Responses `/files` upload + `file_id` attachment flow is not supported yet.
 
