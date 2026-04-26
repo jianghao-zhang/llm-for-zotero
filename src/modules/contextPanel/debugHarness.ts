@@ -49,6 +49,7 @@ type HarnessEntry = {
     system: HarnessConversationSystem,
     options?: { forceFresh?: boolean },
   ) => Promise<void>;
+  setClaudeModeEnabled: (enabled: boolean) => Promise<void>;
   setRuntimeMode: (mode: HarnessRuntimeMode) => Promise<void>;
   startNewConversation: (
     scope?: HarnessConversationScope,
@@ -75,6 +76,12 @@ type HarnessSwitchSystemCommand = {
   forceFresh?: boolean;
 };
 
+type HarnessSetClaudeModeEnabledCommand = {
+  id: string;
+  action: "set_claude_mode_enabled";
+  enabled: boolean;
+};
+
 type HarnessSetRuntimeModeCommand = {
   id: string;
   action: "set_runtime_mode";
@@ -92,6 +99,7 @@ type HarnessCommand =
   | HarnessInspectCommand
   | HarnessSendCommand
   | HarnessSwitchSystemCommand
+  | HarnessSetClaudeModeEnabledCommand
   | HarnessSetRuntimeModeCommand
   | HarnessNewChatCommand;
 
@@ -207,6 +215,9 @@ async function executeHarnessCommand(
         forceFresh: command.forceFresh === true,
       });
       return;
+    case "set_claude_mode_enabled":
+      await entry.setClaudeModeEnabled(command.enabled);
+      return;
     case "set_runtime_mode":
       await entry.setRuntimeMode(command.mode);
       return;
@@ -270,6 +281,19 @@ async function pollHarnessCommand(): Promise<void> {
       status: "failed",
       action: command.action,
       error: "Harness set_runtime_mode command requires mode=chat|agent",
+    });
+    commandInFlight = false;
+    return;
+  }
+  if (
+    command.action === "set_claude_mode_enabled" &&
+    typeof command.enabled !== "boolean"
+  ) {
+    await writeHarnessResult({
+      id: command.id,
+      status: "failed",
+      action: command.action,
+      error: "Harness set_claude_mode_enabled command requires enabled=true|false",
     });
     commandInFlight = false;
     return;
@@ -339,6 +363,7 @@ export function registerPanelDebugHarness(
     availableActions: [
       "inspect",
       "switch_system",
+      "set_claude_mode_enabled",
       "set_runtime_mode",
       "new_chat",
       "send",

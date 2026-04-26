@@ -473,6 +473,7 @@ export function openStandaloneChat(options?: {
   } | null = null;
   let darkMQ: MediaQueryList | null = null;
   let onSchemeChange: (() => void) | null = null;
+  let cleanupStandalonePrefObserver: (() => void) | null = null;
 
   const initWindow = () => {
     // Now the window is loaded — safe to clear the pending flag.
@@ -2906,18 +2907,23 @@ export function openStandaloneChat(options?: {
       {
         const claudeModePrefKey = `${config.prefsPrefix}.enableClaudeCodeMode`;
         let claudeObserverId: symbol | undefined;
+        const unregister = () => {
+          if (claudeObserverId === undefined) return;
+          try {
+            (Zotero as any).Prefs.unregisterObserver(claudeObserverId);
+          } catch {
+            void 0;
+          }
+          claudeObserverId = undefined;
+        };
+        cleanupStandalonePrefObserver = unregister;
         const onClaudeModePrefChange = () => {
           if (cancelled) {
-            try {
-              if (claudeObserverId !== undefined) {
-                (Zotero as any).Prefs.unregisterObserver(claudeObserverId);
-              }
-            } catch {
-              void 0;
-            }
+            unregister();
             return;
           }
           if (!getClaudeCodeModeEnabled()) {
+            void releaseClaudeRuntimeForBody(contentArea as Element);
             setConversationSystemPref("upstream");
             if (isClaudeConversationSystem()) {
               void switchConversationSystem("upstream");
@@ -3211,6 +3217,7 @@ export function openStandaloneChat(options?: {
 
   const cleanupWindow = () => {
     cancelled = true;
+    cleanupStandalonePrefObserver?.();
     standaloneItemChangeHandler = null;
     themeObserver?.disconnect();
     themeObserver = null;

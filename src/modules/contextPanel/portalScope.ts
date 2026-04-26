@@ -35,6 +35,7 @@ import {
   getLastUsedClaudeConversationMode,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
+  isClaudeCodeModeEnabled,
 } from "../../claudeCode/prefs";
 import {
   activeClaudeConversationModeByLibrary,
@@ -359,11 +360,17 @@ function resolvePreferredConversationSystem(params: {
   item: Zotero.Item | null | undefined;
   preferredSystem?: ConversationSystem | null;
 }): ConversationSystem {
-  return (
-    resolveConversationSystemForItem(params.item) ||
+  const preferred =
     params.preferredSystem ||
-    getConversationSystemPref()
-  );
+    getConversationSystemPref();
+  const itemSystem = resolveConversationSystemForItem(params.item);
+  if (itemSystem === "claude_code" && !isClaudeCodeModeEnabled()) {
+    return "upstream";
+  }
+  if (preferred === "claude_code" && !isClaudeCodeModeEnabled()) {
+    return "upstream";
+  }
+  return itemSystem || preferred;
 }
 
 function resolvePreferredConversationMode(
@@ -425,12 +432,21 @@ export function resolveInitialPanelItemState(
           : null,
     };
   }
+  if (
+    (isClaudeGlobalPortalItem(item) || isClaudePaperPortalItem(item)) &&
+    !isClaudeCodeModeEnabled()
+  ) {
+    item = resolveConversationBaseItem(item);
+  }
   const basePaperItem = resolveConversationBaseItem(item);
   if (!basePaperItem) {
     return { item, basePaperItem: null };
   }
 
-  if (isPaperPortalItem(item) || isClaudePaperPortalItem(item)) {
+  if (
+    isPaperPortalItem(item) ||
+    (isClaudePaperPortalItem(item) && isClaudeCodeModeEnabled())
+  ) {
     return { item, basePaperItem };
   }
 

@@ -377,6 +377,7 @@ import {
   getClaudeReasoningModePref,
   getConversationSystemPref,
   getLastUsedClaudeGlobalConversationKey,
+  setClaudeCodeModeEnabled,
   setConversationSystemPref,
   getLastUsedClaudePaperConversationKey,
   removeLastUsedClaudeGlobalConversationKey,
@@ -1136,6 +1137,7 @@ export function setupHandlers(
 
   // Keep the agent mode toggle in sync when the preference is changed in the
   // Preferences window (which runs in a separate window context).
+  let cleanupPrefObservers: (() => void) | null = null;
   {
     const agentPrefKey = `${config.prefsPrefix}.enableAgentMode`;
     const claudeModePrefKey = `${config.prefsPrefix}.enableClaudeCodeMode`;
@@ -1149,21 +1151,26 @@ export function setupHandlers(
         void 0;
       }
     };
+    cleanupPrefObservers = () => {
+      unregister(agentObserverId);
+      unregister(claudeObserverId);
+      agentObserverId = undefined;
+      claudeObserverId = undefined;
+    };
     const onAgentPrefChange = () => {
       if (!(body as Element).isConnected) {
-        unregister(agentObserverId);
-        unregister(claudeObserverId);
+        cleanupPrefObservers?.();
         return;
       }
       updateRuntimeModeButton();
     };
     const onClaudeModePrefChange = () => {
       if (!(body as Element).isConnected) {
-        unregister(agentObserverId);
-        unregister(claudeObserverId);
+        cleanupPrefObservers?.();
         return;
       }
       if (!getClaudeCodeModeEnabled()) {
+        void releaseClaudeRuntimeForBody(body);
         setConversationSystemPref("upstream");
         if (isClaudeConversationSystem()) {
           void switchConversationSystem("upstream");
@@ -10798,6 +10805,12 @@ export function setupHandlers(
         forceFresh: options?.forceFresh === true,
       });
     },
+    setClaudeModeEnabled: async (enabled: boolean) => {
+      setClaudeCodeModeEnabled(enabled);
+      if (!enabled) {
+        void releaseClaudeRuntimeForBody(body);
+      }
+    },
     setRuntimeMode: async (mode: "chat" | "agent") => {
       setCurrentRuntimeMode(mode);
     },
@@ -13508,9 +13521,11 @@ export function setupHandlers(
     cleanupBody.__llmQueuedThreadCleanupRegistered = true;
     const observer = new MutationObserver(() => {
       if (body.isConnected) return;
+      cleanupPrefObservers?.();
       unregisterClaudeQueuedInputThreadBody(registeredClaudeQueueThreadKey, body);
       unregisterPanelDebugHarness(body);
       activeContextPanelStateSync.delete(body);
+      void releaseClaudeRuntimeForBody(body);
       observer.disconnect();
       cleanupBody.__llmQueuedThreadCleanupRegistered = false;
     });
