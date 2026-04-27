@@ -1448,6 +1448,7 @@ export function renderPendingActionCard(
 ): HTMLDivElement {
   const card = doc.createElement("div");
   card.className = "llm-agent-hitl-card";
+  card.dataset.requestId = pending.requestId;
 
   const header = doc.createElement("div");
   header.className = "llm-agent-hitl-header";

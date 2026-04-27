@@ -108,6 +108,31 @@ function syncInlineActionCardState(body: Element, ui: PanelRequestUIShape): void
   }
 }
 
+function scrollActionCardIntoView(chatBox: HTMLElement, card: HTMLElement): void {
+  const scroll = () => {
+    try {
+      card.scrollIntoView({ block: "end" });
+    } catch {
+      // Older Zotero runtimes can be picky about scrollIntoView options.
+    }
+    chatBox.scrollTop = chatBox.scrollHeight;
+  };
+  scroll();
+  const view = chatBox.ownerDocument?.defaultView;
+  view?.requestAnimationFrame?.(scroll);
+  view?.setTimeout(scroll, 80);
+}
+
+function findRenderedPendingActionCard(
+  chatBox: HTMLElement,
+  requestId: string,
+): HTMLElement | null {
+  const cards = Array.from(
+    chatBox.querySelectorAll(".llm-agent-hitl-card[data-request-id]"),
+  ) as HTMLElement[];
+  return cards.find((card) => card.dataset.requestId === requestId) || null;
+}
+
 function showInlineConfirmationCard(
   body: Element,
   ui: PanelRequestUIShape,
@@ -118,12 +143,18 @@ function showInlineConfirmationCard(
   const ownerDoc = body.ownerDocument;
   if (!chatBox || !ownerDoc) return;
   chatBox.querySelector(".llm-action-inline-card")?.remove();
+  const renderedCard = findRenderedPendingActionCard(chatBox, requestId);
+  if (renderedCard) {
+    scrollActionCardIntoView(chatBox, renderedCard);
+    syncInlineActionCardState(body, ui);
+    return;
+  }
   const wrapper = ownerDoc.createElement("div");
   wrapper.className = "llm-action-inline-card";
   wrapper.dataset.requestId = requestId;
   wrapper.appendChild(renderPendingActionCard(ownerDoc, { requestId, action }));
   chatBox.appendChild(wrapper);
-  chatBox.scrollTop = chatBox.scrollHeight;
+  scrollActionCardIntoView(chatBox, wrapper);
   syncInlineActionCardState(body, ui);
 }
 
@@ -760,10 +791,15 @@ export async function sendAgentTurn(
             break;
           case "confirmation_required":
             showInlineConfirmationCard(body, ui, event.requestId, event.action);
+            queueRefresh();
+            body.ownerDocument?.defaultView?.setTimeout(() => {
+              showInlineConfirmationCard(body, ui, event.requestId, event.action);
+            }, 90);
             setStatusSafely("Approval required", "sending");
             return;
           case "confirmation_resolved":
             closeInlineConfirmationCard(body, ui, event.requestId);
+            queueRefresh();
             setStatusSafely(event.approved ? "Approval sent" : "Action denied", "sending");
             return;
           case "message_delta": {
@@ -1188,10 +1224,15 @@ export async function retryAgentTurn(
             break;
           case "confirmation_required":
             showInlineConfirmationCard(body, ui, event.requestId, event.action);
+            queueRefresh();
+            body.ownerDocument?.defaultView?.setTimeout(() => {
+              showInlineConfirmationCard(body, ui, event.requestId, event.action);
+            }, 90);
             setStatusSafely("Approval required", "sending");
             return;
           case "confirmation_resolved":
             closeInlineConfirmationCard(body, ui, event.requestId);
+            queueRefresh();
             setStatusSafely(event.approved ? "Approval sent" : "Action denied", "sending");
             return;
           case "message_delta": {
