@@ -178,13 +178,22 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const items = buildAgentTraceDisplayItems(events, null).filter(
+    const { items } = buildAgentTraceDisplayItems(events, null);
+    const reasoningItems = items.filter(
       (item) => item.type === "reasoning",
     );
 
-    assert.lengthOf(items, 2);
-    assert.deepInclude(items[0], { type: "reasoning", summary: "First thought.", label: "Thinking" });
-    assert.deepInclude(items[1], { type: "reasoning", summary: "Second thought.", label: "Thinking" });
+    assert.lengthOf(reasoningItems, 2);
+    assert.deepInclude(reasoningItems[0], {
+      type: "reasoning",
+      summary: "First thought.",
+      label: "Thinking",
+    });
+    assert.deepInclude(reasoningItems[1], {
+      type: "reasoning",
+      summary: "Second thought.",
+      label: "Thinking",
+    });
   });
 
   it("uses a single primary action surface for multi-action review cards", function () {
@@ -369,9 +378,16 @@ describe("agentTrace render", function () {
     ];
 
     const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null);
+    const messageTexts = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { type: "message" }> =>
+          item.type === "message",
+      )
+      .map((item) => item.text);
 
     assert.isFalse(isInterleaved);
     assert.isFalse(items.some((item) => item.type === "inline_text"));
+    assert.notInclude(messageTexts, "Let me inspect this first.");
   });
 
   it("keeps visible text before a tool call marked as interleaved", function () {
@@ -408,6 +424,54 @@ describe("agentTrace render", function () {
       type: "inline_text",
       text: "Working through the evidence.",
     });
+  });
+
+  it("deduplicates repeated interleaved text chunks around tool calls", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "message_delta",
+        payload: {
+          type: "message_delta",
+          text: "Now I have everything I need. Let me compose\nand write the note.",
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "TodoWrite",
+          args: {},
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "message_delta",
+        payload: {
+          type: "message_delta",
+          text: "Now I have everything I need. Let me compose and write the note.",
+        },
+        createdAt: 3,
+      },
+    ];
+
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null);
+    const inlineTexts = items
+      .filter(
+        (item): item is Extract<(typeof items)[number], { type: "inline_text" }> =>
+          item.type === "inline_text",
+      )
+      .map((item) => item.text);
+
+    assert.isTrue(isInterleaved);
+    assert.lengthOf(inlineTexts, 1);
   });
 
   it("omits generic completed rows when a tool already has no specific success summary", function () {

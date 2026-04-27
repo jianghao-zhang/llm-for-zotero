@@ -2468,6 +2468,10 @@ function hasInterleavedTextAndTools(events: AgentRunEventRecord[]): boolean {
   return false;
 }
 
+function normalizeInlineTextForDedupe(text: string): string {
+  return sanitizeText(text).replace(/\s+/g, " ").trim();
+}
+
 export function buildAgentTraceDisplayItems(
   events: AgentRunEventRecord[],
   userMessage: Message | null | undefined,
@@ -2483,6 +2487,7 @@ export function buildAgentTraceDisplayItems(
   const reasoningLabels = new Map<string, string>();
   let reasoningStepCounter = 0;
   let fallbackReasoningStep = 1;
+  const visibleInlineText = new Set<string>();
 
   items.push({
     type: "message",
@@ -2665,7 +2670,9 @@ export function buildAgentTraceDisplayItems(
       case "message_delta": {
         if (isInterleaved) {
           const deltaText = (entry.payload.text || "").trim();
-          if (deltaText) {
+          const dedupeKey = normalizeInlineTextForDedupe(deltaText);
+          if (deltaText && !visibleInlineText.has(dedupeKey)) {
+            visibleInlineText.add(dedupeKey);
             items.push({ type: "inline_text", text: deltaText });
           }
         } else {
@@ -2685,14 +2692,6 @@ export function buildAgentTraceDisplayItems(
       }
       case "message_rollback": {
         announcedWriting = false;
-        const rollbackText = (entry.payload.text || "").trim();
-        if (rollbackText) {
-          items.push({
-            type: "message",
-            tone: "neutral",
-            text: rollbackText,
-          });
-        }
         break;
       }
       case "final": {

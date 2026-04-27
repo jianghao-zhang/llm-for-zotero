@@ -76,6 +76,8 @@ const HTML_ESCAPE_MAP: Record<string, string> = {
   "'": "&#039;",
 };
 
+const HARD_BREAK_TOKEN = "@@LLMHARDBREAK@@";
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -115,6 +117,28 @@ function countOccurrences(text: string, pattern: string | RegExp): number {
 /** Escape special regex characters */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasUnescapedPipe(text: string, start: number, end: number): boolean {
+  for (let index = Math.max(0, start); index < Math.min(text.length, end); index++) {
+    if (text[index] !== "|") continue;
+    let slashCount = 0;
+    for (let prev = index - 1; prev >= 0 && text[prev] === "\\"; prev--) {
+      slashCount++;
+    }
+    if (slashCount % 2 === 0) return true;
+  }
+  return false;
+}
+
+function isInsidePipeTableCell(text: string, markerIndex: number): boolean {
+  const lineStart = text.lastIndexOf("\n", markerIndex - 1) + 1;
+  const nextNewline = text.indexOf("\n", markerIndex);
+  const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+  return (
+    hasUnescapedPipe(text, lineStart, markerIndex) &&
+    hasUnescapedPipe(text, markerIndex, lineEnd)
+  );
 }
 
 /** Render LaTeX to HTML using KaTeX */
@@ -368,17 +392,208 @@ export function normalizeBlockBoundaries(text: string): string {
   // already extracted before this function is called).
   result = result.replace(
     /([^\n])([ \t]+)(#{1,4} )/g,
-    "$1\n\n$3",
+    (match, before: string, spaces: string, marker: string, offset: number) => {
+      const markerIndex = offset + before.length + spaces.length;
+      return isInsidePipeTableCell(result, markerIndex)
+        ? match
+        : `${before}\n\n${marker}`;
+    },
   );
 
   // Blockquote markers (> ) after sentence / citation-ending punctuation.
   // More conservative than headers because `>` is common in comparisons.
   result = result.replace(
     /([.!?:)\]"])([ \t]+)(> )/g,
-    "$1\n\n$3",
+    (match, before: string, spaces: string, marker: string, offset: number) => {
+      const markerIndex = offset + before.length + spaces.length;
+      return isInsidePipeTableCell(result, markerIndex)
+        ? match
+        : `${before}\n\n${marker}`;
+    },
   );
 
   return result;
+}
+
+function isOrderedListLine(trimmed: string): boolean {
+  return /^\d+\.\s+/.test(trimmed);
+}
+
+function isUnorderedListLine(trimmed: string): boolean {
+  return /^[-*]\s+/.test(trimmed);
+}
+
+function isTableDividerLine(trimmed: string): boolean {
+  return /^\|?[\s:-]+(?:\|[\s:-]+)+\|?$/.test(trimmed) && trimmed.includes("-");
+}
+
+function readTableCells(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+  for (const char of row) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (escaped) current += "\\";
+  cells.push(current.trim());
+  return cells.filter((cell, idx, arr) => {
+    const isEdge = (idx === 0 || idx === arr.length - 1) && cell === "";
+    return !isEdge;
+  });
+}
+
+function findTableDividerIndex(lines: string[], index: number): number {
+  const first = lines[index]?.trim() || "";
+  if (!first.includes("|")) return -1;
+  for (
+    let candidate = index + 1;
+    candidate < lines.length && candidate <= index + 3;
+    candidate++
+  ) {
+    const trimmed = lines[candidate]?.trim() || "";
+    if (!trimmed) return -1;
+    if (isTableDividerLine(trimmed)) return candidate;
+  }
+  return -1;
+}
+
+function isTableStart(lines: string[], index: number): boolean {
+  return findTableDividerIndex(lines, index) >= 0;
+}
+
+function hasExpectedTableCells(row: string, expectedCells: number): boolean {
+  return readTableCells(row).length >= expectedCells;
+}
+
+function normalizeTableLine(line: string): string {
+  return line.trim().replace(/\s+/g, " ");
+}
+
+function collectTableBlock(
+  lines: string[],
+  startIndex: number,
+): { raw: string; nextIndex: number } | null {
+  const dividerIndex = findTableDividerIndex(lines, startIndex);
+  if (dividerIndex < 0) return null;
+
+  const header = normalizeTableLine(
+    lines.slice(startIndex, dividerIndex).join(" "),
+  );
+  const divider = normalizeTableLine(lines[dividerIndex] || "");
+  const expectedCells = Math.max(
+    readTableCells(header).length,
+    readTableCells(divider).length,
+  );
+  if (expectedCells < 2) return null;
+
+  const tableLines = [header, divider];
+  let currentRow = "";
+  let i = dividerIndex + 1;
+
+  while (i < lines.length) {
+    const trimmed = normalizeTableLine(lines[i] || "");
+    if (!trimmed) break;
+    if (
+      !currentRow &&
+      (/^#{1,4}\s+/.test(trimmed) ||
+        /^>/.test(trimmed) ||
+        /^---+$/.test(trimmed) ||
+        /^\$\$/.test(trimmed) ||
+        /^\\\[/.test(trimmed) ||
+        isOrderedListLine(trimmed) ||
+        isUnorderedListLine(trimmed))
+    ) {
+      break;
+    }
+
+    if (currentRow && hasExpectedTableCells(currentRow, expectedCells)) {
+      if (trimmed.startsWith("|")) {
+        tableLines.push(currentRow);
+        currentRow = trimmed;
+      } else if (currentRow.trim().endsWith("|")) {
+        break;
+      } else {
+        currentRow = `${currentRow} ${trimmed}`;
+      }
+    } else {
+      currentRow = currentRow ? `${currentRow} ${trimmed}` : trimmed;
+    }
+    i++;
+  }
+
+  if (currentRow && currentRow.includes("|")) {
+    tableLines.push(currentRow);
+  }
+
+  return { raw: tableLines.join("\n"), nextIndex: i };
+}
+
+function isStructuralBlockStart(lines: string[], index: number): boolean {
+  const trimmed = lines[index]?.trim() || "";
+  return (
+    /^#{1,4}\s+/.test(trimmed) ||
+    /^>/.test(trimmed) ||
+    /^---+$/.test(trimmed) ||
+    /^\$\$/.test(trimmed) ||
+    /^\\\[/.test(trimmed) ||
+    isTableStart(lines, index)
+  );
+}
+
+function collectListBlock(
+  lines: string[],
+  startIndex: number,
+  ordered: boolean,
+): { raw: string; nextIndex: number } {
+  const listLines: string[] = [];
+  const isSameListLine = ordered ? isOrderedListLine : isUnorderedListLine;
+  const isOtherListLine = ordered ? isUnorderedListLine : isOrderedListLine;
+  let i = startIndex;
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+
+    // Allow blank lines between list items when the next non-empty line is
+    // still the same list kind, matching the previous behavior.
+    if (!trimmed) {
+      let next = i + 1;
+      while (next < lines.length && !lines[next].trim()) {
+        next++;
+      }
+      if (next < lines.length && isSameListLine(lines[next].trim())) {
+        i = next;
+        continue;
+      }
+      break;
+    }
+
+    if (
+      listLines.length > 0 &&
+      !isSameListLine(trimmed) &&
+      (isOtherListLine(trimmed) || isStructuralBlockStart(lines, i))
+    ) {
+      break;
+    }
+
+    listLines.push(lines[i]);
+    i++;
+  }
+
+  return { raw: listLines.join("\n"), nextIndex: i };
 }
 
 /** Split non-code text into blocks by blank lines and structure */
@@ -469,79 +684,26 @@ function splitTextBlocks(text: string): TextBlock[] {
     }
 
     // Table
-    if (trimmed.includes("|") && i + 1 < lines.length) {
-      const nextTrimmed = lines[i + 1]?.trim() || "";
-      if (/^\|?[\s:-]+(?:\|[\s:-]+)+\|?$/.test(nextTrimmed) && nextTrimmed.includes("-")) {
-        const tableLines: string[] = [line, lines[i + 1]];
-        i += 2;
-        while (i < lines.length) {
-          const rowTrimmed = lines[i].trim();
-          if (!rowTrimmed || !rowTrimmed.includes("|")) break;
-          tableLines.push(lines[i]);
-          i++;
-        }
-        const raw = tableLines.join("\n");
-        blocks.push({ type: "table", content: raw, raw });
-        continue;
-      }
+    const tableBlock = collectTableBlock(lines, i);
+    if (tableBlock) {
+      const { raw, nextIndex } = tableBlock;
+      i = nextIndex;
+      blocks.push({ type: "table", content: raw, raw });
+      continue;
     }
 
     // Ordered list
-    if (/^\d+\.\s+/.test(trimmed)) {
-      const listLines: string[] = [];
-      while (i < lines.length) {
-        const listLine = lines[i].trim();
-        if (/^\d+\.\s+/.test(listLine)) {
-          listLines.push(lines[i]);
-          i++;
-          continue;
-        }
-
-        // Allow blank lines between list items when the next non-empty line
-        // is still an ordered list item.
-        if (!listLine) {
-          let next = i + 1;
-          while (next < lines.length && !lines[next].trim()) {
-            next++;
-          }
-          if (next < lines.length && /^\d+\.\s+/.test(lines[next].trim())) {
-            i = next;
-            continue;
-          }
-        }
-        break;
-      }
-      const raw = listLines.join("\n");
+    if (isOrderedListLine(trimmed)) {
+      const { raw, nextIndex } = collectListBlock(lines, i, true);
+      i = nextIndex;
       blocks.push({ type: "list", content: raw, raw });
       continue;
     }
 
     // Unordered list
-    if (/^[-*]\s+/.test(trimmed)) {
-      const listLines: string[] = [];
-      while (i < lines.length) {
-        const listLine = lines[i].trim();
-        if (/^[-*]\s+/.test(listLine)) {
-          listLines.push(lines[i]);
-          i++;
-          continue;
-        }
-
-        // Allow blank lines between list items when the next non-empty line
-        // is still an unordered list item.
-        if (!listLine) {
-          let next = i + 1;
-          while (next < lines.length && !lines[next].trim()) {
-            next++;
-          }
-          if (next < lines.length && /^[-*]\s+/.test(lines[next].trim())) {
-            i = next;
-            continue;
-          }
-        }
-        break;
-      }
-      const raw = listLines.join("\n");
+    if (isUnorderedListLine(trimmed)) {
+      const { raw, nextIndex } = collectListBlock(lines, i, false);
+      i = nextIndex;
       blocks.push({ type: "list", content: raw, raw });
       continue;
     }
@@ -552,19 +714,13 @@ function splitTextBlocks(text: string): TextBlock[] {
       i < lines.length &&
       lines[i].trim() &&
       !/^#{1,4}\s+/.test(lines[i].trim()) &&
-      !/^[-*]\s+/.test(lines[i].trim()) &&
-      !/^\d+\.\s+/.test(lines[i].trim()) &&
+      !isUnorderedListLine(lines[i].trim()) &&
+      !isOrderedListLine(lines[i].trim()) &&
       !/^>/.test(lines[i].trim()) &&
       !/^---+$/.test(lines[i].trim()) &&
       !/^\$\$/.test(lines[i].trim()) &&
       !/^\\\[/.test(lines[i].trim()) &&
-      // Break before a table: current line has | and next line is a divider row
-      !(
-        lines[i].trim().includes("|") &&
-        i + 1 < lines.length &&
-        /^[\s|:-]+$/.test(lines[i + 1]?.trim() || "") &&
-        (lines[i + 1]?.trim() || "").includes("-")
-      )
+      !isTableStart(lines, i)
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -658,6 +814,39 @@ function renderHeader(content: string): string {
   return `<p>${renderInline(trimmed)}</p>`;
 }
 
+function normalizeSoftBreaks(content: string): string {
+  const lines = content.split(/\r?\n/);
+  let result = "";
+  let previousLineHadHardBreak = false;
+
+  for (let index = 0; index < lines.length; index++) {
+    const rawLine = lines[index];
+    const hardBreak = / {2,}$/.test(rawLine) || /\\$/.test(rawLine);
+    const lineText = rawLine
+      .replace(/\\$/, "")
+      .replace(/[ \t]+$/, "")
+      .trim();
+
+    if (index > 0) {
+      if (previousLineHadHardBreak) {
+        result += HARD_BREAK_TOKEN;
+      } else if (!/^[,.;:!?%)}\]"'’”]/.test(lineText)) {
+        result += " ";
+      }
+    }
+    result += lineText;
+    previousLineHadHardBreak = hardBreak;
+  }
+
+  return result;
+}
+
+function renderInlineWithSoftBreaks(content: string): string {
+  return renderInline(normalizeSoftBreaks(content))
+    .split(HARD_BREAK_TOKEN)
+    .join("<br/>");
+}
+
 /** Render list (ordered or unordered) */
 function renderList(content: string): string {
   const lines = content.split(/\r?\n/).filter((l) => l.trim());
@@ -665,11 +854,25 @@ function renderList(content: string): string {
   const isOrdered = Boolean(orderedMatch);
   const tag = isOrdered ? "ol" : "ul";
   const start = orderedMatch ? parseInt(orderedMatch[1], 10) : 1;
+  const itemLines: string[][] = [];
 
-  const items = lines.map((line) => {
-    const text = line.trim().replace(/^(\d+\.)\s+|^[-*]\s+/, "");
-    return `<li>${renderInline(text)}</li>`;
-  });
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const markerMatch = isOrdered
+      ? trimmed.match(/^\d+\.\s+/)
+      : trimmed.match(/^[-*]\s+/);
+    if (markerMatch) {
+      itemLines.push([
+        line.trimStart().replace(isOrdered ? /^\d+\.\s+/ : /^[-*]\s+/, ""),
+      ]);
+    } else if (itemLines.length) {
+      itemLines[itemLines.length - 1].push(line.trimStart());
+    }
+  }
+
+  const items = itemLines.map(
+    (item) => `<li>${renderInlineWithSoftBreaks(item.join("\n"))}</li>`,
+  );
 
   if (isOrdered && Number.isFinite(start) && start > 1) {
     return `<${tag} start="${start}">${items.join("")}</${tag}>`;
@@ -705,38 +908,9 @@ function renderTable(content: string): string {
     return `<p>${escapeHtml(content)}</p>`;
   }
 
-  const readCells = (row: string) => {
-    const cells: string[] = [];
-    let current = "";
-    let escaped = false;
-    for (const char of row) {
-      if (escaped) {
-        current += char;
-        escaped = false;
-        continue;
-      }
-      if (char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === "|") {
-        cells.push(current.trim());
-        current = "";
-        continue;
-      }
-      current += char;
-    }
-    if (escaped) current += "\\";
-    cells.push(current.trim());
-    return cells.filter((cell, idx, arr) => {
-      const isEdge = (idx === 0 || idx === arr.length - 1) && cell === "";
-      return !isEdge;
-    });
-  };
-
-  const headerCells = readCells(lines[0]);
+  const headerCells = readTableCells(lines[0]);
   // Skip divider line (lines[1])
-  const bodyRows = lines.slice(2).map((line) => readCells(line));
+  const bodyRows = lines.slice(2).map((line) => readTableCells(line));
 
   const headerHtml = `<tr>${headerCells.map((c) => `<th>${renderInline(c)}</th>`).join("")}</tr>`;
   const bodyHtml = bodyRows
@@ -753,9 +927,7 @@ function renderTable(content: string): string {
 
 /** Render paragraph */
 function renderParagraph(content: string): string {
-  const lines = content.split(/\r?\n/);
-  const rendered = lines.map((l) => renderInline(l)).join("<br/>");
-  return `<p>${rendered}</p>`;
+  return `<p>${renderInlineWithSoftBreaks(content)}</p>`;
 }
 
 // =============================================================================

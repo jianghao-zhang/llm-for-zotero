@@ -63,6 +63,12 @@ describe("normalizeBlockBoundaries", function () {
       // ## in non-code non-math inline text is almost always a header
       assert.ok(result);
     });
+
+    it("does not split # inside a pipe table cell", function () {
+      const input = "| Condition | # of Switches | Description |";
+      const result = normalizeBlockBoundaries(input);
+      assert.equal(result, input);
+    });
   });
 
   describe("blockquote normalization", function () {
@@ -180,5 +186,79 @@ describe("renderMarkdown with inline block tokens", function () {
     const html = renderMarkdown(input);
     assert.include(html, "<td>x|y</td>");
     assert.include(html, "<td>z</td>");
+  });
+
+  it("renders pipe tables whose header includes # text", function () {
+    const input =
+      "| Condition | # of Switches | Description |\n|---|---|---|\n| No Switch | 0 | Baseline |";
+    const html = renderMarkdown(input);
+    assert.include(html, "<table>");
+    assert.include(html, "<th># of Switches</th>");
+    assert.notInclude(html, "<h2>");
+  });
+
+  it("renders pipe tables with hard-wrapped header and body rows", function () {
+    const input =
+      "| Condition |\nSwitches | Structure |\n|---|---|---|\n| No Switch | 0 | Same scene all 24 words -- baseline |\n| Medium Switch | 3 | Switches every 6\nwords |";
+    const html = renderMarkdown(input);
+    assert.include(html, "<table>");
+    assert.include(html, "<th>Condition</th>");
+    assert.include(html, "<th>Switches</th>");
+    assert.include(html, "<th>Structure</th>");
+    assert.include(html, "<td>Switches every 6 words</td>");
+  });
+
+  it("does not absorb following prose into a hard-wrapped table", function () {
+    const input =
+      "| A |\nB | C |\n|---|---|---|\n| 1 | 2 | 3 |\nThe core logic: more switches mean more boundaries.";
+    const html = renderMarkdown(input);
+    assert.include(html, "<table>");
+    assert.include(
+      html,
+      "<p>The core logic: more switches mean more boundaries.</p>",
+    );
+    assert.notInclude(html, "<td>3 The core logic");
+  });
+
+  it("treats hard-wrapped paragraph newlines as soft breaks", function () {
+    const input =
+      "This paragraph was wrapped by the model\nbefore it reached the panel.";
+    const html = renderMarkdown(input);
+    assert.include(
+      html,
+      "<p>This paragraph was wrapped by the model before it reached the panel.</p>",
+    );
+    assert.notInclude(html, "<br/>");
+  });
+
+  it("attaches wrapped punctuation without inserting a space", function () {
+    const input = "tools are properly connected\n.";
+    const html = renderMarkdown(input);
+    assert.include(html, "<p>tools are properly connected.</p>");
+  });
+
+  it("renders inline markdown delimiters split across soft breaks", function () {
+    const input = "Use the **hard\nwrapped plugin name** inside Zotero.";
+    const html = renderMarkdown(input);
+    assert.include(html, "<strong>hard wrapped plugin name</strong>");
+    assert.notInclude(html, "**hard");
+  });
+
+  it("keeps wrapped ordered-list continuations in the same item", function () {
+    const input =
+      "1. **Keep the note in the markdown file at the path\nabove** --\nyou can copy-paste it manually\n2. **Format it differently**";
+    const html = renderMarkdown(input);
+    assert.include(
+      html,
+      "<li><strong>Keep the note in the markdown file at the path above</strong> -- you can copy-paste it manually</li>",
+    );
+    assert.include(html, "<li><strong>Format it differently</strong></li>");
+    assert.notInclude(html, "above**");
+  });
+
+  it("preserves explicit hard breaks inside paragraphs", function () {
+    const input = "First line  \nSecond line\nThird line";
+    const html = renderMarkdown(input);
+    assert.include(html, "<p>First line<br/>Second line Third line</p>");
   });
 });
