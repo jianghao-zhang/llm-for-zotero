@@ -652,9 +652,12 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const enableAgentModeInput = doc.querySelector(
     `#${config.addonRef}-enable-agent-mode`,
   ) as HTMLInputElement | null;
-  const codexAppServerEnableInput = doc.querySelector(
+  const codexAppServerEnableSelect = doc.querySelector(
     `#${config.addonRef}-codex-app-server-enable`,
-  ) as HTMLInputElement | null;
+  ) as HTMLSelectElement | null;
+  const codexAppServerSettingsWrap = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-settings`,
+  ) as HTMLDivElement | null;
   const codexAppServerModelSelect = doc.querySelector(
     `#${config.addonRef}-codex-app-server-model`,
   ) as HTMLSelectElement | null;
@@ -1994,10 +1997,17 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
-  if (codexAppServerEnableInput) {
-    codexAppServerEnableInput.checked = isCodexAppServerModeEnabled();
-    codexAppServerEnableInput.addEventListener("change", () => {
-      const enabled = codexAppServerEnableInput.checked;
+  if (codexAppServerEnableSelect) {
+    const applyCodexAppServerUi = (enabled: boolean) => {
+      codexAppServerEnableSelect.value = enabled ? "enabled" : "disabled";
+      if (codexAppServerSettingsWrap) {
+        codexAppServerSettingsWrap.style.display = enabled ? "flex" : "none";
+      }
+    };
+    applyCodexAppServerUi(isCodexAppServerModeEnabled());
+    codexAppServerEnableSelect.addEventListener("change", () => {
+      const enabled = codexAppServerEnableSelect.value === "enabled";
+      applyCodexAppServerUi(enabled);
       setCodexAppServerModeEnabled(enabled);
       if (enabled) {
         setConversationSystemPref("codex");
