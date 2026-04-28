@@ -70,6 +70,7 @@ import {
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
   isCodexAppServerThreadStartInstructionsUnsupportedError,
+  resolveCodexAppServerBinaryPath,
   resolveCodexAppServerTurnInputWithFallback,
   resolveCodexAppServerReasoningParams,
   waitForCodexAppServerTurnCompletion,
@@ -3026,8 +3027,12 @@ async function callCodexAppServerChat(params: {
   onDelta?: (delta: string) => void;
   onReasoning?: (event: ReasoningEvent) => void;
   onUsage?: (usage: UsageStats) => void;
+  codexPath?: string;
 }): Promise<string> {
-  const proc = await getOrCreateCodexAppServerProcess("codex_app_server_chat");
+  const codexPath = resolveCodexAppServerBinaryPath(params.codexPath);
+  const proc = await getOrCreateCodexAppServerProcess("codex_app_server_chat", {
+    codexPath,
+  });
   return proc.runTurnExclusive(async () => {
     const preparedTurn = await prepareCodexAppServerChatTurn(params.messages);
     const threadStartParams: Record<string, unknown> = {
@@ -3097,6 +3102,7 @@ async function callCodexAppServerChat(params: {
       onUsage: params.onUsage,
       signal: params.signal,
       cacheKey: "codex_app_server_chat",
+      processOptions: { codexPath },
     });
   });
 }
@@ -3277,6 +3283,7 @@ export async function callLLMStream(
       onDelta,
       onReasoning,
       onUsage,
+      codexPath: apiBase,
     });
   }
   const auth = await resolveRequestAuthState({
