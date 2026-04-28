@@ -98,6 +98,17 @@ import {
   setClaudeRuntimeModelPref,
   setClaudeBlockStreamingEnabled,
 } from "../claudeCode/prefs";
+import {
+  getCodexBinaryPathPref,
+  getCodexReasoningModePref,
+  getCodexRuntimeModelPref,
+  isCodexAppServerModeEnabled,
+  setCodexAppServerModeEnabled,
+  setCodexBinaryPathPref,
+  setCodexReasoningModePref,
+  setCodexRuntimeModelPref,
+} from "../codexAppServer/prefs";
+import type { CodexReasoningMode } from "../codexAppServer/constants";
 import { getClaudeProfileSignature } from "../claudeCode/projectSkills";
 import {
   getDefaultClaudeManagedInstructionBlock,
@@ -641,6 +652,24 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const enableAgentModeInput = doc.querySelector(
     `#${config.addonRef}-enable-agent-mode`,
   ) as HTMLInputElement | null;
+  const codexAppServerEnableInput = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-enable`,
+  ) as HTMLInputElement | null;
+  const codexAppServerModelSelect = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-model`,
+  ) as HTMLSelectElement | null;
+  const codexAppServerReasoningSelect = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-reasoning`,
+  ) as HTMLSelectElement | null;
+  const codexAppServerPathInput = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-path`,
+  ) as HTMLInputElement | null;
+  const codexAppServerTestBtn = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-test`,
+  ) as HTMLButtonElement | null;
+  const codexAppServerStatus = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-status`,
+  ) as HTMLSpanElement | null;
 
   if (!modelSections) return;
 
@@ -744,7 +773,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       apiKeyOption.selected = group.authMode === "api_key";
       const codexAppServerOption = el(doc, "option") as HTMLOptionElement;
       codexAppServerOption.value = "codex_app_server";
-      codexAppServerOption.textContent = t("Codex App Server");
+      codexAppServerOption.textContent = t("Codex App Server (moved to Agent tab)");
       codexAppServerOption.selected = group.authMode === "codex_app_server";
       const codexOption = el(doc, "option") as HTMLOptionElement;
       codexOption.value = "codex_auth";
@@ -759,13 +788,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       webchatOption.value = "webchat";
       webchatOption.textContent = t("WebChat");
       webchatOption.selected = group.authMode === "webchat";
-      authModeSelect.append(
-        apiKeyOption,
-        codexAppServerOption,
-        codexOption,
-        copilotOption,
-        webchatOption,
-      );
+      authModeSelect.append(apiKeyOption);
+      if (group.authMode === "codex_app_server") {
+        authModeSelect.append(codexAppServerOption);
+      }
+      authModeSelect.append(codexOption, copilotOption, webchatOption);
       authModeSelect.addEventListener("change", () => {
         const previousAuthMode = group.authMode;
         const nextAuthMode = normalizeAuthMode(authModeSelect.value);
@@ -1967,6 +1994,71 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
     });
   }
 
+  if (codexAppServerEnableInput) {
+    codexAppServerEnableInput.checked = isCodexAppServerModeEnabled();
+    codexAppServerEnableInput.addEventListener("change", () => {
+      const enabled = codexAppServerEnableInput.checked;
+      setCodexAppServerModeEnabled(enabled);
+      if (enabled) {
+        setConversationSystemPref("codex");
+      } else if (getConversationSystemPref() === "codex") {
+        setConversationSystemPref("upstream");
+      }
+    });
+  }
+
+  if (codexAppServerModelSelect) {
+    codexAppServerModelSelect.value = getCodexRuntimeModelPref();
+    codexAppServerModelSelect.addEventListener("change", () => {
+      setCodexRuntimeModelPref(codexAppServerModelSelect.value);
+    });
+  }
+
+  if (codexAppServerReasoningSelect) {
+    codexAppServerReasoningSelect.value = getCodexReasoningModePref();
+    codexAppServerReasoningSelect.addEventListener("change", () => {
+      setCodexReasoningModePref(
+        codexAppServerReasoningSelect.value as CodexReasoningMode,
+      );
+    });
+  }
+
+  if (codexAppServerPathInput) {
+    codexAppServerPathInput.value = getCodexBinaryPathPref();
+    const commitCodexPath = () => {
+      setCodexBinaryPathPref(codexAppServerPathInput.value);
+    };
+    codexAppServerPathInput.addEventListener("change", commitCodexPath);
+    codexAppServerPathInput.addEventListener("blur", commitCodexPath);
+  }
+
+  if (codexAppServerTestBtn && codexAppServerStatus) {
+    codexAppServerTestBtn.addEventListener("click", () => {
+      void (async () => {
+        codexAppServerTestBtn.disabled = true;
+        codexAppServerStatus.style.display = "inline";
+        codexAppServerStatus.style.color = "var(--fill-secondary, #888)";
+        codexAppServerStatus.textContent = t("Testing…");
+        try {
+          const result = await runCodexAppServerConnectionTest({
+            modelName: codexAppServerModelSelect?.value || getCodexRuntimeModelPref(),
+            codexPath: codexAppServerPathInput?.value.trim() || "",
+          });
+          codexAppServerStatus.textContent =
+            `${t("✓ Success — model says: ")}"${result.reply}"`;
+          codexAppServerStatus.style.color = "green";
+        } catch (err) {
+          codexAppServerStatus.textContent = `${t("Test failed: ")}${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          codexAppServerStatus.style.color = "red";
+        } finally {
+          codexAppServerTestBtn.disabled = false;
+        }
+      })();
+    });
+  }
+
   if (agentBackendModeSelect) {
     const applyAgentBackendUi = (enabled: boolean) => {
       agentBackendModeSelect.value = enabled ? "claude_bridge" : "disabled";
@@ -1979,7 +2071,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
       const enabled = agentBackendModeSelect.value === "claude_bridge";
       applyAgentBackendUi(enabled);
       setClaudeCodeModeEnabled(enabled);
-      if (!enabled) {
+      if (!enabled && getConversationSystemPref() === "claude_code") {
         setConversationSystemPref("upstream");
       }
     });

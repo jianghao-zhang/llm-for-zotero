@@ -2475,8 +2475,10 @@ function normalizeInlineTextForDedupe(text: string): string {
 export function buildAgentTraceDisplayItems(
   events: AgentRunEventRecord[],
   userMessage: Message | null | undefined,
+  assistantMessage?: Message | null,
 ): { items: AgentTraceDisplayItem[]; isInterleaved: boolean } {
   const items: AgentTraceDisplayItem[] = [];
+  const isCodexTrace = assistantMessage?.modelProviderLabel === "Codex";
   const compactedEvents = compactAgentTraceEvents(events);
   const isInterleaved = hasInterleavedTextAndTools(events);
   const requestChips = buildAgentTraceRequestChips(userMessage);
@@ -2492,14 +2494,18 @@ export function buildAgentTraceDisplayItems(
   items.push({
     type: "message",
     tone: "neutral",
-    text: buildInitialAgentMessage(requestChips),
+    text: isCodexTrace
+      ? "Request sent to Codex."
+      : buildInitialAgentMessage(requestChips),
   });
   items.push({
     type: "action",
     row: {
       kind: "plan",
       icon: "↳",
-      text: requestChips.length
+      text: isCodexTrace
+        ? "Codex received the request"
+        : requestChips.length
         ? "Request and attached context received"
         : "Request received",
     },
@@ -2592,9 +2598,11 @@ export function buildAgentTraceDisplayItems(
           if (!label) {
             if (hasExplicitStepId) {
               reasoningStepCounter += 1;
-              label = `Thinking for step ${reasoningStepCounter}`;
+              label = isCodexTrace
+                ? `Codex reasoning ${reasoningStepCounter}`
+                : `Thinking for step ${reasoningStepCounter}`;
             } else {
-              label = "Thinking";
+              label = isCodexTrace ? "Codex reasoning" : "Thinking";
             }
             reasoningLabels.set(reasoningKey, label);
           }
@@ -2762,6 +2770,7 @@ export function renderAgentTrace({
   const { items: processItems, isInterleaved } = buildAgentTraceDisplayItems(
     events,
     userMessage,
+    message,
   );
   if (isInterleaved) {
     onInterleavedText?.();

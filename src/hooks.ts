@@ -13,6 +13,7 @@ import { resolveActiveLibraryID } from "./modules/contextPanel/portalScope";
 import { invalidatePaperSearchCache } from "./modules/contextPanel/paperSearch";
 import { initChatStore } from "./utils/chatStore";
 import { initClaudeCodeStore } from "./claudeCode/store";
+import { initCodexAppServerStore } from "./codexAppServer/store";
 import { ensureClaudeProjectBootstrap } from "./claudeCode/bootstrap";
 import {
   initAttachmentRefStore,
@@ -57,6 +58,11 @@ async function onStartup() {
     await initClaudeCodeStore();
   } catch (err) {
     ztoolkit.log("LLM: Failed to initialize Claude Code store", err);
+  }
+  try {
+    await initCodexAppServerStore();
+  } catch (err) {
+    ztoolkit.log("LLM: Failed to initialize Codex App Server store", err);
   }
   try {
     await ensureClaudeProjectBootstrap();

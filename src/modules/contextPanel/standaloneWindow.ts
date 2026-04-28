@@ -44,6 +44,7 @@ import {
 import { renderShortcuts } from "./shortcuts";
 import { createElement, HTML_NS } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
+import type { ConversationSystem } from "../../shared/types";
 import {
   createGlobalConversation,
   createPaperConversation,
@@ -118,6 +119,44 @@ import {
 import {
   loadClaudeConversationHistoryScope,
 } from "../../claudeCode/historyLoader";
+import {
+  buildDefaultCodexGlobalConversationKey,
+} from "../../codexAppServer/constants";
+import {
+  createCodexGlobalPortalItem,
+  createCodexPaperPortalItem,
+} from "../../codexAppServer/portal";
+import {
+  getLastUsedCodexConversationMode,
+  getLastUsedCodexGlobalConversationKey,
+  getLastUsedCodexPaperConversationKey,
+  isCodexAppServerModeEnabled,
+  removeLastUsedCodexGlobalConversationKey,
+  removeLastUsedCodexPaperConversationKey,
+  setLastUsedCodexConversationMode,
+  setLastUsedCodexGlobalConversationKey,
+  setLastUsedCodexPaperConversationKey,
+} from "../../codexAppServer/prefs";
+import {
+  activeCodexGlobalConversationByLibrary,
+  activeCodexPaperConversationByPaper,
+  buildCodexLibraryStateKey,
+  buildCodexPaperStateKey,
+} from "../../codexAppServer/state";
+import {
+  clearCodexConversation,
+  createCodexGlobalConversation,
+  createCodexPaperConversation,
+  deleteCodexConversation,
+  getCodexConversationSummary,
+  listCodexGlobalConversations,
+  listCodexPaperConversations,
+  loadCodexConversation,
+  upsertCodexConversationSummary,
+} from "../../codexAppServer/store";
+import {
+  loadCodexConversationHistoryScope,
+} from "../../codexAppServer/historyLoader";
 
 type StandaloneSessionState = {
   pending: boolean;
@@ -382,15 +421,20 @@ export function openStandaloneChat(options?: {
   if (!mainWin) return;
 
   const sourceItem = options?.initialItem || null;
-  const sourceConversationSystem = sourceItem
+  const preferredConversationSystem = getConversationSystemPref();
+  const sourceConversationSystem: ConversationSystem = sourceItem
     ? resolveConversationSystemForItem(sourceItem) || "upstream"
-    : getConversationSystemPref() === "claude_code"
-      ? "claude_code"
-      : "upstream";
-  let currentConversationSystem: "upstream" | "claude_code" = sourceConversationSystem;
+    : preferredConversationSystem === "codex" && isCodexAppServerModeEnabled()
+      ? "codex"
+      : preferredConversationSystem === "claude_code" && getClaudeCodeModeEnabled()
+        ? "claude_code"
+        : "upstream";
   const resolvedSourceState = resolveInitialPanelItemState(sourceItem, {
     conversationSystem: sourceConversationSystem,
   });
+  let currentConversationSystem: ConversationSystem =
+    resolveConversationSystemForItem(resolvedSourceState.item) ||
+    sourceConversationSystem;
   const initialBasePaperItem =
     resolvedSourceState.basePaperItem ||
     resolveConversationBaseItem(sourceItem) ||
@@ -400,6 +444,10 @@ export function openStandaloneChat(options?: {
   );
   const isClaudeConversationSystem = () =>
     currentConversationSystem === "claude_code";
+  const isCodexConversationSystem = () =>
+    currentConversationSystem === "codex";
+  const isRuntimeConversationSystem = () =>
+    isClaudeConversationSystem() || isCodexConversationSystem();
   const initialLibraryID =
     Number(
       resolvedSourceState.item?.libraryID ||
@@ -409,21 +457,23 @@ export function openStandaloneChat(options?: {
     ) || 1;
 
   const libraryID = initialLibraryID > 0 ? Math.floor(initialLibraryID) : 1;
-  const initialRememberedClaudeMode =
-    sourceConversationSystem === "claude_code"
+  const initialRememberedRuntimeMode =
+    currentConversationSystem === "claude_code"
       ? getLastUsedClaudeConversationMode(libraryID)
+      : currentConversationSystem === "codex"
+        ? getLastUsedCodexConversationMode(libraryID)
       : null;
   const initialMode: "open" | "paper" =
     initialDisplayConversationKind === "paper"
       ? "paper"
       : initialDisplayConversationKind === "global"
         ? "open"
-        : initialRememberedClaudeMode === "global"
+        : initialRememberedRuntimeMode === "global"
           ? "open"
           : initialBasePaperItem
             ? "paper"
             : "open";
-  const lockedKey = isClaudeConversationSystem()
+  const lockedKey = isRuntimeConversationSystem()
     ? null
     : getLockedGlobalConversationKey(libraryID);
   const sourceClaudeGlobalKey =
@@ -433,6 +483,13 @@ export function openStandaloneChat(options?: {
       : sourceItem && (sourceItem as any).__llmClaudeGlobalPortalItem === true
         ? Number(sourceItem.id || 0)
         : 0;
+  const sourceCodexGlobalKey =
+    resolvedSourceState.item &&
+    (resolvedSourceState.item as any).__llmCodexGlobalPortalItem === true
+      ? Number(resolvedSourceState.item.id || 0)
+      : sourceItem && (sourceItem as any).__llmCodexGlobalPortalItem === true
+        ? Number(sourceItem.id || 0)
+        : 0;
   const conversationKey = isClaudeConversationSystem()
     ? sourceClaudeGlobalKey > 0
       ? sourceClaudeGlobalKey
@@ -440,11 +497,21 @@ export function openStandaloneChat(options?: {
             libraryID,
             kind: "global",
           }) || buildDefaultClaudeGlobalConversationKey(libraryID)
+    : isCodexConversationSystem()
+      ? sourceCodexGlobalKey > 0
+        ? sourceCodexGlobalKey
+        : activeCodexGlobalConversationByLibrary.get(
+            buildCodexLibraryStateKey(libraryID),
+          ) ||
+          getLastUsedCodexGlobalConversationKey(libraryID) ||
+          buildDefaultCodexGlobalConversationKey(libraryID)
     : lockedKey ??
       activeGlobalConversationByLibrary.get(libraryID) ??
       GLOBAL_CONVERSATION_KEY_BASE;
   const globalPortalItem = isClaudeConversationSystem()
     ? createClaudeGlobalPortalItem(libraryID, conversationKey)
+    : isCodexConversationSystem()
+      ? createCodexGlobalPortalItem(libraryID, conversationKey)
     : createGlobalPortalItem(libraryID, conversationKey);
   const initialPaperItem =
     initialMode === "paper"
@@ -662,14 +729,35 @@ export function openStandaloneChat(options?: {
       ) as HTMLButtonElement;
       systemToggleBtn.className = "llm-standalone-claude-toggle";
       systemToggleBtn.type = "button";
-      systemToggleBtn.setAttribute("aria-label", "Claude Code");
+      systemToggleBtn.setAttribute("aria-label", "Conversation runtime");
+
+      const getPreferredRuntimeSystem = (): ConversationSystem => {
+        const preferred = getConversationSystemPref();
+        if (preferred === "codex" && isCodexAppServerModeEnabled()) return "codex";
+        if (preferred === "claude_code" && getClaudeCodeModeEnabled()) return "claude_code";
+        if (isCodexAppServerModeEnabled()) return "codex";
+        if (getClaudeCodeModeEnabled()) return "claude_code";
+        return "upstream";
+      };
 
       const updateStandaloneSystemToggle = () => {
-        const enabled = getClaudeCodeModeEnabled() && !isInWebChatMode;
+        const enabled =
+          (getClaudeCodeModeEnabled() || isCodexAppServerModeEnabled()) &&
+          !isInWebChatMode;
         systemToggleBtn.style.display = enabled ? "inline-flex" : "none";
-        const active = isClaudeConversationSystem();
+        const active = isRuntimeConversationSystem();
+        const targetSystem = getPreferredRuntimeSystem();
+        const iconSystem = active ? currentConversationSystem : targetSystem;
         systemToggleBtn.dataset.active = active ? "true" : "false";
-        systemToggleBtn.title = active ? "Switch to upstream mode" : "Switch to Claude Code mode";
+        systemToggleBtn.title = active
+          ? "Switch to upstream mode"
+          : iconSystem === "codex"
+            ? "Switch to Codex mode"
+            : "Switch to Claude Code mode";
+        if (iconSystem === "codex") {
+          systemToggleBtn.textContent = "C";
+          return;
+        }
         systemToggleBtn.innerHTML = active
           ? `<svg height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z" fill="#D97757" fill-rule="evenodd"></path></svg>`
           : `<svg fill="currentColor" fill-rule="evenodd" height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z"></path></svg>`;
@@ -1105,6 +1193,25 @@ export function openStandaloneChat(options?: {
         return getClaudeConversationSummary(params.conversationKey);
       };
 
+      const ensureCodexConversationCatalogEntry = async (params: {
+        conversationKey: number;
+        libraryID: number;
+        kind: "global" | "paper";
+        paperItemID?: number;
+      }) => {
+        const existing = await getCodexConversationSummary(params.conversationKey);
+        if (existing) return existing;
+        await upsertCodexConversationSummary({
+          conversationKey: params.conversationKey,
+          libraryID: params.libraryID,
+          kind: params.kind,
+          paperItemID: params.paperItemID,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        return getCodexConversationSummary(params.conversationKey);
+      };
+
       // -----------------------------------------------------------------------
       // Webchat mode UI updates for standalone window
       // -----------------------------------------------------------------------
@@ -1402,11 +1509,15 @@ export function openStandaloneChat(options?: {
         if (params.mode === "open") {
           return isClaudeConversationSystem()
             ? (createClaudeGlobalPortalItem(getCurrentLibraryScopeID(), params.conversationKey) as Zotero.Item)
+            : isCodexConversationSystem()
+              ? (createCodexGlobalPortalItem(getCurrentLibraryScopeID(), params.conversationKey) as Zotero.Item)
             : createGlobalPortalItem(getCurrentLibraryScopeID(), params.conversationKey);
         }
         if (!params.paperItem) return null;
         return isClaudeConversationSystem()
           ? (createClaudePaperPortalItem(params.paperItem, params.conversationKey) as Zotero.Item)
+          : isCodexConversationSystem()
+            ? (createCodexPaperPortalItem(params.paperItem, params.conversationKey) as Zotero.Item)
           : createPaperPortalItem(
               params.paperItem,
               params.conversationKey,
@@ -1437,10 +1548,28 @@ export function openStandaloneChat(options?: {
           if (standaloneMode === "paper" && currentBasePaperItem) {
             const paperItemID = Number(currentBasePaperItem.id || 0);
             if (paperItemID > 0) {
-              activePaperConversationByPaper.set(
-                buildPaperStateKey(libraryID, paperItemID),
-                activeConversationKey,
-              );
+              const paperLibraryID = getCurrentPaperLibraryID();
+              if (isClaudeConversationSystem()) {
+                activeClaudePaperConversationByPaper.set(
+                  buildClaudePaperStateKey(paperLibraryID, paperItemID),
+                  activeConversationKey,
+                );
+              } else if (isCodexConversationSystem()) {
+                activeCodexPaperConversationByPaper.set(
+                  buildCodexPaperStateKey(paperLibraryID, paperItemID),
+                  activeConversationKey,
+                );
+                setLastUsedCodexPaperConversationKey(
+                  paperLibraryID,
+                  paperItemID,
+                  activeConversationKey,
+                );
+              } else {
+                activePaperConversationByPaper.set(
+                  buildPaperStateKey(libraryID, paperItemID),
+                  activeConversationKey,
+                );
+              }
             }
           }
 
@@ -1593,6 +1722,24 @@ export function openStandaloneChat(options?: {
                 title: entry.title,
                 mode: "open" as const,
               }));
+            } else if (isCodexConversationSystem()) {
+              if (activeConversationKey > 0) {
+                await ensureCodexConversationCatalogEntry({
+                  conversationKey: activeConversationKey,
+                  libraryID: getCurrentLibraryScopeID(),
+                  kind: "global",
+                });
+              }
+              conversations = (await loadCodexConversationHistoryScope({
+                libraryID: getCurrentLibraryScopeID(),
+                kind: "global",
+                limit: 50,
+              })).map((entry) => ({
+                conversationKey: entry.conversationKey,
+                lastActivityAt: entry.lastActivityAt,
+                title: entry.title,
+                mode: "open" as const,
+              }));
             } else {
               await ensureGlobalConversationExists(getCurrentLibraryScopeID(), activeConversationKey);
               conversations = (await loadConversationHistoryScope({
@@ -1640,6 +1787,27 @@ export function openStandaloneChat(options?: {
                 });
               }
               conversations = (await loadClaudeConversationHistoryScope({
+                libraryID: paperLibID,
+                kind: "paper",
+                paperItemID: paperID,
+                limit: 50,
+              })).map((entry) => ({
+                conversationKey: entry.conversationKey,
+                lastActivityAt: entry.lastActivityAt,
+                title: entry.title,
+                paperItemID: entry.paperItemID,
+                mode: "paper" as const,
+              }));
+            } else if (isCodexConversationSystem()) {
+              if (activeConversationKey > 0) {
+                await ensureCodexConversationCatalogEntry({
+                  conversationKey: activeConversationKey,
+                  libraryID: paperLibID,
+                  kind: "paper",
+                  paperItemID: paperID,
+                });
+              }
+              conversations = (await loadCodexConversationHistoryScope({
                 libraryID: paperLibID,
                 kind: "paper",
                 paperItemID: paperID,
@@ -1847,6 +2015,38 @@ export function openStandaloneChat(options?: {
                 mode: entry.kind === "paper" ? "paper" : "open",
               }));
             }
+            if (isCodexConversationSystem()) {
+              if (standaloneMode === "open") {
+                return (await loadCodexConversationHistoryScope({
+                  libraryID: getCurrentLibraryScopeID(),
+                  kind: "global",
+                  limit: 100,
+                })).map((entry) => ({
+                  conversationKey: entry.conversationKey,
+                  lastActivityAt: entry.lastActivityAt,
+                  title: entry.title,
+                  paperItemID: entry.paperItemID,
+                  mode: entry.kind === "paper" ? "paper" : "open",
+                }));
+              }
+              const paperID = Number(currentBasePaperItem?.id || 0);
+              const paperLibID = Number(currentBasePaperItem?.libraryID || getCurrentLibraryScopeID());
+              if (!Number.isFinite(paperID) || paperID <= 0 || !Number.isFinite(paperLibID) || paperLibID <= 0) {
+                return [];
+              }
+              return (await loadCodexConversationHistoryScope({
+                libraryID: paperLibID,
+                kind: "paper",
+                paperItemID: paperID,
+                limit: 100,
+              })).map((entry) => ({
+                conversationKey: entry.conversationKey,
+                lastActivityAt: entry.lastActivityAt,
+                title: entry.title,
+                paperItemID: entry.paperItemID,
+                mode: entry.kind === "paper" ? "paper" : "open",
+              }));
+            }
             if (standaloneMode === "open") {
               return (await loadConversationHistoryScope({
                 mode: "open",
@@ -1921,6 +2121,11 @@ export function openStandaloneChat(options?: {
                       entry.conversationKey,
                       200,
                     )
+                  : isCodexConversationSystem()
+                    ? await loadCodexConversation(
+                        entry.conversationKey,
+                        200,
+                      )
                   : await loadConversation(
                       entry.conversationKey,
                       200,
@@ -2483,6 +2688,8 @@ export function openStandaloneChat(options?: {
             clearConversationSummaryFromCache(key);
             if (isClaudeConversationSystem()) {
               await clearClaudeConversation(key);
+            } else if (isCodexConversationSystem()) {
+              await clearCodexConversation(key);
             } else {
               await clearStoredConversation(key);
             }
@@ -2509,6 +2716,26 @@ export function openStandaloneChat(options?: {
                 );
                 if (persistedKey !== null && Number(persistedKey) === key) {
                   removeLastUsedClaudeGlobalConversationKey(currentLibraryID);
+                }
+              } else if (isCodexConversationSystem()) {
+                await deleteCodexConversation(key);
+                const codexLibraryStateKey =
+                  buildCodexLibraryStateKey(currentLibraryID);
+                const rememberedKey =
+                  activeCodexGlobalConversationByLibrary.get(codexLibraryStateKey);
+                if (
+                  rememberedKey !== undefined &&
+                  Number(rememberedKey) === key
+                ) {
+                  activeCodexGlobalConversationByLibrary.delete(
+                    codexLibraryStateKey,
+                  );
+                }
+                const persistedKey = getLastUsedCodexGlobalConversationKey(
+                  currentLibraryID,
+                );
+                if (persistedKey !== null && Number(persistedKey) === key) {
+                  removeLastUsedCodexGlobalConversationKey(currentLibraryID);
                 }
               } else {
                 await deleteGlobalConversation(key);
@@ -2558,6 +2785,35 @@ export function openStandaloneChat(options?: {
                     );
                   }
                 }
+              } else if (isCodexConversationSystem()) {
+                await deleteCodexConversation(key);
+                if (currentBasePaperItem?.id) {
+                  const paperLibraryID = getCurrentPaperLibraryID();
+                  const paperItemID = Number(currentBasePaperItem.id);
+                  const paperStateKey = buildCodexPaperStateKey(
+                    paperLibraryID,
+                    paperItemID,
+                  );
+                  const rememberedKey = activeCodexPaperConversationByPaper.get(
+                    paperStateKey,
+                  );
+                  if (
+                    rememberedKey !== undefined &&
+                    Number(rememberedKey) === key
+                  ) {
+                    activeCodexPaperConversationByPaper.delete(paperStateKey);
+                  }
+                  const persistedKey = getLastUsedCodexPaperConversationKey(
+                    paperLibraryID,
+                    paperItemID,
+                  );
+                  if (persistedKey !== null && Number(persistedKey) === key) {
+                    removeLastUsedCodexPaperConversationKey(
+                      paperLibraryID,
+                      paperItemID,
+                    );
+                  }
+                }
               } else {
                 await deletePaperConversation(key);
                 if (currentBasePaperItem?.id) {
@@ -2600,6 +2856,15 @@ export function openStandaloneChat(options?: {
                       buildClaudeLibraryStateKey(currentLibraryID),
                       fallbackKey,
                     );
+                  } else if (isCodexConversationSystem()) {
+                    activeCodexGlobalConversationByLibrary.set(
+                      buildCodexLibraryStateKey(currentLibraryID),
+                      fallbackKey,
+                    );
+                    setLastUsedCodexGlobalConversationKey(
+                      currentLibraryID,
+                      fallbackKey,
+                    );
                   } else {
                     activeGlobalConversationByLibrary.set(currentLibraryID, fallbackKey);
                   }
@@ -2624,12 +2889,23 @@ export function openStandaloneChat(options?: {
                   const currentLibraryID = getCurrentLibraryScopeID();
                   const newKey = isClaudeConversationSystem()
                     ? Number((await createClaudeGlobalConversation(currentLibraryID))?.conversationKey || 0)
+                    : isCodexConversationSystem()
+                      ? Number((await createCodexGlobalConversation(currentLibraryID))?.conversationKey || 0)
                     : await createGlobalConversation(currentLibraryID);
                   if (newKey && !cancelled) {
                     activeConversationKey = newKey;
                     if (isClaudeConversationSystem()) {
                       activeClaudeGlobalConversationByLibrary.set(
                         buildClaudeLibraryStateKey(currentLibraryID),
+                        newKey,
+                      );
+                    } else if (isCodexConversationSystem()) {
+                      activeCodexGlobalConversationByLibrary.set(
+                        buildCodexLibraryStateKey(currentLibraryID),
+                        newKey,
+                      );
+                      setLastUsedCodexGlobalConversationKey(
+                        currentLibraryID,
                         newKey,
                       );
                     } else {
@@ -2645,6 +2921,19 @@ export function openStandaloneChat(options?: {
                   if (isClaudeConversationSystem()) {
                     const paperId = Number(currentBasePaperItem.id || 0);
                     const summary = await createClaudePaperConversation(getCurrentPaperLibraryID(), paperId);
+                    if (summary?.conversationKey && !cancelled) {
+                      activeConversationKey = summary.conversationKey;
+                      const newItem = buildStandalonePortalItem({
+                        mode: "paper",
+                        conversationKey: summary.conversationKey,
+                        paperItem: currentBasePaperItem,
+                      });
+                      currentPaperItem = currentBasePaperItem;
+                      if (newItem) mountChatPanel(newItem);
+                    }
+                  } else if (isCodexConversationSystem()) {
+                    const paperId = Number(currentBasePaperItem.id || 0);
+                    const summary = await createCodexPaperConversation(getCurrentPaperLibraryID(), paperId);
                     if (summary?.conversationKey && !cancelled) {
                       activeConversationKey = summary.conversationKey;
                       const newItem = buildStandalonePortalItem({
@@ -2716,6 +3005,12 @@ export function openStandaloneChat(options?: {
               buildClaudeLibraryStateKey(currentLibraryID),
               key,
             );
+          } else if (isCodexConversationSystem()) {
+            activeCodexGlobalConversationByLibrary.set(
+              buildCodexLibraryStateKey(currentLibraryID),
+              key,
+            );
+            setLastUsedCodexGlobalConversationKey(currentLibraryID, key);
           } else {
             activeGlobalConversationByLibrary.set(currentLibraryID, key);
           }
@@ -2779,6 +3074,43 @@ export function openStandaloneChat(options?: {
           }
           return Number(
             (await createClaudeGlobalConversation(currentLibraryID))?.conversationKey || 0,
+          );
+        }
+        if (isCodexConversationSystem()) {
+          if (!forceFresh) {
+            const currentKey = Number(activeConversationKey || 0);
+            if (Number.isFinite(currentKey) && currentKey > 0) {
+              try {
+                const currentSummary = await getCodexConversationSummary(currentKey);
+                if (
+                  currentSummary &&
+                  currentSummary.kind === "global" &&
+                  Number(currentSummary.libraryID) === currentLibraryID &&
+                  (currentSummary.userTurnCount || 0) === 0
+                ) {
+                  return Math.floor(currentKey);
+                }
+              } catch (err) {
+                ztoolkit.log("LLM: standalone failed to inspect active Codex global draft", err);
+              }
+            }
+            try {
+              const summaries = await listCodexGlobalConversations(
+                currentLibraryID,
+                50,
+              );
+              const latestEmpty = summaries.find(
+                (summary) => (summary.userTurnCount || 0) === 0,
+              );
+              if (latestEmpty?.conversationKey) {
+                return Math.floor(latestEmpty.conversationKey);
+              }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to list Codex global drafts", err);
+            }
+          }
+          return Number(
+            (await createCodexGlobalConversation(currentLibraryID))?.conversationKey || 0,
           );
         }
         if (!forceFresh) {
@@ -2856,6 +3188,46 @@ export function openStandaloneChat(options?: {
             ),
           };
         }
+        if (isCodexConversationSystem()) {
+          if (!forceFresh) {
+            const currentKey = Number(activeConversationKey || 0);
+            if (Number.isFinite(currentKey) && currentKey > 0) {
+              try {
+                const currentSummary = await getCodexConversationSummary(currentKey);
+                if (
+                  currentSummary &&
+                  currentSummary.kind === "paper" &&
+                  (currentSummary.userTurnCount || 0) === 0
+                ) {
+                  return { conversationKey: Math.floor(currentKey) };
+                }
+              } catch (err) {
+                ztoolkit.log("LLM: standalone failed to inspect active Codex paper draft", err);
+              }
+            }
+            try {
+              const summaries = await listCodexPaperConversations(
+                paperLibraryID,
+                paperId,
+                50,
+              );
+              const emptyEntry = summaries.find(
+                (summary) => (summary.userTurnCount || 0) === 0,
+              );
+              if (emptyEntry?.conversationKey) {
+                return { conversationKey: Math.floor(emptyEntry.conversationKey) };
+              }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to list Codex paper drafts", err);
+            }
+          }
+          return {
+            conversationKey: Number(
+              (await createCodexPaperConversation(paperLibraryID, paperId))
+                ?.conversationKey || 0,
+            ),
+          };
+        }
         if (!forceFresh) {
           const currentKey = Number(activeConversationKey || 0);
           if (Number.isFinite(currentKey) && currentKey > 0) {
@@ -2905,6 +3277,15 @@ export function openStandaloneChat(options?: {
             buildClaudeLibraryStateKey(currentLibraryID),
             conversationKey,
           );
+        } else if (isCodexConversationSystem()) {
+          activeCodexGlobalConversationByLibrary.set(
+            buildCodexLibraryStateKey(currentLibraryID),
+            conversationKey,
+          );
+          setLastUsedCodexGlobalConversationKey(
+            currentLibraryID,
+            conversationKey,
+          );
         } else {
           activeGlobalConversationByLibrary.set(currentLibraryID, conversationKey);
         }
@@ -2943,6 +3324,12 @@ export function openStandaloneChat(options?: {
                 buildClaudeLibraryStateKey(currentLibraryID),
                 newKey,
               );
+            } else if (isCodexConversationSystem()) {
+              activeCodexGlobalConversationByLibrary.set(
+                buildCodexLibraryStateKey(currentLibraryID),
+                newKey,
+              );
+              setLastUsedCodexGlobalConversationKey(currentLibraryID, newKey);
             } else {
               activeGlobalConversationByLibrary.set(currentLibraryID, newKey);
             }
@@ -3025,11 +3412,11 @@ export function openStandaloneChat(options?: {
       // -----------------------------------------------------------------------
       let systemSwitchSeq = 0;
       const switchConversationSystem = async (
-        nextSystem: "upstream" | "claude_code",
+        nextSystem: ConversationSystem,
         options?: { forceFresh?: boolean },
       ) => {
         const switchSeq = ++systemSwitchSeq;
-        const currentSystem = isClaudeConversationSystem() ? "claude_code" : "upstream";
+        const currentSystem = currentConversationSystem;
         if (nextSystem === currentSystem) return;
         const forceFresh = options?.forceFresh === true;
         setConversationSystemPref(nextSystem);
@@ -3042,6 +3429,8 @@ export function openStandaloneChat(options?: {
             const nextItem =
               nextSystem === "claude_code"
                 ? createClaudeGlobalPortalItem(libraryID, conversationKey)
+                : nextSystem === "codex"
+                  ? createCodexGlobalPortalItem(libraryID, conversationKey)
                 : createGlobalPortalItem(libraryID, conversationKey);
             activeConversationKey = conversationKey;
             if (nextSystem === "claude_code") {
@@ -3049,6 +3438,12 @@ export function openStandaloneChat(options?: {
                 buildClaudeLibraryStateKey(libraryID),
                 conversationKey,
               );
+            } else if (nextSystem === "codex") {
+              activeCodexGlobalConversationByLibrary.set(
+                buildCodexLibraryStateKey(libraryID),
+                conversationKey,
+              );
+              setLastUsedCodexGlobalConversationKey(libraryID, conversationKey);
             } else {
               activeGlobalConversationByLibrary.set(libraryID, conversationKey);
             }
@@ -3076,6 +3471,24 @@ export function openStandaloneChat(options?: {
             const targetKey = Number.isFinite(rememberedKey) && rememberedKey > 0
               ? Math.floor(rememberedKey)
               : buildDefaultClaudeGlobalConversationKey(libraryID);
+            if (switchSeq !== systemSwitchSeq) return;
+            if (targetKey > 0) {
+              mountOpenConversation(targetKey);
+            }
+            return;
+          }
+
+          if (nextSystem === "codex") {
+            const rememberedKey = Number(
+              activeCodexGlobalConversationByLibrary.get(
+                buildCodexLibraryStateKey(libraryID),
+              ) ||
+                getLastUsedCodexGlobalConversationKey(libraryID) ||
+                0,
+            );
+            const targetKey = Number.isFinite(rememberedKey) && rememberedKey > 0
+              ? Math.floor(rememberedKey)
+              : buildDefaultCodexGlobalConversationKey(libraryID);
             if (switchSeq !== systemSwitchSeq) return;
             if (targetKey > 0) {
               mountOpenConversation(targetKey);
@@ -3113,6 +3526,8 @@ export function openStandaloneChat(options?: {
           if (!newKey) return;
           const freshItem = nextSystem === "claude_code"
             ? createClaudePaperPortalItem(paperItem, newKey)
+            : nextSystem === "codex"
+              ? createCodexPaperPortalItem(paperItem, newKey)
             : createPaperPortalItem(paperItem, newKey, sessionVersion || 1);
           activeConversationKey = newKey;
           currentPaperItem = paperItem;
@@ -3136,22 +3551,27 @@ export function openStandaloneChat(options?: {
 
       systemToggleBtn.addEventListener("click", () => {
         void switchConversationSystem(
-          isClaudeConversationSystem() ? "upstream" : "claude_code",
+          isRuntimeConversationSystem() ? "upstream" : getPreferredRuntimeSystem(),
           { forceFresh: true },
         );
       });
       updateStandaloneSystemToggle();
       {
         const claudeModePrefKey = `${config.prefsPrefix}.enableClaudeCodeMode`;
+        const codexModePrefKey = `${config.prefsPrefix}.enableCodexAppServerMode`;
         let claudeObserverId: symbol | undefined;
+        let codexObserverId: symbol | undefined;
         const unregister = () => {
-          if (claudeObserverId === undefined) return;
-          try {
-            (Zotero as any).Prefs.unregisterObserver(claudeObserverId);
-          } catch {
-            void 0;
+          for (const observerId of [claudeObserverId, codexObserverId]) {
+            if (observerId === undefined) continue;
+            try {
+              (Zotero as any).Prefs.unregisterObserver(observerId);
+            } catch {
+              void 0;
+            }
           }
           claudeObserverId = undefined;
+          codexObserverId = undefined;
         };
         cleanupStandalonePrefObserver = unregister;
         const onClaudeModePrefChange = () => {
@@ -3164,8 +3584,26 @@ export function openStandaloneChat(options?: {
             void invalidateAllClaudeHotRuntimes(getCoreAgentRuntime()).catch((err) => {
               ztoolkit.log("LLM: Failed to invalidate all Claude hot runtimes", err);
             });
-            setConversationSystemPref("upstream");
+            if (getConversationSystemPref() === "claude_code") {
+              setConversationSystemPref("upstream");
+            }
             if (isClaudeConversationSystem()) {
+              void switchConversationSystem("upstream");
+              return;
+            }
+          }
+          updateStandaloneSystemToggle();
+        };
+        const onCodexModePrefChange = () => {
+          if (cancelled) {
+            unregister();
+            return;
+          }
+          if (!isCodexAppServerModeEnabled()) {
+            if (getConversationSystemPref() === "codex") {
+              setConversationSystemPref("upstream");
+            }
+            if (isCodexConversationSystem()) {
               void switchConversationSystem("upstream");
               return;
             }
@@ -3176,6 +3614,11 @@ export function openStandaloneChat(options?: {
           claudeObserverId = (Zotero as any).Prefs.registerObserver(
             claudeModePrefKey,
             onClaudeModePrefChange,
+            true,
+          );
+          codexObserverId = (Zotero as any).Prefs.registerObserver(
+            codexModePrefKey,
+            onCodexModePrefChange,
             true,
           );
         } catch {
@@ -3200,6 +3643,11 @@ export function openStandaloneChat(options?: {
             getCurrentLibraryScopeID(),
             mode === "open" ? "global" : "paper",
           );
+        } else if (isCodexConversationSystem()) {
+          setLastUsedCodexConversationMode(
+            getCurrentLibraryScopeID(),
+            mode === "open" ? "global" : "paper",
+          );
         }
         paperTab.classList.toggle("active", mode === "paper");
         openTab.classList.toggle("active", mode === "open");
@@ -3214,6 +3662,12 @@ export function openStandaloneChat(options?: {
               buildClaudeLibraryStateKey(currentLibraryID),
               key,
             );
+          } else if (isCodexConversationSystem()) {
+            activeCodexGlobalConversationByLibrary.set(
+              buildCodexLibraryStateKey(currentLibraryID),
+              key,
+            );
+            setLastUsedCodexGlobalConversationKey(currentLibraryID, key);
           } else {
             activeGlobalConversationByLibrary.set(currentLibraryID, key);
           }
@@ -3333,7 +3787,8 @@ export function openStandaloneChat(options?: {
       standaloneItemChangeHandler = (rawItem: Zotero.Item | null) => {
         if (cancelled || standaloneMode !== "paper") return;
         const resolved = resolveInitialPanelItemState(rawItem, {
-          conversationSystem: resolveConversationSystemForItem(rawItem),
+          conversationSystem:
+            resolveConversationSystemForItem(rawItem) || currentConversationSystem,
         });
         const newBasePaper =
           resolved.basePaperItem ||

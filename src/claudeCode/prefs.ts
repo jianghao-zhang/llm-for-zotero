@@ -89,11 +89,17 @@ function setJsonStringPref(key: string, value: Record<string, string>): void {
 
 export function getConversationSystemPref(): ConversationSystem {
   const raw = getStringPref("conversationSystem").trim().toLowerCase();
-  return raw === "claude_code" ? "claude_code" : "upstream";
+  if (raw === "claude_code") return "claude_code";
+  if (raw === "codex") return "codex";
+  return "upstream";
 }
 
 export function setConversationSystemPref(system: ConversationSystem): void {
-  setPref("conversationSystem", system === "claude_code" ? "claude_code" : "upstream");
+  if (system === "claude_code" || system === "codex") {
+    setPref("conversationSystem", system);
+    return;
+  }
+  setPref("conversationSystem", "upstream");
 }
 
 export function getLastUsedClaudeConversationMode(

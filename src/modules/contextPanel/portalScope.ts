@@ -45,6 +45,30 @@ import {
   buildClaudeLibraryStateKey,
   buildClaudePaperStateKey,
 } from "../../claudeCode/state";
+import {
+  buildDefaultCodexGlobalConversationKey,
+  buildDefaultCodexPaperConversationKey,
+} from "../../codexAppServer/constants";
+import {
+  createCodexGlobalPortalItem,
+  createCodexPaperPortalItem,
+  isCodexGlobalPortalItem,
+  isCodexPaperPortalItem,
+  resolveCodexPaperPortalBaseItem,
+} from "../../codexAppServer/portal";
+import {
+  getLastUsedCodexConversationMode,
+  getLastUsedCodexGlobalConversationKey,
+  getLastUsedCodexPaperConversationKey,
+  isCodexAppServerModeEnabled,
+} from "../../codexAppServer/prefs";
+import {
+  activeCodexConversationModeByLibrary,
+  activeCodexGlobalConversationByLibrary,
+  activeCodexPaperConversationByPaper,
+  buildCodexLibraryStateKey,
+  buildCodexPaperStateKey,
+} from "../../codexAppServer/state";
 
 export function resolveActiveLibraryID(): number | null {
   try {
@@ -305,7 +329,9 @@ export function resolveDisplayConversationKind(
     return noteSession.displayConversationKind;
   }
   if (!item) return null;
-  return isGlobalPortalItem(item) || isClaudeGlobalPortalItem(item)
+  return isGlobalPortalItem(item) ||
+    isClaudeGlobalPortalItem(item) ||
+    isCodexGlobalPortalItem(item)
     ? "global"
     : "paper";
 }
@@ -314,7 +340,11 @@ export function resolveConversationBaseItem(
   targetItem: Zotero.Item | null | undefined,
 ): Zotero.Item | null {
   if (!targetItem) return null;
-  if (isGlobalPortalItem(targetItem) || isClaudeGlobalPortalItem(targetItem)) {
+  if (
+    isGlobalPortalItem(targetItem) ||
+    isClaudeGlobalPortalItem(targetItem) ||
+    isCodexGlobalPortalItem(targetItem)
+  ) {
     return null;
   }
   if (isPaperPortalItem(targetItem)) {
@@ -322,6 +352,9 @@ export function resolveConversationBaseItem(
   }
   if (isClaudePaperPortalItem(targetItem)) {
     return resolveClaudePaperPortalBaseItem(targetItem);
+  }
+  if (isCodexPaperPortalItem(targetItem)) {
+    return resolveCodexPaperPortalBaseItem(targetItem);
   }
   const noteParentItem = resolveNoteParentItem(targetItem);
   if (noteParentItem) {
@@ -352,6 +385,9 @@ export function resolveConversationSystemForItem(
   if (isClaudeGlobalPortalItem(item) || isClaudePaperPortalItem(item)) {
     return "claude_code";
   }
+  if (isCodexGlobalPortalItem(item) || isCodexPaperPortalItem(item)) {
+    return "codex";
+  }
   if (isGlobalPortalItem(item) || isPaperPortalItem(item)) {
     return "upstream";
   }
@@ -369,7 +405,13 @@ function resolvePreferredConversationSystem(params: {
   if (itemSystem === "claude_code" && !isClaudeCodeModeEnabled()) {
     return "upstream";
   }
+  if (itemSystem === "codex" && !isCodexAppServerModeEnabled()) {
+    return "upstream";
+  }
   if (preferred === "claude_code" && !isClaudeCodeModeEnabled()) {
+    return "upstream";
+  }
+  if (preferred === "codex" && !isCodexAppServerModeEnabled()) {
     return "upstream";
   }
   return itemSystem || preferred;
@@ -383,6 +425,12 @@ function resolvePreferredConversationMode(
     const rememberedMode =
       activeClaudeConversationModeByLibrary.get(buildClaudeLibraryStateKey(libraryID)) ||
       getLastUsedClaudeConversationMode(libraryID);
+    return rememberedMode === "global" ? "global" : "paper";
+  }
+  if (system === "codex") {
+    const rememberedMode =
+      activeCodexConversationModeByLibrary.get(buildCodexLibraryStateKey(libraryID)) ||
+      getLastUsedCodexConversationMode(libraryID);
     return rememberedMode === "global" ? "global" : "paper";
   }
   if (getLockedGlobalConversationKey(libraryID) !== null) {
@@ -402,6 +450,15 @@ function resolveGlobalConversationKey(
         activeClaudeGlobalConversationByLibrary.get(buildClaudeLibraryStateKey(libraryID)) ||
           getLastUsedClaudeGlobalConversationKey(libraryID) ||
           buildDefaultClaudeGlobalConversationKey(libraryID),
+      ),
+    );
+  }
+  if (system === "codex") {
+    return Math.floor(
+      Number(
+        activeCodexGlobalConversationByLibrary.get(buildCodexLibraryStateKey(libraryID)) ||
+          getLastUsedCodexGlobalConversationKey(libraryID) ||
+          buildDefaultCodexGlobalConversationKey(libraryID),
       ),
     );
   }
@@ -435,8 +492,10 @@ export function resolveInitialPanelItemState(
     };
   }
   if (
-    (isClaudeGlobalPortalItem(item) || isClaudePaperPortalItem(item)) &&
-    !isClaudeCodeModeEnabled()
+    ((isClaudeGlobalPortalItem(item) || isClaudePaperPortalItem(item)) &&
+      !isClaudeCodeModeEnabled()) ||
+    ((isCodexGlobalPortalItem(item) || isCodexPaperPortalItem(item)) &&
+      !isCodexAppServerModeEnabled())
   ) {
     item = resolveConversationBaseItem(item);
   }
@@ -447,7 +506,8 @@ export function resolveInitialPanelItemState(
 
   if (
     isPaperPortalItem(item) ||
-    (isClaudePaperPortalItem(item) && isClaudeCodeModeEnabled())
+    (isClaudePaperPortalItem(item) && isClaudeCodeModeEnabled()) ||
+    (isCodexPaperPortalItem(item) && isCodexAppServerModeEnabled())
   ) {
     return { item, basePaperItem };
   }
@@ -469,7 +529,9 @@ export function resolveInitialPanelItemState(
     );
     item = conversationSystem === "claude_code"
       ? createClaudeGlobalPortalItem(libraryID, conversationKey)
-      : createGlobalPortalItem(libraryID, conversationKey);
+      : conversationSystem === "codex"
+        ? createCodexGlobalPortalItem(libraryID, conversationKey)
+        : createGlobalPortalItem(libraryID, conversationKey);
     return { item, basePaperItem };
   }
 
@@ -481,6 +543,12 @@ export function resolveInitialPanelItemState(
         ) ||
           getLastUsedClaudePaperConversationKey(libraryID, paperItemID) ||
           buildDefaultClaudePaperConversationKey(paperItemID)
+      : conversationSystem === "codex"
+        ? activeCodexPaperConversationByPaper.get(
+            buildCodexPaperStateKey(libraryID, paperItemID),
+          ) ||
+            getLastUsedCodexPaperConversationKey(libraryID, paperItemID) ||
+            buildDefaultCodexPaperConversationKey(paperItemID)
       : activePaperConversationByPaper.get(
           buildPaperStateKey(libraryID, paperItemID),
         ) ||
@@ -494,11 +562,13 @@ export function resolveInitialPanelItemState(
   ) {
     item = conversationSystem === "claude_code"
       ? createClaudePaperPortalItem(basePaperItem, Math.floor(rememberedPaperKey))
-      : createPaperPortalItem(
-          basePaperItem,
-          Math.floor(rememberedPaperKey),
-          0,
-        );
+      : conversationSystem === "codex"
+        ? createCodexPaperPortalItem(basePaperItem, Math.floor(rememberedPaperKey))
+        : createPaperPortalItem(
+            basePaperItem,
+            Math.floor(rememberedPaperKey),
+            0,
+          );
   }
 
   return { item, basePaperItem };

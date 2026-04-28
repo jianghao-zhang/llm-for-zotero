@@ -12,6 +12,14 @@ import {
 } from "../../utils/chatStore";
 import { loadClaudeConversation } from "../../claudeCode/store";
 import {
+  appendCodexMessage,
+  deleteCodexTurnMessages,
+  loadCodexConversation,
+  pruneCodexConversation,
+  updateLatestCodexAssistantMessage,
+  updateLatestCodexUserMessage,
+} from "../../codexAppServer/store";
+import {
   getClaudeAutoCompactThresholdPercent,
   isClaudeAutoCompactEnabled,
 } from "../../claudeCode/prefs";
@@ -26,6 +34,13 @@ import {
   updateLatestClaudeConversationUserMessage,
 } from "../../claudeCode/runtime";
 import { isClaudeConversationKey } from "../../claudeCode/constants";
+import { isCodexConversationKey } from "../../codexAppServer/constants";
+import {
+  getCodexBinaryPathPref,
+  getCodexReasoningModePref,
+  getCodexRuntimeModelPref,
+  isCodexAppServerModeEnabled,
+} from "../../codexAppServer/prefs";
 import {
   callLLMStream,
   ChatFileAttachment,
@@ -847,6 +862,8 @@ async function loadStoredConversationByKey(
 ): Promise<StoredChatMessage[]> {
   return isClaudeConversationKey(conversationKey)
     ? loadClaudeConversation(conversationKey, limit)
+    : isCodexConversationKey(conversationKey)
+      ? loadCodexConversation(conversationKey, limit)
     : loadConversation(conversationKey, limit);
 }
 
@@ -856,6 +873,10 @@ async function updateStoredLatestUserMessageByConversation(
 ): Promise<void> {
   if (isClaudeConversationKey(conversationKey)) {
     await updateLatestClaudeConversationUserMessage(conversationKey, message);
+    return;
+  }
+  if (isCodexConversationKey(conversationKey)) {
+    await updateLatestCodexUserMessage(conversationKey, message);
     return;
   }
   await updateStoredLatestUserMessage(conversationKey, message);
@@ -880,6 +901,21 @@ async function updateStoredLatestAssistantMessageByConversation(
     });
     return;
   }
+  if (isCodexConversationKey(conversationKey)) {
+    const latestContextSnapshot = contextUsageSnapshots.get(conversationKey);
+    await updateLatestCodexAssistantMessage(conversationKey, {
+      ...message,
+      contextTokens:
+        Number.isFinite(Number(message.contextTokens)) && Number(message.contextTokens) > 0
+          ? Math.floor(Number(message.contextTokens))
+          : latestContextSnapshot?.contextTokens,
+      contextWindow:
+        Number.isFinite(Number(message.contextWindow)) && Number(message.contextWindow) > 0
+          ? Math.floor(Number(message.contextWindow))
+          : latestContextSnapshot?.contextWindow,
+    });
+    return;
+  }
   await updateStoredLatestAssistantMessage(conversationKey, message);
 }
 
@@ -890,6 +926,9 @@ async function persistConversationMessage(
   try {
     if (isClaudeConversationKey(conversationKey)) {
       await appendClaudeConversationMessage(conversationKey, message);
+    } else if (isCodexConversationKey(conversationKey)) {
+      await appendCodexMessage(conversationKey, message);
+      await pruneCodexConversation(conversationKey, PERSISTED_HISTORY_LIMIT);
     } else {
       await appendStoredMessage(conversationKey, message);
       await pruneConversation(conversationKey, PERSISTED_HISTORY_LIMIT);
@@ -1375,6 +1414,32 @@ function resolveEffectiveRequestConfig(params: {
   reasoning?: LLMReasoningConfig;
   advanced?: AdvancedModelParams;
 }): EffectiveRequestConfig {
+  if (
+    resolveConversationSystemForItem(params.item) === "codex" &&
+    isCodexAppServerModeEnabled()
+  ) {
+    const model = (params.model || getCodexRuntimeModelPref()).trim() || "gpt-5.4";
+    const reasoningMode = getCodexReasoningModePref();
+    const reasoning = params.reasoning ||
+      (reasoningMode === "auto"
+        ? undefined
+        : {
+            provider: "openai" as const,
+            level: reasoningMode,
+          });
+    return {
+      model,
+      apiBase: (params.apiBase ?? getCodexBinaryPathPref()).trim(),
+      apiKey: "",
+      authMode: "codex_app_server",
+      providerProtocol: "codex_responses",
+      modelEntryId: params.modelEntryId || `codex_app_server::${model}`,
+      modelProviderLabel: "Codex",
+      reasoning,
+      advanced: params.advanced,
+    };
+  }
+
   const hasExplicitProviderMetadata = Boolean(
     params.modelProviderLabel ||
       params.providerProtocol ||
@@ -2474,7 +2539,10 @@ export async function retryLatestAssistantResponse(
   assistantMessage.modelProviderLabel =
     effectiveRequestConfig.modelProviderLabel;
   assistantMessage.waitingAnimationStartedAt =
-    assistantMessage.modelProviderLabel === "Claude Code" ? Date.now() : undefined;
+    assistantMessage.modelProviderLabel === "Claude Code" ||
+    assistantMessage.modelProviderLabel === "Codex"
+      ? Date.now()
+      : undefined;
   const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
     body,
     item,
@@ -2863,6 +2931,12 @@ export async function editUserTurnAndRetry(opts: {
     try {
       if (isClaudeConversationKey(conversationKey)) {
         await deleteClaudeConversationTurnMessages(
+          conversationKey,
+          p.userTs,
+          p.assistantTs,
+        );
+      } else if (isCodexConversationKey(conversationKey)) {
+        await deleteCodexTurnMessages(
           conversationKey,
           p.userTs,
           p.assistantTs,
@@ -3277,7 +3351,9 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     selectedTextNoteContexts, paperContexts, fullTextPaperContexts, attachments,
     runtimeMode = "chat", agentRunId, skipAgentDispatch = false, pdfModePaperKeys,
   } = opts;
-  if (runtimeMode === "agent" && !skipAgentDispatch) {
+  const effectiveRuntimeMode: ChatRuntimeMode =
+    resolveConversationSystemForItem(item) === "codex" ? "agent" : runtimeMode;
+  if (effectiveRuntimeMode === "agent" && !skipAgentDispatch) {
     await sendAgentQuestion({
       body,
       item,
@@ -3323,7 +3399,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     chatHistory.set(provisionalConversationKey, []);
   }
   const provisionalHistory = chatHistory.get(provisionalConversationKey)!;
-  const reuseAgentFallbackPlaceholder = runtimeMode === "agent" && skipAgentDispatch;
+  const reuseAgentFallbackPlaceholder = effectiveRuntimeMode === "agent" && skipAgentDispatch;
   const existingFallbackUser =
     reuseAgentFallbackPlaceholder && provisionalHistory.length >= 2
       ? provisionalHistory[provisionalHistory.length - 2]
@@ -3336,14 +3412,14 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     role: "user",
     text: shownQuestion,
     timestamp: Date.now(),
-    runMode: runtimeMode,
+    runMode: effectiveRuntimeMode,
     agentRunId: agentRunId || undefined,
   };
   const optimisticAssistantMessage: Message = existingFallbackAssistant || {
     role: "assistant",
     text: "",
     timestamp: Date.now(),
-    runMode: runtimeMode,
+    runMode: effectiveRuntimeMode,
     agentRunId: agentRunId || undefined,
     modelName: model,
     streaming: true,
@@ -3389,7 +3465,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   });
   const requestFileAttachments = normalizeModelFileAttachments(attachments, {
     authMode: effectiveRequestConfig.authMode,
-    runtimeMode,
+    runtimeMode: effectiveRuntimeMode,
   });
   const selectedTextsForMessage = normalizeSelectedTexts(selectedTexts);
   const selectedTextSourcesForMessage = normalizeSelectedTextSources(
@@ -3433,7 +3509,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
     role: "user",
     text: userMessageText,
     timestamp: optimisticUserMessage.timestamp,
-    runMode: runtimeMode,
+    runMode: effectiveRuntimeMode,
     agentRunId: agentRunId || undefined,
     selectedText: selectedTextForMessage || undefined,
     selectedTextExpanded: false,
@@ -3492,13 +3568,14 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
   const assistantMessage: Message = {
     ...optimisticAssistantMessage,
     timestamp: optimisticAssistantMessage.timestamp,
-    runMode: runtimeMode,
+    runMode: effectiveRuntimeMode,
     agentRunId: agentRunId || undefined,
     modelName: effectiveRequestConfig.model,
     modelEntryId: effectiveRequestConfig.modelEntryId,
     modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
     waitingAnimationStartedAt:
-      effectiveRequestConfig.modelProviderLabel === "Claude Code"
+      effectiveRequestConfig.modelProviderLabel === "Claude Code" ||
+      effectiveRequestConfig.modelProviderLabel === "Codex"
         ? optimisticAssistantMessage.waitingAnimationStartedAt || Date.now()
         : undefined,
     reasoningOpen: isReasoningExpandedByDefault(),
@@ -3819,7 +3896,7 @@ export async function sendQuestion(opts: import("./types").SendQuestionOptions) 
 
     assistantMessage.text =
       sanitizeText(answer) || assistantMessage.text || "No response.";
-    assistantMessage.runMode = runtimeMode;
+    assistantMessage.runMode = effectiveRuntimeMode;
     assistantMessage.agentRunId = agentRunId || assistantMessage.agentRunId;
     assistantMessage.compactMarker = /^\/compact(?:\s|$)/i.test(question.trim());
     if (assistantMessage.compactMarker && !assistantMessage.text.trim()) {

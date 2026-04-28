@@ -1,3 +1,4 @@
+import type { ConversationSystem } from "../../../../shared/types";
 import { sanitizeText } from "../../textUtils";
 
 export const GLOBAL_HISTORY_UNDO_WINDOW_MS = 6_000;
@@ -28,7 +29,7 @@ export type PendingHistoryDeletion = {
   kind: "paper" | "global";
   conversationKey: number;
   libraryID: number;
-  conversationSystem: "upstream" | "claude_code";
+  conversationSystem: ConversationSystem;
   paperItemID?: number;
   title: string;
   wasActive: boolean;

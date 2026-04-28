@@ -140,6 +140,81 @@ describe("agentTrace render", function () {
     });
   });
 
+  it("renders Codex traces around app-server concepts", function () {
+    const events: AgentRunEventRecord[] = [
+      {
+        runId: "run-1",
+        seq: 1,
+        eventType: "status",
+        payload: {
+          type: "status",
+          text: "Running agent",
+        },
+        createdAt: 1,
+      },
+      {
+        runId: "run-1",
+        seq: 2,
+        eventType: "reasoning",
+        payload: {
+          type: "reasoning",
+          round: 1,
+          stepId: "reasoning-a",
+          details: "Inspecting Zotero context.",
+        },
+        createdAt: 2,
+      },
+      {
+        runId: "run-1",
+        seq: 3,
+        eventType: "tool_call",
+        payload: {
+          type: "tool_call",
+          callId: "call-1",
+          name: "search_library",
+          args: { query: "memory" },
+        },
+        createdAt: 3,
+      },
+    ];
+
+    const { items } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: "Done.",
+      timestamp: 10,
+      modelProviderLabel: "Codex",
+    });
+
+    assert.deepInclude(items[0], {
+      type: "message",
+      tone: "neutral",
+      text: "Request sent to Codex.",
+    });
+    assert.deepInclude(items[1], {
+      type: "action",
+      row: {
+        kind: "plan",
+        icon: "↳",
+        text: "Codex received the request",
+      },
+      chips: [],
+    });
+    assert.deepInclude(
+      items.find((item) => item.type === "reasoning"),
+      {
+        type: "reasoning",
+        label: "Codex reasoning 1",
+        summary: "Inspecting Zotero context.",
+      },
+    );
+    assert.isFalse(
+      items.some(
+        (item) =>
+          item.type === "action" && item.row.text === "Running agent",
+      ),
+    );
+  });
+
   it("splits reasoning into a new thinking block after a tool call", function () {
     const events: AgentRunEventRecord[] = [
       {

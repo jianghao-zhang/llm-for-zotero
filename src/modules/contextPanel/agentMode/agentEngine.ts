@@ -524,9 +524,13 @@ export async function sendAgentTurn(
     modelProviderLabel: effectiveRequestConfig.modelProviderLabel,
     streaming: true,
     waitingAnimationStartedAt:
-      effectiveRequestConfig.modelProviderLabel === "Claude Code" ? Date.now() : undefined,
+      effectiveRequestConfig.modelProviderLabel === "Claude Code" ||
+      effectiveRequestConfig.modelProviderLabel === "Codex"
+        ? Date.now()
+        : undefined,
     pendingAgentTraceEvents:
-      effectiveRequestConfig.modelProviderLabel === "Claude Code"
+      effectiveRequestConfig.modelProviderLabel === "Claude Code" ||
+      effectiveRequestConfig.modelProviderLabel === "Codex"
         ? buildPendingAgentTraceEvents(body)
         : undefined,
     reasoningOpen: false,
@@ -1005,12 +1009,16 @@ export async function retryAgentTurn(
   assistantMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
   assistantMessage.modelProviderLabel = effectiveRequestConfig.modelProviderLabel;
   assistantMessage.waitingAnimationStartedAt =
-    assistantMessage.modelProviderLabel === "Claude Code" ? Date.now() : undefined;
+    assistantMessage.modelProviderLabel === "Claude Code" ||
+    assistantMessage.modelProviderLabel === "Codex"
+      ? Date.now()
+      : undefined;
   assistantMessage.reasoningSummary = undefined;
   assistantMessage.reasoningDetails = undefined;
   assistantMessage.reasoningOpen = deps.isReasoningExpandedByDefault();
   assistantMessage.pendingAgentTraceEvents =
-    assistantMessage.modelProviderLabel === "Claude Code"
+    assistantMessage.modelProviderLabel === "Claude Code" ||
+    assistantMessage.modelProviderLabel === "Codex"
       ? buildPendingAgentTraceEvents(body)
       : undefined;
 

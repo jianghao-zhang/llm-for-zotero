@@ -95,9 +95,14 @@ type SendFlowControllerDeps = {
   isAgentMode: () => boolean;
   isGlobalMode: () => boolean;
   isClaudeConversationSystem: () => boolean;
+  isCodexConversationSystem: () => boolean;
   normalizeConversationTitleSeed: (raw: unknown) => string;
   getConversationKey: (item: Zotero.Item) => number;
   touchClaudeConversationTitle: (
+    conversationKey: number,
+    title: string,
+  ) => Promise<void>;
+  touchCodexConversationTitle: (
     conversationKey: number,
     title: string,
   ) => Promise<void>;
@@ -373,6 +378,8 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
     if (titleSeed) {
       const touchTitle = deps.isClaudeConversationSystem()
         ? deps.touchClaudeConversationTitle
+        : deps.isCodexConversationSystem()
+          ? deps.touchCodexConversationTitle
         : deps.isGlobalMode()
           ? deps.touchGlobalConversationTitle
           : deps.touchPaperConversationTitle;

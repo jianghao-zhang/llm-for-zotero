@@ -267,6 +267,33 @@ export type ClaudePaperPortalItem = {
   isRegularItem: () => boolean;
 };
 
+export type CodexGlobalPortalItem = {
+  __llmCodexGlobalPortalItem: true;
+  __llmCodexConversationKind: "global";
+  id: number;
+  libraryID: number;
+  parentID?: number;
+  attachmentContentType?: string;
+  isAttachment: () => boolean;
+  getAttachments: () => number[];
+  getField: (field: string) => string;
+  isRegularItem: () => boolean;
+};
+
+export type CodexPaperPortalItem = {
+  __llmCodexPaperPortalItem: true;
+  __llmCodexConversationKind: "paper";
+  __llmCodexPaperPortalBaseItemID: number;
+  id: number;
+  libraryID: number;
+  parentID?: number;
+  attachmentContentType?: string;
+  isAttachment: () => boolean;
+  getAttachments: () => number[];
+  getField: (field: string) => string;
+  isRegularItem: () => boolean;
+};
+
 export type ChunkStat = {
   index: number;
   length: number;

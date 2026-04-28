@@ -49,6 +49,11 @@ import {
   isClaudePaperPortalItem,
   resolveClaudePaperPortalBaseItem,
 } from "../../claudeCode/portal";
+import {
+  isCodexGlobalPortalItem,
+  isCodexPaperPortalItem,
+  resolveCodexPaperPortalBaseItem,
+} from "../../codexAppServer/portal";
 
 export type NoteSnapshot = {
   noteId: number;
@@ -190,7 +195,11 @@ export function readNoteSnapshot(
 }
 
 function resolveParentItemForNote(item: Zotero.Item): Zotero.Item | null {
-  if (isGlobalPortalItem(item) || isClaudeGlobalPortalItem(item)) {
+  if (
+    isGlobalPortalItem(item) ||
+    isClaudeGlobalPortalItem(item) ||
+    isCodexGlobalPortalItem(item)
+  ) {
     return null;
   }
   if (isPaperPortalItem(item)) {
@@ -198,6 +207,9 @@ function resolveParentItemForNote(item: Zotero.Item): Zotero.Item | null {
   }
   if (isClaudePaperPortalItem(item)) {
     return resolveClaudePaperPortalBaseItem(item);
+  }
+  if (isCodexPaperPortalItem(item)) {
+    return resolveCodexPaperPortalBaseItem(item);
   }
   const noteParentItem = resolveNoteParentItem(item);
   if (noteParentItem) {

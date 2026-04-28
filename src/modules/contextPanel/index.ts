@@ -25,6 +25,7 @@
 import { getLocaleID } from "../../utils/locale";
 import { config, PANE_ID } from "./constants";
 import type { Message } from "./types";
+import type { ConversationSystem } from "../../shared/types";
 import {
   activeConversationModeByLibrary,
   activeGlobalConversationByLibrary,
@@ -77,6 +78,11 @@ import {
   activeClaudeGlobalConversationByLibrary,
   buildClaudeLibraryStateKey,
 } from "../../claudeCode/state";
+import {
+  activeCodexConversationModeByLibrary,
+  activeCodexGlobalConversationByLibrary,
+  buildCodexLibraryStateKey,
+} from "../../codexAppServer/state";
 import {
   retainClaudeRuntimeForBody,
   releaseClaudeRuntimeForBody,
@@ -173,7 +179,7 @@ export function registerReaderContextPanel() {
           (resolvedState.item ? Number(resolvedState.item.libraryID || 0) : 0) ||
           (item ? Number(item.libraryID || 0) : 0);
         const lockedKey =
-          expectedSystem === "claude_code"
+          expectedSystem === "claude_code" || expectedSystem === "codex"
             ? null
             : libraryID > 0
               ? getLockedGlobalConversationKey(libraryID)
@@ -471,12 +477,13 @@ export function registerReaderSelectionTracking() {
           };
           const getPanelConversationSystem = (
             root: HTMLDivElement,
-          ): "upstream" | "claude_code" | null => {
+          ): ConversationSystem | null => {
             const raw = `${root.dataset.conversationSystem || ""}`
               .trim()
               .toLowerCase();
             if (raw === "upstream") return "upstream";
             if (raw === "claude_code") return "claude_code";
+            if (raw === "codex") return "codex";
             return null;
           };
           const isVisible = (root: HTMLElement) =>
@@ -496,6 +503,10 @@ export function registerReaderSelectionTracking() {
                   ? activeClaudeConversationModeByLibrary.get(
                       buildClaudeLibraryStateKey(panelLibraryId),
                     )
+                  : panelLibraryId && conversationSystem === "codex"
+                    ? activeCodexConversationModeByLibrary.get(
+                        buildCodexLibraryStateKey(panelLibraryId),
+                      )
                   : panelLibraryId && conversationSystem === "upstream"
                     ? activeConversationModeByLibrary.get(panelLibraryId)
                     : null;
@@ -507,6 +518,10 @@ export function registerReaderSelectionTracking() {
                           ? activeClaudeGlobalConversationByLibrary.get(
                               buildClaudeLibraryStateKey(panelLibraryId),
                             )
+                          : conversationSystem === "codex"
+                            ? activeCodexGlobalConversationByLibrary.get(
+                                buildCodexLibraryStateKey(panelLibraryId),
+                              )
                           : activeGlobalConversationByLibrary.get(panelLibraryId)) || 0,
                       ),
                     )

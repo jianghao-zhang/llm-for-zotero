@@ -185,6 +185,19 @@ describe("CodexAppServerAdapter", function () {
       };
 
       const adapter = new CodexAppServerAdapter(processKey);
+      const toolSpec = {
+        name: "search_library",
+        description: "Search the Zotero library.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+          required: ["query"],
+        },
+        mutability: "read" as const,
+        requiresConfirmation: false,
+      };
       const first = await adapter.runStep({
         request: makeRequest(),
         messages: [
@@ -201,7 +214,7 @@ describe("CodexAppServerAdapter", function () {
             content: "Summarize this note.",
           },
         ],
-        tools: [],
+        tools: [toolSpec],
       });
       const second = await adapter.runStep({
         request: makeRequest(),
@@ -227,7 +240,7 @@ describe("CodexAppServerAdapter", function () {
             content: "Focus on action items.",
           },
         ],
-        tools: [],
+        tools: [toolSpec],
       });
 
       assert.equal(first.kind, "final");
@@ -237,6 +250,20 @@ describe("CodexAppServerAdapter", function () {
         threadStartParams?.developerInstructions,
         "Follow Zotero-specific tool guidance.",
       );
+      assert.equal(threadStartParams?.approvalPolicy, "never");
+      assert.deepEqual(threadStartParams?.dynamicTools, [
+        {
+          name: "search_library",
+          description: "Search the Zotero library.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+            },
+            required: ["query"],
+          },
+        },
+      ]);
       assert.equal(injectCount, 1);
       assert.deepEqual(injectedItems, [
         {
@@ -778,12 +805,12 @@ describe("CodexAppServerAdapter", function () {
       assert.equal(second.kind, "final");
       assert.lengthOf(spawns, 2, "expected a fresh spawn per codex path");
       assert.include(
-        spawns[0]?.arguments.at(-1) ?? "",
+        `${spawns[0]?.command ?? ""} ${spawns[0]?.arguments.join(" ") ?? ""}`,
         codexPathA,
         "first launch should target the first codex path",
       );
       assert.include(
-        spawns[1]?.arguments.at(-1) ?? "",
+        `${spawns[1]?.command ?? ""} ${spawns[1]?.arguments.join(" ") ?? ""}`,
         codexPathB,
         "second launch should target the second codex path",
       );
