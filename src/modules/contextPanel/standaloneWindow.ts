@@ -755,7 +755,8 @@ export function openStandaloneChat(options?: {
             ? "Switch to Codex mode"
             : "Switch to Claude Code mode";
         if (iconSystem === "codex") {
-          systemToggleBtn.textContent = "C";
+          systemToggleBtn.innerHTML =
+            `<span class="llm-codex-system-toggle-icon" aria-hidden="true"></span>`;
           return;
         }
         systemToggleBtn.innerHTML = active

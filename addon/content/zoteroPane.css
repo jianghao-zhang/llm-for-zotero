@@ -435,6 +435,25 @@
   line-height: 1;
 }
 
+.llm-codex-system-toggle-icon {
+  display: inline-block;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  background: url("icons/codex-app-server.svg") center / contain no-repeat;
+  filter: invert(72%) grayscale(1);
+  opacity: 0.62;
+  transition:
+    filter 0.15s,
+    opacity 0.15s;
+}
+
+.llm-claude-system-toggle[data-active="true"] .llm-codex-system-toggle-icon,
+.llm-standalone-claude-toggle[data-active="true"] .llm-codex-system-toggle-icon {
+  filter: invert(1);
+  opacity: 1;
+}
+
 /* ---- Webchat connection dot ---- */
 .llm-webchat-dot {
   display: inline-block;
@@ -5083,6 +5102,14 @@ label.llm-search-results-item:hover {
 #llm-runtime-mode-toggle.llm-runtime-mode-static:hover:not(:disabled) {
   border-color: var(--stroke-secondary);
   color: #D77757;
+}
+
+#llm-runtime-mode-toggle.llm-runtime-mode-static[data-system="codex"] {
+  color: #fff;
+}
+
+#llm-runtime-mode-toggle.llm-runtime-mode-static[data-system="codex"]:hover:not(:disabled) {
+  color: #fff;
 }
 
 #llm-runtime-mode-toggle.llm-runtime-mode-static .llm-agent-toggle-label {

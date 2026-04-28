@@ -847,6 +847,7 @@ export function setupHandlers(
       runtimeModeBtn.classList.remove("llm-agent-toggle-enabled");
       runtimeModeBtn.classList.add("llm-runtime-mode-static");
       runtimeModeBtn.dataset.mode = "agent";
+      runtimeModeBtn.dataset.system = getConversationSystem();
       runtimeModeBtn.title = labelText;
       runtimeModeBtn.setAttribute("aria-label", labelText);
       runtimeModeBtn.setAttribute("aria-pressed", "false");
@@ -857,6 +858,7 @@ export function setupHandlers(
       return;
     }
     runtimeModeBtn.classList.remove("llm-runtime-mode-static");
+    delete runtimeModeBtn.dataset.system;
     runtimeModeBtn.removeAttribute("aria-disabled");
     runtimeModeBtn.disabled = false;
     if (indicator) indicator.style.display = "";
@@ -921,10 +923,12 @@ export function setupHandlers(
     );
     const iconSystem = active ? getConversationSystem() : targetSystem;
     if (iconSystem === "codex") {
-      claudeSystemToggleIcon.textContent = "C";
-      claudeSystemToggleIcon.removeAttribute("aria-hidden");
+      claudeSystemToggleIcon.classList.add("llm-codex-system-toggle-icon");
+      claudeSystemToggleIcon.textContent = "";
+      claudeSystemToggleIcon.setAttribute("aria-hidden", "true");
       return;
     }
+    claudeSystemToggleIcon.classList.remove("llm-codex-system-toggle-icon");
     claudeSystemToggleIcon.setAttribute("aria-hidden", "true");
     claudeSystemToggleIcon.innerHTML = active
       ? `<svg height="1em" style="flex:none;line-height:1" viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg"><path clip-rule="evenodd" d="M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z" fill="#D97757" fill-rule="evenodd"></path></svg>`
