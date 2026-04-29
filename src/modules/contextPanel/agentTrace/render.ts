@@ -2485,9 +2485,10 @@ export function buildAgentTraceDisplayItems(
 ): { items: AgentTraceDisplayItem[]; isInterleaved: boolean } {
   const items: AgentTraceDisplayItem[] = [];
   const isCodexTrace = assistantMessage?.modelProviderLabel === "Codex";
+  const isAgentTrace = assistantMessage?.runMode === "agent";
   const compactedEvents = compactAgentTraceEvents(events);
   const isInterleaved = hasInterleavedTextAndTools(events, {
-    preserveRolledBackText: isCodexTrace,
+    preserveRolledBackText: isCodexTrace || isAgentTrace,
   });
   const requestChips = buildAgentTraceRequestChips(userMessage);
   const requestSummary = buildAgentTraceRequestSummary(userMessage);
