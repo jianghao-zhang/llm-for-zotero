@@ -24,6 +24,7 @@ import {
   resolveActiveNoteSession,
   resolvePreferredConversationSystem,
   resolveNoteConversationSystemSwitch,
+  resolveShortcutMode,
   createGlobalPortalItem,
   createPaperPortalItem,
 } from "./portalScope";
@@ -281,11 +282,11 @@ function restoreEmbeddedPanelsAfterStandaloneClose(
     void (async () => {
       try {
         if (resolved.item) await ensureConversationLoaded(resolved.item);
-        const shortcutMode =
-          resolveDisplayConversationKind(resolved.item) === "global"
-            ? "library"
-            : "paper";
-        await renderShortcuts(body as Element, resolved.item, shortcutMode);
+        await renderShortcuts(
+          body as Element,
+          resolved.item,
+          resolveShortcutMode(resolved.item),
+        );
         refreshChat(body as Element, resolved.item);
       } catch (err) {
         ztoolkit.log("LLM: side panel restore failed", err);
@@ -3633,9 +3634,11 @@ export function openStandaloneChat(options?: {
         if (nextItem) {
           mountChatPanel(nextItem);
           scheduleStandaloneSidebarRender();
-          const shortcutMode =
-            resolveDisplayConversationKind(nextItem) === "global" ? "library" : "paper";
-          void renderShortcuts(contentArea, nextItem, shortcutMode);
+          void renderShortcuts(
+            contentArea,
+            nextItem,
+            resolveShortcutMode(nextItem),
+          );
         }
         updateStandaloneSystemToggle();
       };

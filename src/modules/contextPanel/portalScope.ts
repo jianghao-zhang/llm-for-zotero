@@ -335,6 +335,18 @@ export function resolveDisplayConversationKind(
     : "paper";
 }
 
+// Show shortcuts only on real paper-chat sessions. Hide for library/global,
+// any note-editing session (even when attached to a paper), and when no item.
+export function resolveShortcutMode(
+  item: Zotero.Item | null | undefined,
+): "paper" | "library" {
+  if (!item) return "library";
+  if (resolveActiveNoteSession(item)) return "library";
+  return resolveDisplayConversationKind(item) === "global"
+    ? "library"
+    : "paper";
+}
+
 export function resolveConversationBaseItem(
   targetItem: Zotero.Item | null | undefined,
 ): Zotero.Item | null {

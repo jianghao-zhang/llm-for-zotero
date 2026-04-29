@@ -69,7 +69,7 @@ import {
   resolveInitialPanelItemState,
   resolveActiveLibraryID,
   resolveConversationSystemForItem,
-  resolveDisplayConversationKind,
+  resolveShortcutMode,
 } from "./portalScope";
 import { getLockedGlobalConversationKey } from "./prefHelpers";
 import { getEditableSelectionFromDocument } from "./noteSelection";
@@ -275,8 +275,7 @@ export function registerReaderContextPanel() {
       // or if the standalone window was opened during the await.
       if (renderGeneration !== thisGeneration) return;
       if (isStandaloneWindowActive()) return;
-      const shortcutMode = resolveDisplayConversationKind(resolvedItem) === "global" ? "library" : "paper";
-      await renderShortcuts(body, resolvedItem, shortcutMode);
+      await renderShortcuts(body, resolvedItem, resolveShortcutMode(resolvedItem));
       if (renderGeneration !== thisGeneration) return;
       if (isStandaloneWindowActive()) return;
       if (!syncAlreadyRendered) {

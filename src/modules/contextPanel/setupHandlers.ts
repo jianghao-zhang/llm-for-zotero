@@ -313,6 +313,7 @@ import {
   resolveActiveLibraryID,
   resolvePreferredConversationSystem,
   resolveNoteConversationSystemSwitch,
+  resolveShortcutMode,
 } from "./portalScope";
 import { getPanelDomRefs } from "./setupHandlers/domRefs";
 import {
@@ -1004,11 +1005,11 @@ export function setupHandlers(
       warmClaudeModeCaches();
     }
     await ensureConversationLoaded(item as Zotero.Item);
-    const shortcutMode =
-      resolveDisplayConversationKind(item as Zotero.Item) === "global"
-        ? "library"
-        : "paper";
-    await renderShortcuts(body, item as Zotero.Item, shortcutMode);
+    await renderShortcuts(
+      body,
+      item as Zotero.Item,
+      resolveShortcutMode(item as Zotero.Item),
+    );
     restoreDraftInputForCurrentConversation();
     refreshChatPreservingScroll();
     resetComposePreviewUI();
@@ -4726,6 +4727,7 @@ export function setupHandlers(
         );
     item = nextItem as any;
     syncConversationIdentity();
+    void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
     if (isClaudeConversationSystem()) {
       rememberClaudeConversationSelection({
         conversationKey: normalizedConversationKey,
@@ -4912,6 +4914,7 @@ export function setupHandlers(
       item = nextItem as any;
     }
     syncConversationIdentity();
+    void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
     if (isClaudeConversationSystem()) {
       rememberClaudeConversationSelection({
         conversationKey: Math.floor(getConversationKey(item as Zotero.Item)),

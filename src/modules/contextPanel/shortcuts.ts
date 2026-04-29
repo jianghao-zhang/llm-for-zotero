@@ -11,6 +11,7 @@ import {
   shortcutRenderItemState,
   shortcutEscapeListenerAttached,
 } from "./state";
+import { resolveActiveNoteSession } from "./portalScope";
 import {
   getShortcutOverrides,
   setShortcutOverrides,
@@ -55,8 +56,10 @@ export async function renderShortcuts(
     shortcutRenderGeneration.get(body) === renderGeneration;
   shortcutRenderItemState.set(body, item);
 
-  // Library chat mode: no shortcut buttons (actions available via / menu)
-  if (mode === "library") {
+  // Library chat mode and note-editing mode: no shortcut buttons (actions
+  // available via / menu). Note-editing is detected from the item itself so
+  // we stay correct even if a caller forgets to pass mode="library".
+  if (mode === "library" || resolveActiveNoteSession(item)) {
     const container = body.querySelector(
       "#llm-shortcuts",
     ) as HTMLDivElement | null;
