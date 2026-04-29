@@ -2,6 +2,7 @@ import { assert } from "chai";
 import { after, beforeEach, describe, it } from "mocha";
 import {
   getConversationSystemPref,
+  getStoredConversationSystemPref,
   setConversationSystemPref,
 } from "../src/claudeCode/prefs";
 
@@ -30,6 +31,17 @@ describe("conversation system preferences", function () {
     setConversationSystemPref("codex");
 
     assert.equal(getConversationSystemPref(), "codex");
+    assert.equal(getStoredConversationSystemPref(), "codex");
+  });
+
+  it("distinguishes unset preference from explicit upstream", function () {
+    assert.equal(getConversationSystemPref(), "upstream");
+    assert.isNull(getStoredConversationSystemPref());
+
+    setConversationSystemPref("upstream");
+
+    assert.equal(getConversationSystemPref(), "upstream");
+    assert.equal(getStoredConversationSystemPref(), "upstream");
   });
 
   it("normalizes unknown conversation systems back to upstream", function () {
@@ -41,5 +53,6 @@ describe("conversation system preferences", function () {
     prefStore.set(prefKey as string, "future_runtime");
 
     assert.equal(getConversationSystemPref(), "upstream");
+    assert.isNull(getStoredConversationSystemPref());
   });
 });

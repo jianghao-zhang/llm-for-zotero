@@ -8,6 +8,7 @@ import {
   selectedPaperContextCache,
   selectedModelCache,
   selectedReasoningCache,
+  selectedRuntimeModeCache,
   getPendingRequestId,
   setPendingRequestId,
   setCancelledRequestId,
@@ -48,6 +49,7 @@ import { renderShortcuts } from "./shortcuts";
 import { createElement, HTML_NS } from "../../utils/domHelpers";
 import { t } from "../../utils/i18n";
 import type { ConversationSystem } from "../../shared/types";
+import type { ChatRuntimeMode } from "./types";
 import {
   createGlobalConversation,
   createPaperConversation,
@@ -90,6 +92,7 @@ import {
 import { getCoreAgentRuntime } from "../../agent";
 import {
   getConversationSystemPref,
+  getStoredConversationSystemPref,
   getLastUsedClaudeConversationMode,
   getLastUsedClaudeGlobalConversationKey,
   getLastUsedClaudePaperConversationKey,
@@ -412,6 +415,8 @@ function groupByDay(
  */
 export function openStandaloneChat(options?: {
   initialItem?: Zotero.Item | null;
+  initialConversationSystem?: ConversationSystem | null;
+  initialRuntimeMode?: ChatRuntimeMode | null;
   sourceBody?: Element | null;
 }): void {
   const existingWin = getStandaloneSessionWindow();
@@ -424,28 +429,58 @@ export function openStandaloneChat(options?: {
   if (!mainWin) return;
 
   const sourceItem = options?.initialItem || null;
-  const preferredConversationSystem = getConversationSystemPref();
-  const sourceConversationSystem: ConversationSystem = sourceItem
+  const explicitConversationSystem = options?.initialConversationSystem
     ? resolvePreferredConversationSystem({
-        item: sourceItem,
-        preferredSystem: preferredConversationSystem,
+        item: null,
+        preferredSystem: options.initialConversationSystem,
       })
-    : preferredConversationSystem === "codex" && isCodexAppServerModeEnabled()
-      ? "codex"
-      : preferredConversationSystem === "claude_code" && getClaudeCodeModeEnabled()
-        ? "claude_code"
-        : "upstream";
-  const resolvedSourceState = resolveInitialPanelItemState(sourceItem, {
-    conversationSystem: sourceConversationSystem,
-  });
+    : null;
+  const storedConversationSystem = getStoredConversationSystemPref();
+  const preferredConversationSystem =
+    explicitConversationSystem ||
+    storedConversationSystem ||
+    getConversationSystemPref();
+  const initialRuntimeMode =
+    options?.initialRuntimeMode === "agent"
+      ? "agent"
+      : options?.initialRuntimeMode === "chat"
+        ? "chat"
+        : null;
+  const sourceItemSystem = resolveConversationSystemForItem(sourceItem);
+  const sourceItemForResolution =
+    explicitConversationSystem &&
+    sourceItemSystem &&
+    sourceItemSystem !== explicitConversationSystem
+      ? resolveConversationBaseItem(sourceItem)
+      : sourceItem;
+  const sourceConversationSystem: ConversationSystem =
+    explicitConversationSystem ||
+    (sourceItemForResolution
+      ? resolvePreferredConversationSystem({
+          item: sourceItemForResolution,
+          preferredSystem: preferredConversationSystem,
+        })
+      : preferredConversationSystem === "codex" && isCodexAppServerModeEnabled()
+        ? "codex"
+        : preferredConversationSystem === "claude_code" &&
+            getClaudeCodeModeEnabled()
+          ? "claude_code"
+          : "upstream");
+  const resolvedSourceState = resolveInitialPanelItemState(
+    sourceItemForResolution,
+    {
+      conversationSystem: sourceConversationSystem,
+    },
+  );
   let currentConversationSystem: ConversationSystem =
+    explicitConversationSystem ||
     resolvePreferredConversationSystem({
       item: resolvedSourceState.item,
       preferredSystem: sourceConversationSystem,
     });
   const initialBasePaperItem =
     resolvedSourceState.basePaperItem ||
-    resolveConversationBaseItem(sourceItem) ||
+    resolveConversationBaseItem(sourceItemForResolution || sourceItem) ||
     null;
   const initialDisplayConversationKind = resolveDisplayConversationKind(
     resolvedSourceState.item || sourceItem,
@@ -460,6 +495,7 @@ export function openStandaloneChat(options?: {
     Number(
       resolvedSourceState.item?.libraryID ||
         initialBasePaperItem?.libraryID ||
+        sourceItem?.libraryID ||
         resolveActiveLibraryID() ||
         1,
     ) || 1;
@@ -563,6 +599,8 @@ export function openStandaloneChat(options?: {
   let isInWebChatMode = false;
   let currentChatHooks: SetupHandlersHooks | null = null;
   let standaloneSidebarRenderQueued = false;
+  let explicitNewChatInFlight = false;
+  let initialRuntimeModeSeeded = false;
   let themeObserver: {
     observe(target: Node, options: MutationObserverInit): void;
     disconnect(): void;
@@ -1561,6 +1599,21 @@ export function openStandaloneChat(options?: {
           currentConversationSystem =
             resolveConversationSystemForItem(mountedItem) || currentConversationSystem;
           activeConversationKey = getConversationKey(mountedItem);
+          if (
+            initialRuntimeMode &&
+            !initialRuntimeModeSeeded &&
+            !isRuntimeConversationSystem()
+          ) {
+            if (!selectedRuntimeModeCache.has(activeConversationKey)) {
+              selectedRuntimeModeCache.set(
+                activeConversationKey,
+                initialRuntimeMode,
+              );
+            }
+            initialRuntimeModeSeeded = true;
+          } else if (initialRuntimeMode && !initialRuntimeModeSeeded) {
+            initialRuntimeModeSeeded = true;
+          }
 
           if (standaloneMode === "paper" && currentBasePaperItem) {
             const paperItemID = Number(currentBasePaperItem.id || 0);
@@ -3057,23 +3110,23 @@ export function openStandaloneChat(options?: {
         const currentLibraryID = getCurrentLibraryScopeID();
         if (!currentLibraryID) return 0;
         if (isClaudeConversationSystem()) {
-          if (!forceFresh) {
-            const currentKey = Number(activeConversationKey || 0);
-            if (Number.isFinite(currentKey) && currentKey > 0) {
-              try {
-                const currentSummary = await getClaudeConversationSummary(currentKey);
-                if (
-                  currentSummary &&
-                  currentSummary.kind === "global" &&
-                  Number(currentSummary.libraryID) === currentLibraryID &&
-                  (currentSummary.userTurnCount || 0) === 0
-                ) {
-                  return Math.floor(currentKey);
-                }
-              } catch (err) {
-                ztoolkit.log("LLM: standalone failed to inspect active Claude global draft", err);
+          const currentKey = Number(activeConversationKey || 0);
+          if (Number.isFinite(currentKey) && currentKey > 0) {
+            try {
+              const currentSummary = await getClaudeConversationSummary(currentKey);
+              if (
+                currentSummary &&
+                currentSummary.kind === "global" &&
+                Number(currentSummary.libraryID) === currentLibraryID &&
+                (currentSummary.userTurnCount || 0) === 0
+              ) {
+                return Math.floor(currentKey);
               }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to inspect active Claude global draft", err);
             }
+          }
+          if (!forceFresh) {
             try {
               const summaries = await listClaudeGlobalConversations(
                 currentLibraryID,
@@ -3094,23 +3147,23 @@ export function openStandaloneChat(options?: {
           );
         }
         if (isCodexConversationSystem()) {
-          if (!forceFresh) {
-            const currentKey = Number(activeConversationKey || 0);
-            if (Number.isFinite(currentKey) && currentKey > 0) {
-              try {
-                const currentSummary = await getCodexConversationSummary(currentKey);
-                if (
-                  currentSummary &&
-                  currentSummary.kind === "global" &&
-                  Number(currentSummary.libraryID) === currentLibraryID &&
-                  (currentSummary.userTurnCount || 0) === 0
-                ) {
-                  return Math.floor(currentKey);
-                }
-              } catch (err) {
-                ztoolkit.log("LLM: standalone failed to inspect active Codex global draft", err);
+          const currentKey = Number(activeConversationKey || 0);
+          if (Number.isFinite(currentKey) && currentKey > 0) {
+            try {
+              const currentSummary = await getCodexConversationSummary(currentKey);
+              if (
+                currentSummary &&
+                currentSummary.kind === "global" &&
+                Number(currentSummary.libraryID) === currentLibraryID &&
+                (currentSummary.userTurnCount || 0) === 0
+              ) {
+                return Math.floor(currentKey);
               }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to inspect active Codex global draft", err);
             }
+          }
+          if (!forceFresh) {
             try {
               const summaries = await listCodexGlobalConversations(
                 currentLibraryID,
@@ -3130,18 +3183,18 @@ export function openStandaloneChat(options?: {
             (await createCodexGlobalConversation(currentLibraryID))?.conversationKey || 0,
           );
         }
-        if (!forceFresh) {
-          const currentKey = Number(activeConversationKey || 0);
-          if (isUpstreamGlobalConversationKey(currentKey)) {
-            try {
-              const turnCount = await getGlobalConversationUserTurnCount(currentKey);
-              if (turnCount === 0) {
-                return Math.floor(currentKey);
-              }
-            } catch (err) {
-              ztoolkit.log("LLM: standalone failed to inspect active global draft", err);
+        const currentKey = Number(activeConversationKey || 0);
+        if (isUpstreamGlobalConversationKey(currentKey)) {
+          try {
+            const turnCount = await getGlobalConversationUserTurnCount(currentKey);
+            if (turnCount === 0) {
+              return Math.floor(currentKey);
             }
+          } catch (err) {
+            ztoolkit.log("LLM: standalone failed to inspect active global draft", err);
           }
+        }
+        if (!forceFresh) {
           try {
             const latestEmpty = await getLatestEmptyGlobalConversation(currentLibraryID);
             if (latestEmpty?.conversationKey) {
@@ -3166,22 +3219,22 @@ export function openStandaloneChat(options?: {
           return { conversationKey: 0 };
         }
         if (isClaudeConversationSystem()) {
-          if (!forceFresh) {
-            const currentKey = Number(activeConversationKey || 0);
-            if (Number.isFinite(currentKey) && currentKey > 0) {
-              try {
-                const currentSummary = await getClaudeConversationSummary(currentKey);
-                if (
-                  currentSummary &&
-                  currentSummary.kind === "paper" &&
-                  (currentSummary.userTurnCount || 0) === 0
-                ) {
-                  return { conversationKey: Math.floor(currentKey) };
-                }
-              } catch (err) {
-                ztoolkit.log("LLM: standalone failed to inspect active Claude paper draft", err);
+          const currentKey = Number(activeConversationKey || 0);
+          if (Number.isFinite(currentKey) && currentKey > 0) {
+            try {
+              const currentSummary = await getClaudeConversationSummary(currentKey);
+              if (
+                currentSummary &&
+                currentSummary.kind === "paper" &&
+                (currentSummary.userTurnCount || 0) === 0
+              ) {
+                return { conversationKey: Math.floor(currentKey) };
               }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to inspect active Claude paper draft", err);
             }
+          }
+          if (!forceFresh) {
             try {
               const summaries = await listClaudePaperConversations(
                 paperLibraryID,
@@ -3206,22 +3259,22 @@ export function openStandaloneChat(options?: {
           };
         }
         if (isCodexConversationSystem()) {
-          if (!forceFresh) {
-            const currentKey = Number(activeConversationKey || 0);
-            if (Number.isFinite(currentKey) && currentKey > 0) {
-              try {
-                const currentSummary = await getCodexConversationSummary(currentKey);
-                if (
-                  currentSummary &&
-                  currentSummary.kind === "paper" &&
-                  (currentSummary.userTurnCount || 0) === 0
-                ) {
-                  return { conversationKey: Math.floor(currentKey) };
-                }
-              } catch (err) {
-                ztoolkit.log("LLM: standalone failed to inspect active Codex paper draft", err);
+          const currentKey = Number(activeConversationKey || 0);
+          if (Number.isFinite(currentKey) && currentKey > 0) {
+            try {
+              const currentSummary = await getCodexConversationSummary(currentKey);
+              if (
+                currentSummary &&
+                currentSummary.kind === "paper" &&
+                (currentSummary.userTurnCount || 0) === 0
+              ) {
+                return { conversationKey: Math.floor(currentKey) };
               }
+            } catch (err) {
+              ztoolkit.log("LLM: standalone failed to inspect active Codex paper draft", err);
             }
+          }
+          if (!forceFresh) {
             try {
               const summaries = await listCodexPaperConversations(
                 paperLibraryID,
@@ -3245,18 +3298,18 @@ export function openStandaloneChat(options?: {
             ),
           };
         }
-        if (!forceFresh) {
-          const currentKey = Number(activeConversationKey || 0);
-          if (Number.isFinite(currentKey) && currentKey > 0) {
-            try {
-              const currentSummary = await getPaperConversation(currentKey);
-              if (currentSummary && currentSummary.userTurnCount === 0) {
-                return { conversationKey: Math.floor(currentKey) };
-              }
-            } catch (err) {
-              ztoolkit.log("LLM: standalone failed to inspect active paper draft", err);
+        const currentKey = Number(activeConversationKey || 0);
+        if (Number.isFinite(currentKey) && currentKey > 0) {
+          try {
+            const currentSummary = await getPaperConversation(currentKey);
+            if (currentSummary && currentSummary.userTurnCount === 0) {
+              return { conversationKey: Math.floor(currentKey) };
             }
+          } catch (err) {
+            ztoolkit.log("LLM: standalone failed to inspect active paper draft", err);
           }
+        }
+        if (!forceFresh) {
           try {
             const summaries = await listPaperConversations(paperLibraryID, paperId, 50);
             const emptyEntry = summaries.find((summary) => summary.userTurnCount === 0);
@@ -3320,6 +3373,8 @@ export function openStandaloneChat(options?: {
 
       // Icon strip handlers — new chat
       iconNewChat.addEventListener("click", async () => {
+        if (explicitNewChatInFlight) return;
+        explicitNewChatInFlight = true;
         try {
           // [webchat] In webchat mode, delegate to embedded panel's "+" button.
           // Don't clear sidebar — webchat history stays (conversations live on the web).
@@ -3333,7 +3388,7 @@ export function openStandaloneChat(options?: {
 
           if (standaloneMode === "open") {
             const currentLibraryID = getCurrentLibraryScopeID();
-            const newKey = await resolveStandaloneGlobalConversation(false);
+            const newKey = await resolveStandaloneGlobalConversation(true);
             if (!newKey || cancelled) return;
             activeConversationKey = newKey;
             if (isClaudeConversationSystem()) {
@@ -3360,7 +3415,7 @@ export function openStandaloneChat(options?: {
           } else {
             if (currentBasePaperItem) {
               const { conversationKey: newKey, sessionVersion } =
-                await resolveStandalonePaperConversation(false);
+                await resolveStandalonePaperConversation(true);
               if (!newKey || cancelled) return;
               const newItem = buildStandalonePortalItem({
                 mode: "paper",
@@ -3377,6 +3432,8 @@ export function openStandaloneChat(options?: {
           }
         } catch (err) {
           ztoolkit.log("LLM: standalone new chat failed", err);
+        } finally {
+          explicitNewChatInFlight = false;
         }
       });
 

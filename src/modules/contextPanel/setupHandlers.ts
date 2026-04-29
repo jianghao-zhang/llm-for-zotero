@@ -2081,6 +2081,8 @@ export function setupHandlers(
         } else {
           openStandaloneChat({
             initialItem: item,
+            initialConversationSystem: getConversationSystem(),
+            initialRuntimeMode: getCurrentRuntimeMode(),
             sourceBody: body,
           });
         }
@@ -3386,6 +3388,7 @@ export function setupHandlers(
   };
 
   let latestConversationHistory: ConversationHistoryEntry[] = [];
+  let explicitNewChatInFlight = false;
 
   // Day-group helpers for history menu (matching standalone sidebar style)
   const getDayGroupLabel = (ts: number): string => {
@@ -5982,51 +5985,51 @@ export function setupHandlers(
     let reuseReason: "active-draft" | "latest-draft" | null = null;
 
     if (isClaudeConversationSystem()) {
-      if (!forceFresh) {
-        const currentCandidate = isGlobalMode()
-          ? getConversationKey(item)
+      const currentCandidate = isGlobalMode()
+        ? getConversationKey(item)
+        : forceFresh
+          ? 0
           : Number(
               activeClaudeGlobalConversationByLibrary.get(
                 buildClaudeLibraryStateKey(libraryID),
               ) || 0,
             );
-        const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
-          ? Math.floor(currentCandidate)
-          : 0;
-        if (normalizedCurrentCandidate > 0) {
-          try {
-            const currentSummary = await getClaudeConversationSummary(
-              normalizedCurrentCandidate,
-            );
-            if (currentSummary && (currentSummary.userTurnCount || 0) === 0) {
-              targetConversationKey = normalizedCurrentCandidate;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active Claude candidate for draft reuse",
-              err,
-            );
+      const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
+        ? Math.floor(currentCandidate)
+        : 0;
+      if (normalizedCurrentCandidate > 0) {
+        try {
+          const currentSummary = await getClaudeConversationSummary(
+            normalizedCurrentCandidate,
+          );
+          if (currentSummary && (currentSummary.userTurnCount || 0) === 0) {
+            targetConversationKey = normalizedCurrentCandidate;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active Claude candidate for draft reuse",
+            err,
+          );
         }
-        if (targetConversationKey <= 0) {
-          try {
-            const summaries = await listClaudeGlobalConversations(
-              libraryID,
-              GLOBAL_HISTORY_LIMIT,
-            );
-            const latestEmpty = summaries.find((summary) => (summary.userTurnCount || 0) === 0);
-            const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
-            if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
-              targetConversationKey = Math.floor(latestEmptyKey);
-              reuseReason = "latest-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to load latest empty Claude global conversation",
-              err,
-            );
+      }
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const summaries = await listClaudeGlobalConversations(
+            libraryID,
+            GLOBAL_HISTORY_LIMIT,
+          );
+          const latestEmpty = summaries.find((summary) => (summary.userTurnCount || 0) === 0);
+          const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
+          if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
+            targetConversationKey = Math.floor(latestEmptyKey);
+            reuseReason = "latest-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to load latest empty Claude global conversation",
+            err,
+          );
         }
       }
       if (targetConversationKey <= 0) {
@@ -6048,48 +6051,48 @@ export function setupHandlers(
         targetConversationKey,
       );
     } else if (isCodexConversationSystem()) {
-      if (!forceFresh) {
-        const currentCandidate = isGlobalMode()
-          ? getConversationKey(item)
+      const currentCandidate = isGlobalMode()
+        ? getConversationKey(item)
+        : forceFresh
+          ? 0
           : Number(
               activeCodexGlobalConversationByLibrary.get(
                 buildCodexLibraryStateKey(libraryID),
               ) || 0,
             );
-        const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
-          ? Math.floor(currentCandidate)
-          : 0;
-        if (normalizedCurrentCandidate > 0) {
-          try {
-            if (await isCodexConversationDraft(normalizedCurrentCandidate)) {
-              targetConversationKey = normalizedCurrentCandidate;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active Codex candidate for draft reuse",
-              err,
-            );
+      const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
+        ? Math.floor(currentCandidate)
+        : 0;
+      if (normalizedCurrentCandidate > 0) {
+        try {
+          if (await isCodexConversationDraft(normalizedCurrentCandidate)) {
+            targetConversationKey = normalizedCurrentCandidate;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active Codex candidate for draft reuse",
+            err,
+          );
         }
-        if (targetConversationKey <= 0) {
-          try {
-            const summaries = await listCodexGlobalConversations(
-              libraryID,
-              GLOBAL_HISTORY_LIMIT,
-            );
-            const latestEmpty = summaries.find((summary) => (summary.userTurnCount || 0) === 0);
-            const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
-            if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
-              targetConversationKey = Math.floor(latestEmptyKey);
-              reuseReason = "latest-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to load latest empty Codex global conversation",
-              err,
-            );
+      }
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const summaries = await listCodexGlobalConversations(
+            libraryID,
+            GLOBAL_HISTORY_LIMIT,
+          );
+          const latestEmpty = summaries.find((summary) => (summary.userTurnCount || 0) === 0);
+          const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
+          if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
+            targetConversationKey = Math.floor(latestEmptyKey);
+            reuseReason = "latest-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to load latest empty Codex global conversation",
+            err,
+          );
         }
       }
       if (targetConversationKey <= 0) {
@@ -6112,44 +6115,44 @@ export function setupHandlers(
       );
       setLastUsedCodexGlobalConversationKey(libraryID, targetConversationKey);
     } else {
-      if (!forceFresh) {
-        const currentCandidate = isGlobalMode() && isUpstreamGlobalConversationKey(Number(getConversationKey(item) || 0))
-          ? getConversationKey(item)
+      const currentCandidate = isGlobalMode() && isUpstreamGlobalConversationKey(Number(getConversationKey(item) || 0))
+        ? getConversationKey(item)
+        : forceFresh
+          ? 0
           : Number(activeGlobalConversationByLibrary.get(libraryID) || 0);
-        const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
-          ? Math.floor(currentCandidate)
-          : 0;
-        if (normalizedCurrentCandidate > 0) {
-          try {
-            const turnCount = await getGlobalConversationUserTurnCount(
-              normalizedCurrentCandidate,
-            );
-            if (turnCount === 0) {
-              targetConversationKey = normalizedCurrentCandidate;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active candidate for draft reuse",
-              err,
-            );
+      const normalizedCurrentCandidate = Number.isFinite(currentCandidate)
+        ? Math.floor(currentCandidate)
+        : 0;
+      if (normalizedCurrentCandidate > 0) {
+        try {
+          const turnCount = await getGlobalConversationUserTurnCount(
+            normalizedCurrentCandidate,
+          );
+          if (turnCount === 0) {
+            targetConversationKey = normalizedCurrentCandidate;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active candidate for draft reuse",
+            err,
+          );
         }
+      }
 
-        if (targetConversationKey <= 0) {
-          try {
-            const latestEmpty = await getLatestEmptyGlobalConversation(libraryID);
-            const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
-            if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
-              targetConversationKey = Math.floor(latestEmptyKey);
-              reuseReason = "latest-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to load latest empty global conversation",
-              err,
-            );
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const latestEmpty = await getLatestEmptyGlobalConversation(libraryID);
+          const latestEmptyKey = Number(latestEmpty?.conversationKey || 0);
+          if (Number.isFinite(latestEmptyKey) && latestEmptyKey > 0) {
+            targetConversationKey = Math.floor(latestEmptyKey);
+            reuseReason = "latest-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to load latest empty global conversation",
+            err,
+          );
         }
       }
 
@@ -6211,46 +6214,44 @@ export function setupHandlers(
     let reuseReason: "active-draft" | "existing-draft" | null = null;
 
     if (isClaudeConversationSystem()) {
-      if (!forceFresh) {
-        const currentKey = Number(getConversationKey(item) || 0);
-        if (Number.isFinite(currentKey) && currentKey > 0) {
-          try {
-            const currentSummary = await getClaudeConversationSummary(currentKey);
-            if (
-              currentSummary &&
-              currentSummary.kind === "paper" &&
-              (currentSummary.userTurnCount || 0) === 0
-            ) {
-              targetConversationKey = currentKey;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active Claude paper conversation for draft reuse",
-              err,
-            );
+      const currentKey = Number(getConversationKey(item) || 0);
+      if (Number.isFinite(currentKey) && currentKey > 0) {
+        try {
+          const currentSummary = await getClaudeConversationSummary(currentKey);
+          if (
+            currentSummary &&
+            currentSummary.kind === "paper" &&
+            (currentSummary.userTurnCount || 0) === 0
+          ) {
+            targetConversationKey = currentKey;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active Claude paper conversation for draft reuse",
+            err,
+          );
         }
-        if (targetConversationKey <= 0) {
-          try {
-            const summaries = await listClaudePaperConversations(
-              libraryID,
-              paperItemID,
-              50,
-            );
-            const emptyEntry = summaries.find(
-              (s) => (s.userTurnCount || 0) === 0,
-            );
-            if (emptyEntry?.conversationKey) {
-              targetConversationKey = emptyEntry.conversationKey;
-              reuseReason = "existing-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to list Claude paper conversations for draft reuse",
-              err,
-            );
+      }
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const summaries = await listClaudePaperConversations(
+            libraryID,
+            paperItemID,
+            50,
+          );
+          const emptyEntry = summaries.find(
+            (s) => (s.userTurnCount || 0) === 0,
+          );
+          if (emptyEntry?.conversationKey) {
+            targetConversationKey = emptyEntry.conversationKey;
+            reuseReason = "existing-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to list Claude paper conversations for draft reuse",
+            err,
+          );
         }
       }
       if (targetConversationKey <= 0) {
@@ -6268,46 +6269,44 @@ export function setupHandlers(
         reuseReason = null;
       }
     } else if (isCodexConversationSystem()) {
-      if (!forceFresh) {
-        const currentKey = Number(getConversationKey(item) || 0);
-        if (Number.isFinite(currentKey) && currentKey > 0) {
-          try {
-            const currentSummary = await getCodexConversationSummary(currentKey);
-            if (
-              currentSummary &&
-              currentSummary.kind === "paper" &&
-              (currentSummary.userTurnCount || 0) === 0
-            ) {
-              targetConversationKey = currentKey;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active Codex paper conversation for draft reuse",
-              err,
-            );
+      const currentKey = Number(getConversationKey(item) || 0);
+      if (Number.isFinite(currentKey) && currentKey > 0) {
+        try {
+          const currentSummary = await getCodexConversationSummary(currentKey);
+          if (
+            currentSummary &&
+            currentSummary.kind === "paper" &&
+            (currentSummary.userTurnCount || 0) === 0
+          ) {
+            targetConversationKey = currentKey;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active Codex paper conversation for draft reuse",
+            err,
+          );
         }
-        if (targetConversationKey <= 0) {
-          try {
-            const summaries = await listCodexPaperConversations(
-              libraryID,
-              paperItemID,
-              50,
-            );
-            const emptyEntry = summaries.find(
-              (s) => (s.userTurnCount || 0) === 0,
-            );
-            if (emptyEntry?.conversationKey) {
-              targetConversationKey = emptyEntry.conversationKey;
-              reuseReason = "existing-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to list Codex paper conversations for draft reuse",
-              err,
-            );
+      }
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const summaries = await listCodexPaperConversations(
+            libraryID,
+            paperItemID,
+            50,
+          );
+          const emptyEntry = summaries.find(
+            (s) => (s.userTurnCount || 0) === 0,
+          );
+          if (emptyEntry?.conversationKey) {
+            targetConversationKey = emptyEntry.conversationKey;
+            reuseReason = "existing-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to list Codex paper conversations for draft reuse",
+            err,
+          );
         }
       }
       if (targetConversationKey <= 0) {
@@ -6325,39 +6324,37 @@ export function setupHandlers(
         reuseReason = null;
       }
     } else {
-      if (!forceFresh) {
-        const currentKey = Number(getConversationKey(item) || 0);
-        if (Number.isFinite(currentKey) && currentKey > 0) {
-          try {
-            const currentSummary = await getPaperConversation(currentKey);
-            if (currentSummary && currentSummary.userTurnCount === 0) {
-              targetConversationKey = currentKey;
-              reuseReason = "active-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to inspect active paper conversation for draft reuse",
-              err,
-            );
+      const currentKey = Number(getConversationKey(item) || 0);
+      if (Number.isFinite(currentKey) && currentKey > 0) {
+        try {
+          const currentSummary = await getPaperConversation(currentKey);
+          if (currentSummary && currentSummary.userTurnCount === 0) {
+            targetConversationKey = currentKey;
+            reuseReason = "active-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to inspect active paper conversation for draft reuse",
+            err,
+          );
         }
+      }
 
-        if (targetConversationKey <= 0) {
-          try {
-            const summaries = await listPaperConversations(libraryID, paperItemID, 50);
-            const emptyEntry = summaries.find(
-              (s) => s.userTurnCount === 0,
-            );
-            if (emptyEntry?.conversationKey) {
-              targetConversationKey = emptyEntry.conversationKey;
-              reuseReason = "existing-draft";
-            }
-          } catch (err) {
-            ztoolkit.log(
-              "LLM: Failed to list paper conversations for draft reuse",
-              err,
-            );
+      if (!forceFresh && targetConversationKey <= 0) {
+        try {
+          const summaries = await listPaperConversations(libraryID, paperItemID, 50);
+          const emptyEntry = summaries.find(
+            (s) => s.userTurnCount === 0,
+          );
+          if (emptyEntry?.conversationKey) {
+            targetConversationKey = emptyEntry.conversationKey;
+            reuseReason = "existing-draft";
           }
+        } catch (err) {
+          ztoolkit.log(
+            "LLM: Failed to list paper conversations for draft reuse",
+            err,
+          );
         }
       }
 
@@ -6395,6 +6392,16 @@ export function setupHandlers(
       );
     }
     inputBox.focus({ preventScroll: true });
+  };
+
+  const runExplicitNewChatAction = async (action: () => Promise<void>) => {
+    if (explicitNewChatInFlight) return;
+    explicitNewChatInFlight = true;
+    try {
+      await action();
+    } finally {
+      explicitNewChatInFlight = false;
+    }
   };
 
   const openHistoryRowMenuAtPointer = (
@@ -6465,11 +6472,13 @@ export function setupHandlers(
       }
 
       // Create a truly fresh session in whichever mode is currently active.
-      if (isGlobalMode()) {
-        void createAndSwitchGlobalConversation();
-      } else {
-        void createAndSwitchPaperConversation();
-      }
+      void runExplicitNewChatAction(async () => {
+        if (isGlobalMode()) {
+          await createAndSwitchGlobalConversation(true);
+        } else {
+          await createAndSwitchPaperConversation(true);
+        }
+      });
     });
   }
 
@@ -6479,7 +6488,7 @@ export function setupHandlers(
       e.stopPropagation();
       if (isNoteSession()) return;
       closeHistoryNewMenu();
-      void createAndSwitchGlobalConversation();
+      void runExplicitNewChatAction(() => createAndSwitchGlobalConversation(true));
     });
   }
 
@@ -6490,7 +6499,7 @@ export function setupHandlers(
       if (isNoteSession()) return;
       if (historyNewPaperBtn.disabled) return;
       closeHistoryNewMenu();
-      void createAndSwitchPaperConversation();
+      void runExplicitNewChatAction(() => createAndSwitchPaperConversation(true));
     });
   }
 

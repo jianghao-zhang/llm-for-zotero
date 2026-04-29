@@ -201,6 +201,44 @@ describe("portalScope resolveInitialPanelItemState", function () {
     );
   });
 
+  it("honors a supplied upstream initial state while Codex is available", function () {
+    const paperItem = {
+      id: 42,
+      libraryID: 7,
+      parentID: undefined,
+      isAttachment: () => false,
+      isRegularItem: () => true,
+    } as unknown as Zotero.Item;
+    itemsById.set(42, paperItem);
+    activePaperConversationByPaper.set("7:42", 4207);
+    globalThis.Zotero = {
+      ...globalThis.Zotero,
+      Items: {
+        get: (itemId: number) => itemsById.get(itemId) || null,
+      },
+      Profile: {
+        dir: "/tmp/llm-for-zotero-test-profile",
+      },
+      Prefs: {
+        get: (key: string) => {
+          if (String(key).endsWith("enableCodexAppServerMode")) return true;
+          if (String(key).endsWith("conversationSystem")) return "codex";
+          return "";
+        },
+      },
+    } as typeof Zotero;
+
+    const resolved = resolveInitialPanelItemState(paperItem, {
+      conversationSystem: "upstream",
+    });
+
+    assert.equal(resolved.basePaperItem, paperItem);
+    assert.isTrue(isPaperPortalItem(resolved.item));
+    assert.isFalse(isCodexPaperPortalItem(resolved.item));
+    assert.equal(resolved.item?.id, 4207);
+    assert.equal(resolved.item?.libraryID, 7);
+  });
+
   it("does not allow active notes to enter Claude Code mode", function () {
     const noteItem = {
       id: 108,
