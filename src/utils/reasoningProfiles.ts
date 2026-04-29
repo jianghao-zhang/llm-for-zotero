@@ -377,7 +377,7 @@ const DEEPSEEK_V4_PROFILE: ProviderProfile = {
   supportsReasoning: true,
   defaultLevel: "default",
   options: [
-    option("default", "high"),
+    option("default", "default"),
     option("minimal", "disabled"),
     option("high", "high"),
     option("xhigh", "max"),
