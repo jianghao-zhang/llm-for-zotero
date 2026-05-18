@@ -54,6 +54,7 @@ import {
   getActiveContextAttachmentFromTabs,
   getActiveReaderForSelectedTab,
   getItemSelectionCacheKeys,
+  resolveContextSourceItemId,
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
   syncSelectedTextContextForSource,
@@ -186,6 +187,7 @@ export function registerReaderContextPanel() {
         const currentKind = panelRoot?.dataset?.conversationKind;
         const currentItemKey = panelRoot?.dataset?.itemId;
         const currentSystem = panelRoot?.dataset?.conversationSystem || "";
+        const currentContextItemKey = panelRoot?.dataset?.contextItemId || "";
         // Lock is stale if:
         // - lock active + panel in paper mode (need to switch to global)
         // - lock active + panel shows different global conversation
@@ -203,20 +205,43 @@ export function registerReaderContextPanel() {
         const newItemKey = resolvedState.item
           ? String(getConversationKey(resolvedState.item))
           : "0";
+        const rawContextItem = item || resolvedState.item;
+        const newContextItemId = resolveContextSourceItemId(rawContextItem);
+        const newContextItemKey =
+          newContextItemId > 0 ? `${newContextItemId}` : "";
         const itemChanged =
           !needsFullRender &&
           storedItemKey !== undefined &&
           storedItemKey !== newItemKey;
+        // Same parent-item conversation, different child PDF: rebuild so
+        // auto-loaded context and send-time closures follow the selected PDF.
+        const contextSourceChanged =
+          !needsFullRender &&
+          storedItemKey === newItemKey &&
+          currentKind === "paper" &&
+          currentContextItemKey !== newContextItemKey;
         const systemChanged =
           !needsFullRender &&
           currentSystem !== expectedSystem;
 
-        if (needsFullRender || lockStale || itemChanged || systemChanged) {
+        if (
+          needsFullRender ||
+          lockStale ||
+          itemChanged ||
+          contextSourceChanged ||
+          systemChanged
+        ) {
           // Build UI synchronously so panel data attributes (basePaperItemId,
           // conversationKind, etc.) are immediately correct.  The reader popup
           // "Add Text" path reads these attributes to decide paper-mismatch —
           // if we defer buildUI, the stale panel from the previous tab wins.
           buildUI(body, resolvedState.item);
+          const nextPanelRoot = body.querySelector(
+            "#llm-main",
+          ) as HTMLElement | null;
+          if (nextPanelRoot) {
+            nextPanelRoot.dataset.contextItemId = newContextItemKey;
+          }
           activeContextPanels.set(body, () => resolvedState.item);
           activeContextPanelRawItems.set(body, item || null);
           void retainClaudeRuntimeForBody(body, resolvedState.item);
@@ -240,6 +265,7 @@ export function registerReaderContextPanel() {
           // (e.g. Add Text) always resolve the active item.
           activeContextPanels.set(body, () => resolvedState.item);
           activeContextPanelRawItems.set(body, item || null);
+          panelRoot.dataset.contextItemId = newContextItemKey;
           void retainClaudeRuntimeForBody(body, resolvedState.item);
         }
       } catch { /* ignore */ }
@@ -265,6 +291,14 @@ export function registerReaderContextPanel() {
         delete (body as any).__llmSyncRendered;
       } else {
         buildUI(body, resolvedItem);
+        const panelRoot = body.querySelector("#llm-main") as HTMLElement | null;
+        if (panelRoot) {
+          const contextItemId = resolveContextSourceItemId(
+            item || resolvedItem,
+          );
+          panelRoot.dataset.contextItemId =
+            contextItemId > 0 ? `${contextItemId}` : "";
+        }
         activeContextPanelRawItems.set(body, item || null);
       }
 

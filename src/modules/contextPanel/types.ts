@@ -325,6 +325,8 @@ import type { ReasoningConfig as LLMReasoningConfig } from "../../utils/llmClien
 export type SendQuestionOptions = {
   body: Element;
   item: Zotero.Item;
+  /** Raw Zotero item selected in the panel; may be a child PDF under item. */
+  contextSourceItem?: Zotero.Item | null;
   question: string;
   images?: string[];
   model?: string;
@@ -366,6 +368,8 @@ export type SendQuestionOptions = {
 export type EditRetryOptions = {
   body: Element;
   item: Zotero.Item;
+  /** Raw Zotero item selected in the panel; may be a child PDF under item. */
+  contextSourceItem?: Zotero.Item | null;
   displayQuestion: string;
   selectedTexts?: string[];
   selectedTextSources?: SelectedTextSource[];

@@ -326,6 +326,34 @@ function getFirstPdfChildAttachment(
   return null;
 }
 
+function getSelectedPdfAttachmentFromLibraryPane(): Zotero.Item | null {
+  const panes: unknown[] = [];
+  try {
+    panes.push(Zotero.getActiveZoteroPane?.());
+  } catch (_error) {
+    void _error;
+  }
+  try {
+    panes.push(Zotero.getMainWindow?.()?.ZoteroPane);
+  } catch (_error) {
+    void _error;
+  }
+  try {
+    panes.push((globalThis as any).ZoteroPane);
+  } catch (_error) {
+    void _error;
+  }
+  for (const pane of panes) {
+    const selectedItems = (pane as { getSelectedItems?: () => Zotero.Item[] })
+      ?.getSelectedItems?.();
+    if (!Array.isArray(selectedItems)) continue;
+    for (const item of selectedItems) {
+      if (isSupportedContextAttachment(item)) return item;
+    }
+  }
+  return null;
+}
+
 export function resolveContextSourceItem(
   panelItem: Zotero.Item,
 ): ResolvedContextSource {
@@ -376,6 +404,24 @@ export function resolveContextSourceItem(
     };
   }
 
+  const selectedPdfAttachment = getSelectedPdfAttachmentFromLibraryPane();
+  const panelParentItem =
+    panelItem.isAttachment() && panelItem.parentID
+      ? Zotero.Items.get(panelItem.parentID) || null
+      : panelItem;
+  if (
+    selectedPdfAttachment &&
+    (selectedPdfAttachment.id === panelItem.id ||
+      (panelParentItem &&
+        selectedPdfAttachment.parentID === panelParentItem.id))
+  ) {
+    const label = getContextItemLabel(selectedPdfAttachment);
+    return {
+      contextItem: selectedPdfAttachment,
+      statusText: `using the selected ${label} as context`,
+    };
+  }
+
   if (
     panelItem.isAttachment() &&
     panelItem.attachmentContentType === "application/pdf"
@@ -387,10 +433,7 @@ export function resolveContextSourceItem(
     };
   }
 
-  const parentItem =
-    panelItem.isAttachment() && panelItem.parentID
-      ? Zotero.Items.get(panelItem.parentID) || null
-      : panelItem;
+  const parentItem = panelParentItem;
   const firstPdfChild = getFirstPdfChildAttachment(parentItem);
   if (firstPdfChild && parentItem) {
     const parentTitle =
@@ -417,6 +460,15 @@ export function resolveContextSourceItem(
     contextItem: null,
     statusText: `No active tab PDF context (tab=${selectedTab?.selectedID ?? "?"}, type=${selectedTab?.selectedType ?? "?"}, tabType=${activeTab?.type ?? "?"}, dataKeys=${dataKeys.join("|") || "-"})`,
   };
+}
+
+export function resolveContextSourceItemId(
+  panelItem: Zotero.Item | null | undefined,
+): number {
+  if (!panelItem) return 0;
+  const contextItem = resolveContextSourceItem(panelItem).contextItem;
+  const parsed = Number(contextItem?.id || 0);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
 export function getItemSelectionCacheKeys(

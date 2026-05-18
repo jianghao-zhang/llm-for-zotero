@@ -513,6 +513,8 @@ export type AgentEngineDeps = {
     item: Zotero.Item,
     paperContexts?: PaperContextRef[],
     fullTextPaperContexts?: PaperContextRef[],
+    excludePaperKeys?: Set<string>,
+    contextSourceItem?: Zotero.Item | null,
   ) => {
     paperContexts: PaperContextRef[];
     fullTextPaperContexts: PaperContextRef[];
@@ -563,6 +565,7 @@ export async function sendAgentTurn(
   opts: {
     body: Element;
     item: Zotero.Item;
+    contextSourceItem?: Zotero.Item | null;
     question: string;
     images?: string[];
     model?: string;
@@ -602,6 +605,7 @@ export async function sendAgentTurn(
   const {
     body,
     item,
+    contextSourceItem,
     question,
     images,
     model,
@@ -805,6 +809,8 @@ export async function sendAgentTurn(
     item,
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
+    undefined,
+    contextSourceItem,
   );
   userMessage.paperContexts = paperContextsForMessage.length
     ? paperContextsForMessage

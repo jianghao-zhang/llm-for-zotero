@@ -53,6 +53,7 @@ type SendFlowControllerDeps = {
   body: Element;
   inputBox: HTMLTextAreaElement;
   getItem: () => Zotero.Item | null;
+  getContextSourceItem: () => Zotero.Item | null;
   closeSlashMenu: () => void;
   closePaperPicker: () => void;
   getSelectedTextContextEntries: (itemId: number) => SelectedTextContext[];
@@ -436,6 +437,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         const editResult = await deps.editLatestUserMessageAndRetry({
           body: deps.body,
           item,
+          contextSourceItem: deps.getContextSourceItem(),
           displayQuestion,
           selectedTexts: selectedTexts.length ? selectedTexts : undefined,
           selectedTextSources: selectedTexts.length
@@ -542,6 +544,7 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       const sendTask = deps.sendQuestion({
         body: deps.body,
         item,
+        contextSourceItem: deps.getContextSourceItem(),
         question: composedQuestion,
         images,
         model: selectedProfile?.model,

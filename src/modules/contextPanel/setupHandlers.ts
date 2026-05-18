@@ -2122,7 +2122,7 @@ export function setupHandlers(
       return resolvePaperContextRefFromItem(parentItem);
     }
     if (isGlobalMode()) return null;
-    const contextSource = resolveContextSourceItem(item);
+    const contextSource = resolveContextSourceItem(rawPanelItem || item);
     return (
       resolvePaperContextRefFromAttachment(contextSource.contextItem) ||
       resolvePaperContextRefFromItem(resolveCurrentPaperBaseItem())
@@ -5026,6 +5026,7 @@ export function setupHandlers(
     body,
     inputBox,
     getItem: () => item,
+    getContextSourceItem: () => rawPanelItem || item,
     closeSlashMenu,
     closePaperPicker,
     getSelectedTextContextEntries,
@@ -5339,6 +5340,7 @@ export function setupHandlers(
         void editUserTurnAndRetry({
           body,
           item: currentItem,
+          contextSourceItem: rawPanelItem || currentItem,
           userTimestamp: editTarget.userTimestamp,
           assistantTimestamp: editTarget.assistantTimestamp,
           newText,

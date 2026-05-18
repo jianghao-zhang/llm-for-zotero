@@ -431,6 +431,7 @@ function normalizeCollectionContexts(
 
 function resolveAutoLoadedPaperContextForItem(
   item: Zotero.Item,
+  contextSourceItem?: Zotero.Item | null,
 ): PaperContextRef | null {
   const activeNoteSession = resolveActiveNoteSession(item);
   if (activeNoteSession?.noteKind === "standalone") {
@@ -451,7 +452,7 @@ function resolveAutoLoadedPaperContextForItem(
   if (resolveDisplayConversationKind(item) === "global") {
     return null;
   }
-  const contextSource = resolveContextSourceItem(item);
+  const contextSource = resolveContextSourceItem(contextSourceItem || item);
   return resolvePaperContextRefFromAttachment(contextSource.contextItem);
 }
 
@@ -2148,6 +2149,7 @@ function resolveEffectiveRequestConfig(params: {
 
 function resolveCodexNativeConversationScope(params: {
   item: Zotero.Item;
+  contextSourceItem?: Zotero.Item | null;
   conversationKey: number;
   title?: string;
 }): CodexNativeConversationScope {
@@ -2173,7 +2175,10 @@ function resolveCodexNativeConversationScope(params: {
       : undefined;
   const paperContext =
     kind === "paper"
-      ? resolveAutoLoadedPaperContextForItem(params.item) ||
+      ? resolveAutoLoadedPaperContextForItem(
+          params.item,
+          params.contextSourceItem,
+        ) ||
         resolvePaperContextRefFromItem(baseItem || params.item)
       : null;
   const paperTitle =
@@ -2315,6 +2320,7 @@ function buildLightCodexNativeMcpContextPlan(params: {
 
 async function buildContextPlanForRequest(params: {
   item: Zotero.Item;
+  contextSourceItem?: Zotero.Item | null;
   question: string;
   images?: string[];
   selectedTextSources?: SelectedTextSource[];
@@ -2332,14 +2338,19 @@ async function buildContextPlanForRequest(params: {
     kind: Parameters<typeof setStatus>[2],
   ) => void;
 }): Promise<ContextPlanForRequest> {
-  const contextSource = resolveContextSourceItem(params.item);
+  const contextSource = resolveContextSourceItem(
+    params.contextSourceItem || params.item,
+  );
   params.setStatusSafely(contextSource.statusText, "sending");
   const rawActiveContextItem = contextSource.contextItem;
   // If the active paper is in PDF mode (sent as file attachment),
   // exclude it from the text retrieval pipeline entirely.
   const activeContextItemInPdfMode = (() => {
     if (!rawActiveContextItem || !params.pdfModePaperKeys?.size) return false;
-    const autoLoaded = resolveAutoLoadedPaperContextForItem(params.item);
+    const autoLoaded = resolveAutoLoadedPaperContextForItem(
+      params.item,
+      params.contextSourceItem,
+    );
     if (!autoLoaded) return false;
     return params.pdfModePaperKeys.has(
       `${autoLoaded.itemId}:${autoLoaded.contextItemId}`,
@@ -3852,6 +3863,7 @@ function normalizeEditablePaperContexts(
 function derivePdfModePaperKeys(
   attachments: ChatAttachment[] | undefined,
   item: Zotero.Item,
+  contextSourceItem?: Zotero.Item | null,
 ): Set<string> {
   const keys = new Set<string>();
   if (!Array.isArray(attachments)) return keys;
@@ -3861,7 +3873,10 @@ function derivePdfModePaperKeys(
     if (!m) continue;
     const contextItemId = Number(m[1]);
     if (!Number.isFinite(contextItemId) || contextItemId <= 0) continue;
-    const autoLoaded = resolveAutoLoadedPaperContextForItem(item);
+    const autoLoaded = resolveAutoLoadedPaperContextForItem(
+      item,
+      contextSourceItem,
+    );
     if (autoLoaded && autoLoaded.contextItemId === contextItemId) {
       keys.add(`${autoLoaded.itemId}:${autoLoaded.contextItemId}`);
     }
@@ -3880,6 +3895,7 @@ function includeAutoLoadedPaperContext(
   paperContexts?: PaperContextRef[],
   fullTextPaperContexts?: PaperContextRef[],
   excludePaperKeys?: Set<string>,
+  contextSourceItem?: Zotero.Item | null,
 ): {
   paperContexts: PaperContextRef[];
   fullTextPaperContexts: PaperContextRef[];
@@ -3897,7 +3913,10 @@ function includeAutoLoadedPaperContext(
           : normalizedFullTextPaperContexts,
     };
   }
-  const autoLoadedPaperContext = resolveAutoLoadedPaperContextForItem(item);
+  const autoLoadedPaperContext = resolveAutoLoadedPaperContextForItem(
+    item,
+    contextSourceItem,
+  );
   if (!autoLoadedPaperContext) {
     return {
       paperContexts: normalizedPaperContexts,
@@ -4021,6 +4040,7 @@ export async function editLatestUserMessageAndRetry(
   const {
     body,
     item,
+    contextSourceItem,
     displayQuestion,
     selectedTexts,
     selectedTextSources,
@@ -4117,7 +4137,11 @@ export async function editLatestUserMessageAndRetry(
   const selectedCollectionContextsForMessage = normalizeCollectionContexts(
     selectedCollectionContexts,
   );
-  const pdfExcludeKeys = derivePdfModePaperKeys(attachments, item);
+  const pdfExcludeKeys = derivePdfModePaperKeys(
+    attachments,
+    item,
+    contextSourceItem,
+  );
   let {
     paperContexts: paperContextsForMessage,
     fullTextPaperContexts: fullTextPaperContextsForMessage,
@@ -4126,6 +4150,7 @@ export async function editLatestUserMessageAndRetry(
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
     pdfExcludeKeys.size > 0 ? pdfExcludeKeys : undefined,
+    contextSourceItem,
   );
   const editRetryCodexNativeMcpLightContext = shouldUseCodexNativeLightContext({
     isCodexNativeTurn:
@@ -4932,6 +4957,7 @@ export async function retryLatestAssistantResponse(
 export async function editUserTurnAndRetry(opts: {
   body: Element;
   item: Zotero.Item;
+  contextSourceItem?: Zotero.Item | null;
   userTimestamp: number;
   assistantTimestamp: number;
   newText: string;
@@ -4965,6 +4991,7 @@ export async function editUserTurnAndRetry(opts: {
   const {
     body,
     item,
+    contextSourceItem,
     userTimestamp,
     assistantTimestamp,
     newText,
@@ -5111,7 +5138,11 @@ export async function editUserTurnAndRetry(opts: {
   const selectedCollectionContextsForMessage = normalizeCollectionContexts(
     selectedCollectionContexts,
   );
-  const pdfExcludeKeysEdit = derivePdfModePaperKeys(attachments, item);
+  const pdfExcludeKeysEdit = derivePdfModePaperKeys(
+    attachments,
+    item,
+    contextSourceItem,
+  );
   let {
     paperContexts: paperContextsForMessage,
     fullTextPaperContexts: fullTextPaperContextsForMessage,
@@ -5120,6 +5151,7 @@ export async function editUserTurnAndRetry(opts: {
     normalizedPaperContexts,
     normalizedFullTextPaperContexts,
     pdfExcludeKeysEdit.size > 0 ? pdfExcludeKeysEdit : undefined,
+    contextSourceItem,
   );
   const attachmentsForMessage = normalizeEditableAttachments(attachments);
   userMsg.selectedText = selectedTextForMessage || undefined;
@@ -5499,6 +5531,7 @@ async function retryLatestAgentResponse(
 async function sendAgentQuestion(opts: {
   body: Element;
   item: Zotero.Item;
+  contextSourceItem?: Zotero.Item | null;
   question: string;
   images?: string[];
   model?: string;
@@ -5542,6 +5575,7 @@ export async function sendQuestion(
   const {
     body,
     item,
+    contextSourceItem,
     question,
     images,
     model,
@@ -5580,6 +5614,7 @@ export async function sendQuestion(
     await sendAgentQuestion({
       body,
       item,
+      contextSourceItem: opts.contextSourceItem,
       question,
       images,
       model,
@@ -5747,6 +5782,7 @@ export async function sendQuestion(
     pdfModePaperKeys && pdfModePaperKeys.size > 0
       ? pdfModePaperKeys
       : undefined,
+    contextSourceItem,
   );
   if (shouldUseCodexNativeLightContext({ isCodexNativeTurn })) {
     const [enrichedPaperContexts, enrichedFullTextPaperContexts] =
@@ -6061,6 +6097,7 @@ export async function sendQuestion(
         })
       : await buildContextPlanForRequest({
           item,
+          contextSourceItem,
           question,
           images,
           selectedTextSources: selectedTextSourcesForMessage,
@@ -6233,6 +6270,7 @@ export async function sendQuestion(
             scope: await enrichCodexNativeConversationScopeWithMineruCache(
               resolveCodexNativeConversationScope({
                 item,
+                contextSourceItem,
                 conversationKey,
                 title: shownQuestion,
               }),
