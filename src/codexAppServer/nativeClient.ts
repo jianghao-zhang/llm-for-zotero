@@ -35,6 +35,7 @@ import {
   resolveCodexAppServerBinaryPath,
   resolveCodexAppServerReasoningParams,
   resolveCodexAppServerTurnInputWithFallback,
+  waitForCodexAppServerThreadCompacted,
   waitForCodexAppServerTurnCompletion,
   type CodexAppServerAgentMessageDeltaEvent,
   type CodexAppServerItemEvent,
@@ -64,6 +65,8 @@ import { buildNotesDirectoryConfigSection } from "../utils/notesDirectoryConfig"
 
 export const CODEX_APP_SERVER_NATIVE_PROCESS_KEY = "codex_app_server_native";
 const CODEX_APP_SERVER_SERVICE_NAME = "llm_for_zotero";
+export const NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE =
+  "No Codex context to compact yet. Send a message first.";
 
 export type CodexNativeConversationScope = {
   profileSignature?: string;
@@ -213,6 +216,12 @@ const nativeResourceLifecycleState = new Map<
 
 function normalizeNonEmptyString(value: unknown): string {
   return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function createNativeClientAbortError(): Error {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 export function clearCodexNativeHistoryVerificationState(): void {
@@ -1757,14 +1766,64 @@ export async function compactCodexAppServerThread(params: {
   threadId: string;
   codexPath?: string;
   processKey?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }): Promise<void> {
+  if (params.signal?.aborted) {
+    throw createNativeClientAbortError();
+  }
   const codexPath = resolveCodexAppServerBinaryPath(params.codexPath);
   const proc = await getOrCreateCodexAppServerProcess(
     params.processKey || CODEX_APP_SERVER_NATIVE_PROCESS_KEY,
     { codexPath },
   );
-  await proc.sendRequest("thread/compact/start", {
+  if (params.signal?.aborted) {
+    throw createNativeClientAbortError();
+  }
+  const localAbort = new AbortController();
+  const abortLocal = () => localAbort.abort();
+  params.signal?.addEventListener("abort", abortLocal, { once: true });
+  const compacted = waitForCodexAppServerThreadCompacted({
+    proc,
     threadId: params.threadId,
+    signal: localAbort.signal,
+    timeoutMs: params.timeoutMs,
+  });
+  try {
+    await proc.sendRequest("thread/compact/start", {
+      threadId: params.threadId,
+    });
+    await compacted;
+  } catch (error) {
+    localAbort.abort();
+    await compacted.catch(() => undefined);
+    throw error;
+  } finally {
+    params.signal?.removeEventListener("abort", abortLocal);
+  }
+}
+
+export async function compactCodexAppServerConversation(params: {
+  conversationKey: number;
+  codexPath?: string;
+  processKey?: string;
+  hooks?: CodexNativeStoreHooks;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<void> {
+  const threadId = await loadStoredProviderSessionId({
+    conversationKey: params.conversationKey,
+    hooks: params.hooks,
+  });
+  if (!threadId) {
+    throw new Error(NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE);
+  }
+  await compactCodexAppServerThread({
+    threadId,
+    codexPath: params.codexPath,
+    processKey: params.processKey,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
   });
 }
 

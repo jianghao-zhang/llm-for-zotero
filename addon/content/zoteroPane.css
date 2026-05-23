@@ -6800,9 +6800,115 @@ label.llm-search-results-item:hover {
   color: #f39c12;
 }
 
-.llm-compact-marker {
+.llm-message-wrapper.llm-compact-marker-wrapper {
+  width: 100%;
+  align-items: stretch;
+}
+
+.llm-message-wrapper.llm-compact-marker-wrapper .llm-message-meta {
+  display: none;
+}
+
+.llm-bubble.llm-compact-marker {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   color: var(--fill-secondary);
-  font-style: italic;
+  display: grid;
+  grid-template-columns: minmax(28px, 1fr) auto auto minmax(28px, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: var(--llm-fs-12);
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.3;
+  user-select: none;
+}
+
+.llm-compact-marker-rule {
+  height: 1px;
+  min-width: 28px;
+  background: var(--fill-quaternary);
+}
+
+.llm-compact-marker-icon {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
+.llm-compact-marker-icon::before,
+.llm-compact-marker-icon::after {
+  content: "";
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.llm-compact-marker-icon::before {
+  left: 3px;
+  top: 2px;
+  width: 10px;
+  height: 12px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.llm-compact-marker-icon::after {
+  left: 6px;
+  top: 5px;
+  width: 7px;
+  height: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  border-radius: 1px;
+  opacity: 0.7;
+}
+
+.llm-compact-marker-pending .llm-compact-marker-icon::before {
+  left: 1px;
+  top: 1px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: llm-compact-spin 900ms linear infinite;
+}
+
+.llm-compact-marker-pending .llm-compact-marker-icon::after {
+  display: none;
+}
+
+.llm-compact-marker-pending .llm-compact-marker-label {
+  animation: llm-compact-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes llm-compact-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes llm-compact-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-compact-marker-pending .llm-compact-marker-icon::before,
+  .llm-compact-marker-pending .llm-compact-marker-label {
+    animation: none;
+  }
 }
 
 /* Scrollbar Styling */

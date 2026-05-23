@@ -12,6 +12,7 @@ import {
   resolveCodexAppServerTurnInputWithFallback,
   resolveCodexAppServerReasoningParams,
   selectCodexLookupResult,
+  waitForCodexAppServerThreadCompacted,
   waitForCodexAppServerTurnCompletion,
 } from "../src/utils/codexAppServerProcess";
 
@@ -437,6 +438,81 @@ describe("codexAppServerProcess", function () {
       (caught as Error).message,
       /Timed out waiting for codex app-server turn completion after 10ms/,
     );
+  });
+
+  it("resolves when the matching thread compacted notification arrives", async function () {
+    const proc = createProcess();
+    const waitPromise = waitForCodexAppServerThreadCompacted({
+      proc,
+      threadId: "thread-ok",
+      timeoutMs: 50,
+    });
+
+    (
+      proc as unknown as {
+        handleMessage: (msg: Record<string, unknown>) => void;
+      }
+    ).handleMessage({
+      method: "thread/compacted",
+      params: { thread: { id: "thread-ok" } },
+    });
+
+    await waitPromise;
+  });
+
+  it("ignores compacted notifications for other thread ids", async function () {
+    const proc = createProcess();
+    let resolved = false;
+    const waitPromise = waitForCodexAppServerThreadCompacted({
+      proc,
+      threadId: "thread-target",
+      timeoutMs: 50,
+    }).then(() => {
+      resolved = true;
+    });
+    const testProc = proc as unknown as {
+      handleMessage: (msg: Record<string, unknown>) => void;
+    };
+
+    testProc.handleMessage({
+      method: "thread/compacted",
+      params: { threadId: "thread-other" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.isFalse(resolved);
+
+    testProc.handleMessage({
+      method: "thread/compacted",
+      params: { threadId: "thread-target" },
+    });
+    await waitPromise;
+    assert.isTrue(resolved);
+  });
+
+  it("times out and unregisters compacted notification listeners", async function () {
+    const proc = createProcess();
+    let caught: unknown;
+    try {
+      await waitForCodexAppServerThreadCompacted({
+        proc,
+        threadId: "thread-timeout",
+        timeoutMs: 10,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.instanceOf(caught, Error);
+    assert.match(
+      (caught as Error).message,
+      /Timed out waiting for codex app-server thread compaction after 10ms/,
+    );
+    const handlers = (
+      proc as unknown as {
+        notificationHandlers: Map<string, Set<unknown>>;
+      }
+    ).notificationHandlers.get("thread/compacted");
+    assert.isTrue(!handlers || handlers.size === 0);
   });
 
   it("refreshes the turn timeout when the app-server stays active", async function () {

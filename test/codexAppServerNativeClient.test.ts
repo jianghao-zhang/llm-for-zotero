@@ -1,6 +1,9 @@
 import { assert } from "chai";
 import {
   buildZoteroEnvironmentManifest,
+  compactCodexAppServerConversation,
+  compactCodexAppServerThread,
+  NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
   resolveCodexNativeApprovalRequest,
   resolveSafeCodexNativeApprovalRequest,
 } from "../src/codexAppServer/nativeClient";
@@ -9,10 +12,89 @@ import {
   clearCodexNativeReadLedger,
   recordCodexNativeReadActivity,
 } from "../src/codexAppServer/nativeContextLedger";
+import {
+  CodexAppServerProcess,
+  destroyCachedCodexAppServerProcess,
+} from "../src/utils/codexAppServerProcess";
 
 describe("Codex app-server native client", function () {
   afterEach(function () {
     clearCodexNativeReadLedger();
+  });
+
+  it("sends native thread compact requests and waits for completion", async function () {
+    const processKey = "native-compact-thread-test";
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const writes: string[] = [];
+    let proc!: CodexAppServerProcess;
+    proc = CodexAppServerProcess.forTest({
+      stdin: {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          const request = JSON.parse(chunk) as {
+            id: number;
+            method: string;
+          };
+          if (request.method === "thread/compact/start") {
+            setTimeout(() => {
+              (
+                proc as unknown as {
+                  handleMessage: (msg: Record<string, unknown>) => void;
+                }
+              ).handleMessage({ id: request.id, result: {} });
+            }, 0);
+            setTimeout(() => {
+              (
+                proc as unknown as {
+                  handleMessage: (msg: Record<string, unknown>) => void;
+                }
+              ).handleMessage({
+                method: "thread/compacted",
+                params: { thread: { id: "thread-compact" } },
+              });
+            }, 0);
+          }
+        },
+      },
+      kill: () => {},
+    });
+    CodexAppServerProcess.spawn = async () => proc;
+
+    try {
+      await compactCodexAppServerThread({
+        threadId: "thread-compact",
+        processKey,
+        timeoutMs: 100,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    const compactRequest = writes
+      .map((chunk) => JSON.parse(chunk) as { method: string; params: unknown })
+      .find((entry) => entry.method === "thread/compact/start");
+    assert.deepEqual(compactRequest?.params, { threadId: "thread-compact" });
+  });
+
+  it("fails conversation compaction clearly when no stored thread exists", async function () {
+    let caught: unknown;
+    try {
+      await compactCodexAppServerConversation({
+        conversationKey: 6_000_000_020,
+        hooks: { loadProviderSessionId: async () => "" },
+        processKey: "native-compact-missing-thread-test",
+        timeoutMs: 10,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.instanceOf(caught, Error);
+    assert.equal(
+      (caught as Error).message,
+      NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
+    );
   });
 
   it("auto-approves trusted Zotero MCP approval prompts except self-confirmation", function () {

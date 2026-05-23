@@ -86,6 +86,21 @@ function createAbortError(): Error {
   return err;
 }
 
+function extractCodexAppServerNotificationThreadId(rawParams: unknown): string {
+  if (!rawParams || typeof rawParams !== "object") return "";
+  const params = rawParams as {
+    threadId?: unknown;
+    thread?: { id?: unknown };
+  };
+  if (typeof params.thread?.id === "string" && params.thread.id.trim()) {
+    return params.thread.id.trim();
+  }
+  if (typeof params.threadId === "string" && params.threadId.trim()) {
+    return params.threadId.trim();
+  }
+  return "";
+}
+
 export class CodexAppServerProcess {
   private proc: unknown;
   private nextId = 1;
@@ -1347,6 +1362,64 @@ export function waitForCodexAppServerTurnCompletion(params: {
     );
 
     signal?.addEventListener("abort", abortHandler, { once: true });
+  });
+}
+
+export function waitForCodexAppServerThreadCompacted(params: {
+  proc: CodexAppServerProcess;
+  threadId: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs =
+    params.timeoutMs ?? DEFAULT_CODEX_APP_SERVER_TURN_TIMEOUT_MS;
+  const threadId = params.threadId.trim();
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      unsubCompacted();
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+      }
+      params.signal?.removeEventListener("abort", abortHandler);
+      fn();
+    };
+
+    const abortHandler = () => {
+      settle(() => reject(createAbortError()));
+    };
+
+    const unsubCompacted = params.proc.onNotification(
+      "thread/compacted",
+      (rawParams: unknown) => {
+        const compactedThreadId =
+          extractCodexAppServerNotificationThreadId(rawParams);
+        if (compactedThreadId !== threadId) return;
+        settle(() => resolve());
+      },
+    );
+
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        settle(() =>
+          reject(
+            new Error(
+              `Timed out waiting for codex app-server thread compaction after ${timeoutMs}ms`,
+            ),
+          ),
+        );
+      }, timeoutMs);
+    }
+
+    if (params.signal?.aborted) {
+      abortHandler();
+      return;
+    }
+    params.signal?.addEventListener("abort", abortHandler, { once: true });
   });
 }
 

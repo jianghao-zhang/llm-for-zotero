@@ -1278,9 +1278,13 @@ export function createActionCommandController(
     baseLabel.setAttribute("data-slash-section", "base");
     baseLabel.textContent = t("Base actions");
     list.insertBefore(baseLabel, baseAnchor);
+    const selectedProfile = deps.getSelectedProfile();
     const compactAction: ActionPickerItem = {
       name: "compact",
-      description: "Compact the current agent context.",
+      description:
+        selectedProfile?.authMode === "codex_app_server"
+          ? "Compact the current Codex context."
+          : "Compact the current agent context.",
       inputSchema: { type: "object", properties: {} },
     };
     if (

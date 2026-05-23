@@ -54,6 +54,8 @@ import {
   getEffectiveCodexAppServerBinaryPath,
 } from "../../codexAppServer/binaryPath";
 import {
+  compactCodexAppServerConversation,
+  NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
   resolveCodexNativeApprovalRequest,
   runCodexAppServerNativeTurn,
   type CodexNativeConversationScope,
@@ -264,6 +266,15 @@ function getAbortControllerCtor(): new () => AbortController {
       }
     ).AbortController
   );
+}
+
+function isCompactCommandText(text: string): boolean {
+  return /^\/compact(?:\s|$)/i.test((text || "").trim());
+}
+
+function removeMessageReference(history: Message[], message: Message): void {
+  const index = history.indexOf(message);
+  if (index >= 0) history.splice(index, 1);
 }
 
 function appendReasoningPart(base: string | undefined, next?: string): string {
@@ -4899,9 +4910,7 @@ export async function retryLatestAssistantResponse(
     assistantMessage.reasoningSummary = streamedReasoningSummary;
     assistantMessage.reasoningDetails = streamedReasoningDetails;
     assistantMessage.reasoningOpen = isReasoningExpandedByDefault();
-    assistantMessage.compactMarker = /^\/compact(?:\s|$)/i.test(
-      question.trim(),
-    );
+    assistantMessage.compactMarker = isCompactCommandText(question);
     if (assistantMessage.compactMarker && !assistantMessage.text.trim()) {
       assistantMessage.text = "Conversation compacted";
     }
@@ -5410,7 +5419,7 @@ async function buildAgentRuntimeRequest(
       claudeAutoCompactEligible:
         params.effectiveRequestConfig.modelProviderLabel === "Claude Code" &&
         isClaudeAutoCompactEnabled() &&
-        !/^\/compact(?:\s|$)/i.test(params.userText.trim()),
+        !isCompactCommandText(params.userText),
       claudeAutoCompactThresholdPercent:
         params.effectiveRequestConfig.modelProviderLabel === "Claude Code"
           ? getClaudeAutoCompactThresholdPercent()
@@ -5753,6 +5762,137 @@ export async function sendQuestion(
   const isCodexNativeTurn =
     effectiveConversationSystem === "codex" &&
     effectiveRequestConfig.authMode === "codex_app_server";
+  const isCodexNativeCompactCommand =
+    isCodexNativeTurn && isCompactCommandText(question);
+  if (isCodexNativeCompactCommand) {
+    removeMessageReference(provisionalHistory, optimisticUserMessage);
+    removeMessageReference(provisionalHistory, optimisticAssistantMessage);
+    if (history !== provisionalHistory) {
+      removeMessageReference(history, optimisticUserMessage);
+      removeMessageReference(history, optimisticAssistantMessage);
+    }
+
+    const compactMessage = optimisticAssistantMessage;
+    compactMessage.role = "assistant";
+    compactMessage.text = "Compacting context...";
+    compactMessage.timestamp = Date.now();
+    compactMessage.runMode = "agent";
+    compactMessage.agentRunId = agentRunId || undefined;
+    compactMessage.modelName = effectiveRequestConfig.model;
+    compactMessage.modelEntryId = effectiveRequestConfig.modelEntryId;
+    compactMessage.modelProviderLabel =
+      effectiveRequestConfig.modelProviderLabel;
+    compactMessage.streaming = true;
+    compactMessage.compactMarker = true;
+    compactMessage.waitingAnimationStartedAt = Date.now();
+    compactMessage.reasoningSummary = undefined;
+    compactMessage.reasoningDetails = undefined;
+    compactMessage.reasoningOpen = false;
+    compactMessage.quoteCitations = undefined;
+    history.push(compactMessage);
+    if (history.length > PERSISTED_HISTORY_LIMIT) {
+      history.splice(0, history.length - PERSISTED_HISTORY_LIMIT);
+    }
+
+    const { refreshChatSafely, setStatusSafely } = createPanelUpdateHelpers(
+      body,
+      item,
+      conversationKey,
+      ui,
+    );
+    setStatusSafely("Compacting Codex context...", "sending");
+    refreshChatSafely();
+
+    const removeCompactMessage = () => {
+      removeMessageReference(history, compactMessage);
+      refreshChatSafely();
+    };
+    const persistCompactError = async (errMsg: string) => {
+      compactMessage.text = `Error: ${errMsg}`;
+      compactMessage.streaming = false;
+      compactMessage.compactMarker = false;
+      compactMessage.timestamp = Date.now();
+      refreshChatSafely();
+      await persistConversationMessage(conversationKey, {
+        role: "assistant",
+        text: compactMessage.text,
+        timestamp: compactMessage.timestamp,
+        runMode: compactMessage.runMode,
+        agentRunId: compactMessage.agentRunId,
+        modelName: compactMessage.modelName,
+        modelEntryId: compactMessage.modelEntryId,
+        modelProviderLabel: compactMessage.modelProviderLabel,
+      });
+    };
+
+    const AbortControllerCtor = getAbortControllerCtor();
+    setAbortController(
+      conversationKey,
+      AbortControllerCtor ? new AbortControllerCtor() : null,
+    );
+    try {
+      await compactCodexAppServerConversation({
+        conversationKey,
+        codexPath: getEffectiveCodexAppServerBinaryPath(
+          effectiveRequestConfig.apiBase,
+        ),
+        signal: getAbortController(conversationKey)?.signal,
+      });
+      if (
+        getCancelledRequestId(conversationKey) >= thisRequestId ||
+        Boolean(getAbortController(conversationKey)?.signal.aborted)
+      ) {
+        removeCompactMessage();
+        setStatusSafely("Cancelled", "ready");
+        return;
+      }
+
+      compactMessage.text = "Context compacted";
+      compactMessage.streaming = false;
+      compactMessage.timestamp = Date.now();
+      refreshChatSafely();
+      await persistConversationMessage(conversationKey, {
+        role: "assistant",
+        text: compactMessage.text,
+        timestamp: compactMessage.timestamp,
+        runMode: compactMessage.runMode,
+        agentRunId: compactMessage.agentRunId,
+        modelName: compactMessage.modelName,
+        modelEntryId: compactMessage.modelEntryId,
+        modelProviderLabel: compactMessage.modelProviderLabel,
+        compactMarker: true,
+      });
+      setStatusSafely("Ready", "ready");
+    } catch (err) {
+      const isCancelled =
+        getCancelledRequestId(conversationKey) >= thisRequestId ||
+        Boolean(getAbortController(conversationKey)?.signal.aborted) ||
+        (err as { name?: string }).name === "AbortError";
+      if (isCancelled) {
+        removeCompactMessage();
+        setStatusSafely("Cancelled", "ready");
+        return;
+      }
+      const errMsg = (err as Error).message || "Error";
+      if (errMsg === NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE) {
+        removeCompactMessage();
+        setStatusSafely(errMsg, "error");
+        return;
+      }
+      await persistCompactError(errMsg);
+      setStatusSafely(`Error: ${errMsg.slice(0, 40)}`, "error");
+    } finally {
+      restoreRequestUIIdle(body, conversationKey, thisRequestId);
+      setAbortController(conversationKey, null);
+      setPendingRequestId(conversationKey, 0);
+      scheduleQueuedInputDrain(body, {
+        conversationSystem:
+          resolveConversationSystemForItem(item) || "upstream",
+        conversationKey,
+      });
+    }
+    return;
+  }
   const requestFileAttachments = normalizeModelFileAttachments(
     modelAttachments ?? attachments,
     {
@@ -5948,6 +6088,7 @@ export async function sendQuestion(
       webchatChatUrl: assistantMessage.webchatChatUrl,
       webchatChatId: assistantMessage.webchatChatId,
       quoteCitations: assistantMessage.quoteCitations,
+      compactMarker: assistantMessage.compactMarker,
     });
   };
   let responseStreamCoalescer: BlockStreamCoalescer | null = null;
@@ -6435,9 +6576,7 @@ export async function sendQuestion(
       ? "agent"
       : effectiveRuntimeMode;
     assistantMessage.agentRunId = agentRunId || assistantMessage.agentRunId;
-    assistantMessage.compactMarker = /^\/compact(?:\s|$)/i.test(
-      question.trim(),
-    );
+    assistantMessage.compactMarker = isCompactCommandText(question);
     if (assistantMessage.compactMarker && !assistantMessage.text.trim()) {
       assistantMessage.text = "Conversation compacted";
     }
@@ -6638,6 +6777,31 @@ function buildInlineEditWidget(
   return widgetRoot;
 }
 
+export function renderCompactMarkerInto(
+  bubble: HTMLElement,
+  text: string,
+  doc: Document,
+  pending: boolean,
+): void {
+  bubble.textContent = "";
+  bubble.classList.add("llm-compact-marker");
+  bubble.classList.toggle("llm-compact-marker-pending", pending);
+
+  const leftRule = doc.createElement("span") as HTMLSpanElement;
+  leftRule.className = "llm-compact-marker-rule";
+  const icon = doc.createElement("span") as HTMLSpanElement;
+  icon.className = "llm-compact-marker-icon";
+  icon.setAttribute("aria-hidden", "true");
+  const label = doc.createElement("span") as HTMLSpanElement;
+  label.className = "llm-compact-marker-label";
+  label.textContent =
+    text || (pending ? "Compacting context..." : "Context compacted");
+  const rightRule = doc.createElement("span") as HTMLSpanElement;
+  rightRule.className = "llm-compact-marker-rule";
+
+  bubble.append(leftRule, icon, label, rightRule);
+}
+
 export function refreshChat(body: Element, item?: Zotero.Item | null) {
   const chatBox = body.querySelector("#llm-chat-box") as HTMLDivElement | null;
   if (!chatBox) return;
@@ -6766,6 +6930,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
     let hasUserContext = false;
     const wrapper = doc.createElement("div") as HTMLDivElement;
     wrapper.className = `llm-message-wrapper ${isUser ? "user" : "assistant"}`;
+    if (!isUser && msg.compactMarker) {
+      wrapper.classList.add("llm-compact-marker-wrapper");
+    }
 
     const bubble = doc.createElement("div") as HTMLDivElement;
     bubble.className = `llm-bubble ${isUser ? "user" : "assistant"}`;
@@ -7428,7 +7595,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       }
     } else {
       const hasModelName = Boolean(msg.modelName?.trim());
-      const hasAnswerText = Boolean(msg.text);
+      const hasAnswerText = Boolean(msg.text) || Boolean(msg.compactMarker);
       const previousUserMessage =
         index > 0 && history[index - 1]?.role === "user"
           ? history[index - 1]
@@ -7447,7 +7614,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         : msg.pendingAgentTraceEvents || [];
       let agentUsesInterleavedText = false;
       const agentTraceEl =
-        msg.runMode === "agent"
+        msg.runMode === "agent" && !msg.compactMarker
           ? renderAgentTrace({
               doc,
               message: msg,
@@ -7468,8 +7635,13 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const safeText = sanitizeText(msg.text);
         if (msg.streaming) bubble.classList.add("streaming");
         if (msg.compactMarker) {
-          bubble.textContent = safeText || "Conversation compacted";
-          bubble.classList.add("llm-compact-marker");
+          renderCompactMarkerInto(
+            bubble,
+            safeText ||
+              (msg.streaming ? "Compacting context..." : "Context compacted"),
+            doc,
+            Boolean(msg.streaming),
+          );
         } else
           try {
             // Build image resolver for MinerU figures (if applicable)
@@ -7488,7 +7660,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
             ztoolkit.log("LLM render error:", err);
             bubble.textContent = safeText;
           }
-        if (!msg.streaming) {
+        if (!msg.streaming && !msg.compactMarker) {
           try {
             const pairedUserMessage =
               history[index - 1]?.role === "user" ? history[index - 1] : null;
@@ -7525,7 +7697,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
 
       const bubbleHeaderNodes: HTMLElement[] = [];
 
-      if (hasModelName) {
+      if (hasModelName && !msg.compactMarker) {
         const modelHeader = doc.createElement("div") as HTMLDivElement;
         modelHeader.className = "llm-model-header";
 
@@ -7690,15 +7862,17 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         bubble.appendChild(typing);
       }
 
-      attachAssistantResponseContextMenu({
-        body,
-        doc,
-        bubble,
-        item,
-        message: msg,
-        pairedUserMessage: previousUserMessage,
-        conversationKey,
-      });
+      if (!msg.compactMarker) {
+        attachAssistantResponseContextMenu({
+          body,
+          doc,
+          bubble,
+          item,
+          message: msg,
+          pairedUserMessage: previousUserMessage,
+          conversationKey,
+        });
+      }
     }
 
     const meta = doc.createElement("div") as HTMLDivElement;
@@ -7713,6 +7887,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       index === latestAssistantIndex &&
       !msg.streaming &&
       msg.text.trim() &&
+      !msg.compactMarker &&
       msg.runMode !== "agent" &&
       renderProviderProtocol !== "web_sync" // [webchat] no retry in webchat mode
     ) {
