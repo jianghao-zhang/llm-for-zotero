@@ -1,5 +1,5 @@
 import { assert } from "chai";
-import { clearDeletedAgentConversationState } from "../src/modules/contextPanel/setupHandlers/controllers/historyLifecycleController";
+import { clearDeletedAgentConversationState } from "../src/modules/contextPanel/agentConversationCleanup";
 
 describe("historyLifecycleController deletion state cleanup", function () {
   it("clears agent caches and persisted state for deleted history conversations", async function () {

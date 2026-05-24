@@ -35,9 +35,9 @@ export type PendingHistoryDeletion = {
   libraryID: number;
   conversationSystem: ConversationSystem;
   paperItemID?: number;
+  providerSessionId?: string;
   title: string;
   wasActive: boolean;
-  fallbackTarget: HistorySwitchTarget;
   expiresAt: number;
   timeoutId: number | null;
 };

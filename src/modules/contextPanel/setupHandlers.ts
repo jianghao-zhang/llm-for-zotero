@@ -399,11 +399,7 @@ import {
   type MineruSourceUiState,
 } from "./setupHandlers/controllers/paperSourceOptionsController";
 import { clearAllAgentToolCaches } from "../../agent/tools";
-import { clearAgentMemory } from "../../agent/store/conversationMemory";
-import { clearAgentTranscript } from "../../agent/store/transcriptStore";
-import { clearPersistedAgentEvidence } from "../../agent/context/cacheManagement";
-import { clearPersistedAgentCoverage } from "../../agent/context/coverageLedger";
-import { clearAgentResourceLifecycleState } from "../../agent/context/resourceLifecycle";
+import { clearAgentConversationState } from "./agentConversationCleanup";
 import { renderShortcuts } from "./shortcuts";
 import { loadConversationHistoryScope } from "./historyLoader";
 import { loadClaudeConversationHistoryScope } from "../../claudeCode/historyLoader";
@@ -1024,10 +1020,10 @@ export function setupHandlers(
   ) => Promise<void> = async () => {};
   let createAndSwitchGlobalConversation: (
     forceFresh?: boolean,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let createAndSwitchPaperConversation: (
     forceFresh?: boolean,
-  ) => Promise<void> = async () => {};
+  ) => Promise<boolean | void> = async () => {};
   let queueTurnDeletion: (target: {
     conversationKey: number;
     userTimestamp: number;
@@ -3817,16 +3813,6 @@ export function setupHandlers(
     updateFilePreviewPreservingScroll();
     updateImagePreviewPreservingScroll();
     updateSelectedTextPreviewPreservingScroll();
-  };
-
-  const clearAgentConversationState = async (conversationKey: number) => {
-    await Promise.all([
-      clearAgentMemory(conversationKey),
-      clearAgentTranscript(conversationKey),
-      clearPersistedAgentEvidence(conversationKey),
-      clearPersistedAgentCoverage(conversationKey),
-    ]);
-    clearAgentResourceLifecycleState(conversationKey);
   };
 
   const historyLifecycleController = createHistoryLifecycleController({
