@@ -6,10 +6,14 @@ import {
   selectedOtherRefContextCache,
   selectedPaperContextCache,
   selectedPaperPreviewExpandedCache,
+  paperContextModeOverrides,
+  pinnedSelectedTextKeys,
 } from "../../state";
 import {
   appendSelectedTextContextForItem,
   getSelectedTextContextEntries,
+  setSelectedTextContextEntries,
+  setSelectedTextExpandedIndex,
 } from "../../contextResolution";
 import { resolvePaperContextRefFromItem } from "../../paperAttribution";
 import {
@@ -30,9 +34,14 @@ import type {
   OtherContextRef,
   PaperContextRef,
 } from "../../types";
-import { setPaperModeOverride } from "../../contexts/paperContextState";
+import {
+  clearSelectedPaperState,
+  setPaperModeOverride,
+} from "../../contexts/paperContextState";
 import { isSamePaperContextRef } from "../../modeBehavior";
+import { buildPaperKey } from "../../pdfContext";
 import { resolvePaperContextDisplayMetadata } from "./composeContextController";
+import { removePinnedSelectedText } from "./pinnedContextController";
 
 type StatusLevel = "ready" | "warning" | "error";
 type ActiveSlashToken = PaperSearchSlashToken;
@@ -510,10 +519,44 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     if (!textContextKey) return new Set();
     const noteIds = getSelectedTextContextEntries(textContextKey)
       .filter((entry) => entry.source === "note")
-      .map((entry) => Number(entry.noteContext?.noteItemId))
+      .map((entry) =>
+        Number(entry.noteContext?.noteItemId || entry.contextItemId),
+      )
       .filter((noteId) => Number.isFinite(noteId) && noteId > 0)
       .map((noteId) => Math.floor(noteId));
     return new Set(noteIds);
+  };
+
+  const removeManualPaperContext = (paper: PaperContextRef): boolean => {
+    const item = deps.getItem();
+    if (!item) return false;
+    const selectedPapers = deps.getManualPaperContextsForItem(
+      item.id,
+      deps.resolveAutoLoadedPaperContext(),
+    );
+    const existingIndex = selectedPapers.findIndex(
+      (entry) =>
+        entry.itemId === paper.itemId &&
+        entry.contextItemId === paper.contextItemId,
+    );
+    if (existingIndex < 0) return false;
+    const removedPaper = selectedPapers[existingIndex];
+    if (removedPaper) {
+      paperContextModeOverrides.delete(
+        `${item.id}:${buildPaperKey(removedPaper)}`,
+      );
+    }
+    const nextPapers = selectedPapers.filter(
+      (_, index) => index !== existingIndex,
+    );
+    if (nextPapers.length) {
+      selectedPaperContextCache.set(item.id, nextPapers);
+    } else {
+      clearSelectedPaperState(item.id);
+    }
+    deps.updatePaperPreviewPreservingScroll();
+    setStatus(`Paper context removed (${nextPapers.length})`, "ready");
+    return true;
   };
 
   const upsertPaperContext = (paper: PaperContextRef): boolean => {
@@ -569,6 +612,42 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return true;
   };
 
+  const togglePaperContext = (paper: PaperContextRef): boolean => {
+    if (removeManualPaperContext(paper)) return true;
+    return upsertPaperContext(paper);
+  };
+
+  const removeNoteTextContext = (contextItemId: number): boolean => {
+    const textContextKey = deps.getTextContextConversationKey();
+    if (!textContextKey) return false;
+    const normalizedContextItemId = Math.floor(contextItemId);
+    const selectedContexts = getSelectedTextContextEntries(textContextKey);
+    const existingIndex = selectedContexts.findIndex((entry) => {
+      if (entry.source !== "note") return false;
+      const noteItemId = Number(
+        entry.noteContext?.noteItemId || entry.contextItemId,
+      );
+      return (
+        Number.isFinite(noteItemId) &&
+        Math.floor(noteItemId) === normalizedContextItemId
+      );
+    });
+    if (existingIndex < 0) return false;
+    removePinnedSelectedText(
+      pinnedSelectedTextKeys,
+      textContextKey,
+      selectedContexts[existingIndex],
+    );
+    const nextContexts = selectedContexts.filter(
+      (_, index) => index !== existingIndex,
+    );
+    setSelectedTextContextEntries(textContextKey, nextContexts);
+    setSelectedTextExpandedIndex(textContextKey, null);
+    deps.updateSelectedTextPreviewPreservingScroll();
+    setStatus(t("Selected text removed"), "ready");
+    return true;
+  };
+
   const upsertNoteTextContext = (contextItemId: number): boolean => {
     const item = deps.getItem();
     const textContextKey = deps.getTextContextConversationKey();
@@ -584,7 +663,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       snapshot.text,
       "note",
       undefined,
-      undefined,
+      { contextItemId: snapshot.noteId },
       {
         libraryID: snapshot.libraryID,
         noteItemKey: snapshot.noteItemKey || "",
@@ -602,6 +681,11 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     deps.updateSelectedTextPreviewPreservingScroll();
     setStatus(t("Note context added as text."), "ready");
     return true;
+  };
+
+  const toggleNoteTextContext = (contextItemId: number): boolean => {
+    if (removeNoteTextContext(contextItemId)) return true;
+    return upsertNoteTextContext(contextItemId);
   };
 
   const addZoteroItemsAsPaperContext = (zoteroItems: Zotero.Item[]): void => {
@@ -631,6 +715,29 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     }
   };
 
+  const removeOtherRefContext = (contextItemId: number): boolean => {
+    const item = deps.getItem();
+    if (!item) return false;
+    const existing = selectedOtherRefContextCache.get(item.id) || [];
+    const existingIndex = existing.findIndex(
+      (entry) => entry.contextItemId === contextItemId,
+    );
+    if (existingIndex < 0) return false;
+    const removedRef = existing[existingIndex];
+    const next = existing.filter((_, index) => index !== existingIndex);
+    if (next.length) {
+      selectedOtherRefContextCache.set(item.id, next);
+    } else {
+      selectedOtherRefContextCache.delete(item.id);
+    }
+    deps.updatePaperPreviewPreservingScroll();
+    setStatus(
+      `${removedRef?.refKind === "figure" ? "Figure" : "File"} context removed (${next.length})`,
+      "ready",
+    );
+    return true;
+  };
+
   const upsertOtherRefContext = (ref: OtherContextRef): boolean => {
     const item = deps.getItem();
     if (!item) return false;
@@ -646,6 +753,11 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       "ready",
     );
     return true;
+  };
+
+  const toggleOtherRefContext = (ref: OtherContextRef): boolean => {
+    if (removeOtherRefContext(ref.contextItemId)) return true;
+    return upsertOtherRefContext(ref);
   };
 
   const selectPaperPickerAttachment = (
@@ -666,7 +778,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
       contextItemId: selectedAttachment.contextItemId,
     });
     if (kind === "pdf") {
-      upsertPaperContext({
+      togglePaperContext({
         itemId: selectedGroup.itemId,
         contextItemId: selectedAttachment.contextItemId,
         title: selectedGroup.title,
@@ -676,9 +788,9 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
         year: selectedGroup.year,
       });
     } else if (kind === "note") {
-      upsertNoteTextContext(selectedAttachment.contextItemId);
+      toggleNoteTextContext(selectedAttachment.contextItemId);
     } else {
-      upsertOtherRefContext({
+      toggleOtherRefContext({
         contextItemId: selectedAttachment.contextItemId,
         parentItemId:
           selectedGroup.itemId !== selectedAttachment.contextItemId
@@ -1074,10 +1186,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           createPickerIcon(ownerDoc, resolvePickerKindIcon(attachmentKind)),
           attachmentText,
         );
-        option.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-attachment-indent"),
-          attachmentMain,
-        );
+        option.appendChild(attachmentMain);
       }
 
       option.addEventListener("mousedown", (event: Event) => {

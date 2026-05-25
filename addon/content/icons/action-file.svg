@@ -3,12 +3,10 @@
   viewBox="0 0 24 24"
   fill="none"
   stroke="#000"
-  stroke-width="1.8"
-  stroke-linecap="round"
+  stroke-width="1.7"
   stroke-linejoin="round"
 >
-  <path d="M7 3.5h7l3.5 3.5v13A1.5 1.5 0 0 1 16 21.5H7A1.5 1.5 0 0 1 5.5 20V5A1.5 1.5 0 0 1 7 3.5z" />
-  <path d="M14 3.5V7h3.5" />
-  <path d="M9 12h6" />
-  <path d="M9 15h5" />
+  <path d="M6.5 3.5h8l4 4v13h-12z" />
+  <path d="M14.5 3.5v4h4" />
+  <path d="M3.5 10h9.8v4.2H3.5z" fill="#000" stroke="none" />
 </svg>

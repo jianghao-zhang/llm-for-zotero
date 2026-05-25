@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  appendSelectedTextContextForItem,
   getSelectedTextContextEntries,
   resolveContextSourceItemIdAsync,
   setSelectedTextContextEntries,
@@ -26,7 +27,11 @@ describe("contextResolution note-edit sync", function () {
     ]);
 
     assert.isTrue(
-      syncSelectedTextContextForSource(itemId, "Edit this sentence", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Edit this sentence",
+        "note-edit",
+      ),
     );
     assert.deepEqual(
       getSelectedTextContextEntries(itemId).map((entry) => ({
@@ -55,10 +60,18 @@ describe("contextResolution note-edit sync", function () {
 
   it("does not rewrite state when the note-edit focus is unchanged", function () {
     assert.isTrue(
-      syncSelectedTextContextForSource(itemId, "Tighten this wording", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Tighten this wording",
+        "note-edit",
+      ),
     );
     assert.isFalse(
-      syncSelectedTextContextForSource(itemId, "Tighten this wording", "note-edit"),
+      syncSelectedTextContextForSource(
+        itemId,
+        "Tighten this wording",
+        "note-edit",
+      ),
     );
   });
 
@@ -115,7 +128,9 @@ describe("contextResolution note-edit sync", function () {
       102,
     );
     assert.equal(
-      await resolveContextSourceItemIdAsync(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       102,
     );
   });
@@ -166,7 +181,9 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      await resolveContextSourceItemIdAsync(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       152,
     );
   });
@@ -343,7 +360,9 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      await resolveContextSourceItemIdAsync(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       202,
     );
   });
@@ -382,7 +401,9 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      await resolveContextSourceItemIdAsync(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       0,
     );
   });
@@ -409,7 +430,9 @@ describe("contextResolution note-edit sync", function () {
     };
 
     assert.equal(
-      await resolveContextSourceItemIdAsync(parentItem as unknown as Zotero.Item),
+      await resolveContextSourceItemIdAsync(
+        parentItem as unknown as Zotero.Item,
+      ),
       0,
     );
   });
@@ -465,5 +488,74 @@ describe("contextResolution note-edit sync", function () {
         pageLabel: undefined,
       },
     ]);
+  });
+
+  it("deduplicates selected Zotero notes by note identity", function () {
+    const noteContext = {
+      libraryID: 1,
+      noteItemKey: "ABCD1234",
+      noteItemId: 501,
+      noteKind: "standalone" as const,
+      title: "Context note",
+    };
+
+    assert.isTrue(
+      appendSelectedTextContextForItem(
+        itemId,
+        "Original note body",
+        "note",
+        undefined,
+        { contextItemId: 501 },
+        noteContext,
+      ),
+    );
+    assert.isFalse(
+      appendSelectedTextContextForItem(
+        itemId,
+        "Updated note body",
+        "note",
+        undefined,
+        { contextItemId: 501 },
+        { ...noteContext, title: "Renamed note" },
+      ),
+    );
+
+    const entries = getSelectedTextContextEntries(itemId);
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].text, "Original note body");
+    assert.equal(entries[0].noteContext?.noteItemId, 501);
+  });
+
+  it("collapses duplicate note-backed contexts already in state", function () {
+    setSelectedTextContextEntries(itemId, [
+      {
+        text: "First copy",
+        source: "note",
+        contextItemId: 501,
+        noteContext: {
+          libraryID: 1,
+          noteItemKey: "ABCD1234",
+          noteItemId: 501,
+          noteKind: "standalone",
+          title: "Context note",
+        },
+      },
+      {
+        text: "Second copy",
+        source: "note",
+        contextItemId: 501,
+        noteContext: {
+          libraryID: 1,
+          noteItemKey: "ABCD1234",
+          noteItemId: 501,
+          noteKind: "standalone",
+          title: "Context note",
+        },
+      },
+    ]);
+
+    const entries = getSelectedTextContextEntries(itemId);
+    assert.lengthOf(entries, 1);
+    assert.equal(entries[0].text, "First copy");
   });
 });

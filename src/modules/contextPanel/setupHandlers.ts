@@ -34,6 +34,7 @@ import {
   isUpstreamGlobalConversationKey,
   PREFERENCES_PANE_ID,
 } from "./constants";
+import { createContextIcon } from "./contextIcons";
 import {
   selectedModelCache,
   selectedReasoningCache,
@@ -3302,13 +3303,26 @@ export function setupHandlers(
       "span",
       "llm-paper-context-chip-label",
       {
+        title: formatPaperContextChipTitle(paperContext, contentSourceMode),
+      },
+    );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      "paper",
+      "llm-paper-context-chip-icon",
+    );
+    const chipText = createElement(
+      ownerDoc,
+      "span",
+      "llm-paper-context-chip-text",
+      {
         textContent: formatPaperContextChipLabel(
           paperContext,
           contentSourceMode,
         ),
-        title: formatPaperContextChipTitle(paperContext, contentSourceMode),
       },
     );
+    chipLabel.append(chipIcon, chipText);
     chipHeader.append(chipLabel);
 
     if (removable) {
@@ -3367,7 +3381,6 @@ export function setupHandlers(
     chip.dataset.otherRefIndex = `${removableIndex}`;
     chip.classList.add("collapsed");
 
-    const icon = ref.refKind === "figure" ? "🖼" : "📎";
     const chipHeader = createElement(
       ownerDoc,
       "div",
@@ -3378,10 +3391,21 @@ export function setupHandlers(
       "span",
       "llm-other-ref-chip-label",
       {
-        textContent: `${icon} ${ref.title}`,
         title: `${ref.refKind === "figure" ? "Figure" : "File"}: ${ref.title}`,
       },
     );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      ref.refKind === "figure" ? "image" : "file",
+      "llm-other-ref-chip-icon",
+    );
+    const chipTitle = createElement(
+      ownerDoc,
+      "span",
+      "llm-other-ref-chip-title",
+      { textContent: ref.title },
+    );
+    chipLabel.append(chipIcon, chipTitle);
     const removeBtn = createElement(
       ownerDoc,
       "button",
@@ -3424,10 +3448,21 @@ export function setupHandlers(
       "span",
       "llm-collection-chip-label",
       {
-        textContent: `\u{1F5C2}\uFE0F ${ref.name}`,
         title: `Collection: ${ref.name}`,
       },
     );
+    const chipIcon = createContextIcon(
+      ownerDoc,
+      "collection",
+      "llm-collection-chip-icon",
+    );
+    const chipTitle = createElement(
+      ownerDoc,
+      "span",
+      "llm-collection-chip-title",
+      { textContent: ref.name },
+    );
+    chipLabel.append(chipIcon, chipTitle);
     const removeBtn = createElement(
       ownerDoc,
       "button",

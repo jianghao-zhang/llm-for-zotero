@@ -3,7 +3,6 @@ import {
   sanitizeText,
   escapeNoteHtml,
   getCurrentLocalTimestamp,
-  getSelectedTextSourceIcon,
   normalizeSelectedTextSource,
 } from "./textUtils";
 import { normalizeAttachmentContentHash } from "./normalizers";
@@ -490,19 +489,18 @@ function formatSelectedTextLabel(
   index: number,
   total: number,
 ): string {
-  const icon = getSelectedTextSourceIcon(source);
   if (source === "note") {
     return total === 1
-      ? `${icon} Note context`
-      : `${icon} Note context (${index + 1})`;
+      ? "Note context"
+      : `Note context (${index + 1})`;
   }
   if (source === "note-edit") {
     return total === 1
-      ? `${icon} Editing focus`
-      : `${icon} Editing focus (${index + 1})`;
+      ? "Editing focus"
+      : `Editing focus (${index + 1})`;
   }
-  if (total === 1) return `${icon} Selected text`;
-  return `${icon} Selected text (${index + 1})`;
+  if (total === 1) return "Selected text";
+  return `Selected text (${index + 1})`;
 }
 
 function buildScreenshotImagesHtmlForNote(images: string[]): string {

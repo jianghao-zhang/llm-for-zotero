@@ -19,13 +19,6 @@ export const DEFAULT_SELECTED_TEXT_PROMPT =
   "Please explain this selected text.";
 export const DEFAULT_FILE_ANALYSIS_PROMPT = "Please analyze attached files.";
 
-export function getSelectedTextSourceIcon(source: SelectedTextSource): string {
-  if (source === "model") return "🧠";
-  if (source === "note") return "📝";
-  if (source === "note-edit") return "✍🏻";
-  return "📋";
-}
-
 function buildQuestionWithSelectedNoteText(
   selectedText: string,
   userPrompt: string,
@@ -214,12 +207,12 @@ export function buildQuestionWithSelectedTextContexts(
     const source = normalizedSources[index];
     const sourceLabel =
       source === "model"
-        ? "model_response 🧠"
+        ? "model_response"
         : source === "note"
-          ? "zotero_note 📝"
+          ? "zotero_note"
           : source === "note-edit"
-            ? "note_editor ✍🏻"
-            : "pdf_reader 📋";
+            ? "note_editor"
+            : "pdf_reader";
     const paperLabel =
       includePaperAttribution && source === "pdf"
         ? formatPaperCitationLabel(selectedTextPaperContexts[index])

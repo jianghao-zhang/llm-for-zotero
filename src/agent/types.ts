@@ -360,7 +360,8 @@ export type AgentToolCall = {
 };
 
 export type AgentTraceChip = {
-  icon: string;
+  icon?: string;
+  iconName?: string;
   label: string;
   title?: string;
 };

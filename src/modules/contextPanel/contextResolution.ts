@@ -34,6 +34,7 @@ import {
 } from "./portalScope";
 import { formatPaperCitationLabel } from "./paperAttribution";
 import { resolveTextAttachmentSourceModeFromMetadata } from "./textAttachmentExtraction";
+import { createContextIcon } from "./contextIcons";
 import {
   getFirstSelectionFromReader,
   getSelectionFromDocument,
@@ -813,10 +814,11 @@ export function getSelectedTextContextEntries(
   const raw = selectedTextCache.get(itemId);
   const normalized = normalizeSelectedTextContexts(raw);
   const synced = syncNoteBackedSelectedTextContexts(normalized);
-  if (synced.changed) {
-    selectedTextCache.set(itemId, synced.contexts);
+  const deduped = dedupeNoteBackedSelectedTextContexts(synced.contexts);
+  if (synced.changed || deduped.changed) {
+    selectedTextCache.set(itemId, deduped.contexts);
   }
-  return synced.contexts;
+  return deduped.contexts;
 }
 
 export function setSelectedTextContexts(itemId: number, texts: string[]): void {
@@ -831,9 +833,12 @@ function resolveNoteItemFromContext(
   noteContext?: NoteContextRef | null,
 ): Zotero.Item | null {
   if (!noteContext) return null;
+  const items = (globalThis as { Zotero?: { Items?: typeof Zotero.Items } })
+    .Zotero?.Items;
+  if (!items) return null;
   const noteItemId = normalizePositiveInt(noteContext.noteItemId);
   if (noteItemId) {
-    const noteItem = Zotero.Items.get(noteItemId) || null;
+    const noteItem = items.get(noteItemId) || null;
     if (noteItem) return noteItem;
   }
   const libraryID = normalizePositiveInt(noteContext.libraryID);
@@ -843,7 +848,7 @@ function resolveNoteItemFromContext(
       ? noteContext.noteItemKey.trim().toUpperCase()
       : "";
   const getByLibraryAndKey = (
-    Zotero.Items as unknown as {
+    items as unknown as {
       getByLibraryAndKey?: (
         libraryID: number,
         key: string,
@@ -899,6 +904,37 @@ function syncNoteBackedSelectedTextContexts(contexts: SelectedTextContext[]): {
       noteContext: nextNoteContext,
     };
   });
+  return { contexts: nextContexts, changed };
+}
+
+function getSelectedNoteContextIdentityKey(entry: SelectedTextContext): string {
+  if (entry.source !== "note") return "";
+  const noteContextKey = buildNoteContextIdentityKey(entry.noteContext);
+  if (noteContextKey) return noteContextKey;
+  const contextItemId = normalizePositiveInt(entry.contextItemId);
+  return contextItemId ? `context-item:${contextItemId}` : "";
+}
+
+function dedupeNoteBackedSelectedTextContexts(
+  contexts: SelectedTextContext[],
+): {
+  contexts: SelectedTextContext[];
+  changed: boolean;
+} {
+  const seenNoteKeys = new Set<string>();
+  const nextContexts: SelectedTextContext[] = [];
+  let changed = false;
+  for (const entry of contexts) {
+    const noteKey = getSelectedNoteContextIdentityKey(entry);
+    if (noteKey) {
+      if (seenNoteKeys.has(noteKey)) {
+        changed = true;
+        continue;
+      }
+      seenNoteKeys.add(noteKey);
+    }
+    nextContexts.push(entry);
+  }
   return { contexts: nextContexts, changed };
 }
 
@@ -976,7 +1012,9 @@ export function setSelectedTextContextEntries(
   itemId: number,
   contexts: SelectedTextContext[],
 ): void {
-  const normalized = normalizeSelectedTextContexts(contexts);
+  const normalized = dedupeNoteBackedSelectedTextContexts(
+    normalizeSelectedTextContexts(contexts),
+  ).contexts;
   if (!normalized.length) {
     selectedTextCache.delete(itemId);
     selectedTextPreviewExpandedCache.delete(itemId);
@@ -1091,6 +1129,15 @@ export function appendSelectedTextContextForItem(
     location,
     noteContext,
   );
+  const incomingNoteKey = getSelectedNoteContextIdentityKey(incomingEntry);
+  if (
+    incomingNoteKey &&
+    existingContexts.some(
+      (entry) => getSelectedNoteContextIdentityKey(entry) === incomingNoteKey,
+    )
+  ) {
+    return false;
+  }
   const incomingKey = dedupeKey(incomingEntry);
   if (existingContexts.some((entry) => dedupeKey(entry) === incomingKey)) {
     return false;
@@ -1264,9 +1311,11 @@ export function createNoteContextChip(
     noteMeta.dataset.contextIndex = `${options.removableIndex}`;
     noteChip.dataset.contextIndex = `${options.removableIndex}`;
   }
-  const noteIcon = ownerDoc.createElement("span");
-  noteIcon.className = "llm-note-context-icon";
-  noteIcon.textContent = "📝";
+  const noteIcon = createContextIcon(
+    ownerDoc,
+    "note",
+    "llm-note-context-icon",
+  );
   const noteLabel = ownerDoc.createElement("span");
   noteLabel.className = "llm-note-context-label";
   noteLabel.textContent = noteLabelText;
@@ -1467,6 +1516,10 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
       selectedSource === "model",
     );
     previewBox.classList.toggle(
+      "llm-selected-context-source-note",
+      selectedSource === "note",
+    );
+    previewBox.classList.toggle(
       "llm-selected-context-source-note-edit",
       selectedSource === "note-edit",
     );
@@ -1491,6 +1544,10 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
     previewMeta.classList.toggle(
       "llm-selected-context-source-model",
       selectedSource === "model",
+    );
+    previewMeta.classList.toggle(
+      "llm-selected-context-source-note",
+      selectedSource === "note",
     );
     previewMeta.classList.toggle(
       "llm-selected-context-source-note-edit",

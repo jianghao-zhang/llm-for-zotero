@@ -9,7 +9,7 @@ import type {
   AgentToolPresentationSummary,
 } from "../../../agent/types";
 import type { Message, PaperContextRef } from "../types";
-import { sanitizeText, getSelectedTextSourceIcon } from "../textUtils";
+import { sanitizeText } from "../textUtils";
 import { renderRenderedMarkdownInto } from "../renderedMarkdown";
 import { replaceQuoteCitationPlaceholdersForMarkdown } from "../quoteCitations";
 import { toFileUrl } from "../../../utils/pathFileUrl";
@@ -19,6 +19,12 @@ import {
 } from "../normalizers";
 import { agentReasoningExpandedCache } from "../agentState";
 import { buildTextDiffPreview } from "./diffPreview";
+import {
+  createContextIcon,
+  getSelectedTextSourceIconName,
+  isContextIconName,
+  NOTE_EDIT_PENCIL_ICON,
+} from "../contextIcons";
 
 type AgentTraceSummaryKind = "plan" | "tool" | "ok" | "skip" | "done";
 
@@ -2025,7 +2031,7 @@ function buildAgentTraceRequestChips(
         ? truncateAgentTraceText(paperContexts[0]?.title || "Paper", 42)
         : `${paperContexts.length} papers`;
     chips.push({
-      icon: "📚",
+      iconName: "paper",
       label,
       title: paperContexts.map((entry) => entry.title).join("\n"),
     });
@@ -2037,13 +2043,15 @@ function buildAgentTraceRequestChips(
       userMessage.selectedTextSources,
       selectedTexts.length,
     );
-    const sourceIcon = getSelectedTextSourceIcon(sources[0] || "pdf");
     const label =
       selectedTexts.length === 1
         ? truncateAgentTraceText(selectedTexts[0], 42)
         : `${selectedTexts.length} text selections`;
+    const source = sources[0] || "pdf";
     chips.push({
-      icon: sourceIcon,
+      ...(source === "note-edit"
+        ? { icon: NOTE_EDIT_PENCIL_ICON }
+        : { iconName: getSelectedTextSourceIconName(source) }),
       label,
       title: selectedTexts.join("\n\n"),
     });
@@ -2054,7 +2062,7 @@ function buildAgentTraceRequestChips(
     : 0;
   if (screenshotCount > 0) {
     chips.push({
-      icon: "🖼",
+      iconName: "image",
       label: screenshotCount === 1 ? "1 figure" : `${screenshotCount} figures`,
     });
   }
@@ -2070,7 +2078,7 @@ function buildAgentTraceRequestChips(
     : [];
   if (fileAttachments.length) {
     chips.push({
-      icon: "📎",
+      iconName: "file",
       label:
         fileAttachments.length === 1
           ? truncateAgentTraceText(fileAttachments[0]?.name || "File", 32)
@@ -2168,7 +2176,7 @@ function buildAgentTraceToolChips(
       readAgentTraceText(paperContext.title) ||
       `Paper ${paperContext.itemId ?? ""}`.trim();
     chips.push({
-      icon: "📚",
+      iconName: "paper",
       label: truncateAgentTraceText(paperTitle, 42),
       title: paperTitle,
     });
@@ -2186,7 +2194,7 @@ function buildAgentTraceToolChips(
   const attachmentName = readAgentTraceText(record?.name);
   if (attachmentName) {
     chips.push({
-      icon: /\.pdf$/i.test(attachmentName) ? "📄" : "📎",
+      iconName: /\.pdf$/i.test(attachmentName) ? "pdf" : "file",
       label: truncateAgentTraceText(attachmentName, 36),
       title: attachmentName,
     });
@@ -2794,7 +2802,7 @@ function appendLegacyAgentTraceEvent(
           type: "action",
           row: {
             kind: "plan",
-            icon: "✎",
+            icon: NOTE_EDIT_PENCIL_ICON,
             text: "Drafting answer",
           },
         });
@@ -2981,7 +2989,11 @@ export function buildAgentTraceDisplayItems(
     : items;
   const inlineTextReplacesAssistantText = isInterleaved && !finalText;
 
-  return { items: displayItems, isInterleaved, inlineTextReplacesAssistantText };
+  return {
+    items: displayItems,
+    isInterleaved,
+    inlineTextReplacesAssistantText,
+  };
 }
 
 export function renderAgentTrace({
@@ -3036,7 +3048,10 @@ export function renderAgentTrace({
     if (itemEntry.type === "inline_text") {
       const inlineEl = doc.createElement("div");
       inlineEl.className = "llm-agent-inline-text";
-      const inlineText = buildAgentTraceMarkdownForRender(itemEntry.text, message);
+      const inlineText = buildAgentTraceMarkdownForRender(
+        itemEntry.text,
+        message,
+      );
       try {
         renderRenderedMarkdownInto(inlineEl, inlineText, doc);
       } catch {
@@ -3161,13 +3176,22 @@ export function renderAgentTrace({
         if (chip.title) {
           chipEl.title = chip.title;
         }
-        const chipIcon = doc.createElement("span");
-        chipIcon.className = "llm-agent-process-chip-icon";
-        chipIcon.textContent = chip.icon;
         const chipLabel = doc.createElement("span");
         chipLabel.className = "llm-agent-process-chip-label";
         chipLabel.textContent = chip.label;
-        chipEl.append(chipIcon, chipLabel);
+        const chipIcon = isContextIconName(chip.iconName)
+          ? createContextIcon(doc, chip.iconName, "llm-agent-process-chip-icon")
+          : null;
+        if (chipIcon) {
+          chipEl.append(chipIcon, chipLabel);
+        } else if (chip.icon) {
+          const fallbackIcon = doc.createElement("span");
+          fallbackIcon.className = "llm-agent-process-chip-icon";
+          fallbackIcon.textContent = chip.icon;
+          chipEl.append(fallbackIcon, chipLabel);
+        } else {
+          chipEl.appendChild(chipLabel);
+        }
         chips.appendChild(chipEl);
       }
       actionWrap.appendChild(chips);

@@ -39,9 +39,7 @@ import {
   updateLatestClaudeConversationAssistantMessage,
   updateLatestClaudeConversationUserMessage,
 } from "../../claudeCode/runtime";
-import {
-  getCodexProfileSignature,
-} from "../../codexAppServer/constants";
+import { getCodexProfileSignature } from "../../codexAppServer/constants";
 import { resolveConversationStorageSystem } from "../../shared/conversationStorageRouting";
 import {
   getCodexReasoningModePref,
@@ -49,9 +47,7 @@ import {
   isCodexAppServerModeEnabled,
   isCodexZoteroMcpToolsEnabled,
 } from "../../codexAppServer/prefs";
-import {
-  getEffectiveCodexAppServerBinaryPath,
-} from "../../codexAppServer/binaryPath";
+import { getEffectiveCodexAppServerBinaryPath } from "../../codexAppServer/binaryPath";
 import {
   compactCodexAppServerConversation,
   NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
@@ -153,9 +149,12 @@ import {
   getAttachmentTypeLabel,
   buildQuestionWithSelectedTextContexts,
   buildModelPromptWithFileContext,
-  getSelectedTextSourceIcon,
   resolvePromptText,
 } from "./textUtils";
+import {
+  createContextIcon,
+  createSelectedTextSourceIcon,
+} from "./contextIcons";
 import {
   buildCodexAppServerNativeAttachmentBlockMessage,
   getBlockedCodexAppServerNativeAttachments,
@@ -838,7 +837,8 @@ function setContextUsageSnapshot(
         ? Math.max(0, Math.min(1, Number(snapshot.cacheHitRatio)))
         : undefined,
     cacheProvider:
-      typeof snapshot.cacheProvider === "string" && snapshot.cacheProvider.trim()
+      typeof snapshot.cacheProvider === "string" &&
+      snapshot.cacheProvider.trim()
         ? snapshot.cacheProvider.trim()
         : undefined,
     estimated: snapshot.estimated !== false,
@@ -2168,8 +2168,7 @@ function resolveCodexNativeConversationScope(params: {
       ? resolveAutoLoadedPaperContextForItem(
           params.item,
           params.contextSourceItem,
-        ) ||
-        resolvePaperContextRefFromItem(baseItem || params.item)
+        ) || resolvePaperContextRefFromItem(baseItem || params.item)
       : null;
   const paperTitle =
     sanitizeText(
@@ -3787,11 +3786,13 @@ async function resolveRetryModelInputs(params: {
     if (!apiBase || !apiKey) {
       throw new Error("PDF upload requires a configured provider API key.");
     }
-    const [{ detectPdfUploadProvider, uploadPdfForProvider }, { readAttachmentBytes }] =
-      await Promise.all([
-        import("../../utils/pdfUploadPreprocessor"),
-        import("./attachmentStorage"),
-      ]);
+    const [
+      { detectPdfUploadProvider, uploadPdfForProvider },
+      { readAttachmentBytes },
+    ] = await Promise.all([
+      import("../../utils/pdfUploadPreprocessor"),
+      import("./attachmentStorage"),
+    ]);
     const provider = detectPdfUploadProvider(apiBase);
     for (const attachment of pdfPaperAttachments) {
       const storedPath = (attachment.storedPath || "").trim();
@@ -3877,7 +3878,9 @@ function derivePdfModePaperKeys(
 function normalizeEditableFullTextPaperContexts(
   fullTextPaperContexts?: PaperContextRef[],
 ): PaperContextRef[] {
-  return limitFullTextPaperContexts(normalizePaperContexts(fullTextPaperContexts));
+  return limitFullTextPaperContexts(
+    normalizePaperContexts(fullTextPaperContexts),
+  );
 }
 
 function limitFullTextPaperContexts(
@@ -4220,9 +4223,8 @@ export async function editLatestUserMessageAndRetry(
     ? attachmentsForMessage
     : undefined;
   if (modelAttachments !== undefined) {
-    retryPair.userMessage.modelAttachments = normalizeEditableAttachments(
-      modelAttachments,
-    );
+    retryPair.userMessage.modelAttachments =
+      normalizeEditableAttachments(modelAttachments);
   } else {
     retryPair.userMessage.modelAttachments = undefined;
   }
@@ -4635,10 +4637,7 @@ export async function retryLatestAssistantResponse(
     // Text-only models (e.g. DeepSeek) reject image_url content — drop all images.
     const allImages = isTextOnlyModel(effectiveRequestConfig.model || "")
       ? []
-      : [
-          ...(retryScreenshotImages || []),
-          ...(contextPlan.mineruImages || []),
-        ];
+      : [...(retryScreenshotImages || []), ...(contextPlan.mineruImages || [])];
     const requestParams = {
       prompt: question,
       context: combinedContext,
@@ -5380,7 +5379,9 @@ function getAttachmentFilename(item: Zotero.Item | null | undefined): string {
   );
 }
 
-function getAttachmentContentType(item: Zotero.Item | null | undefined): string {
+function getAttachmentContentType(
+  item: Zotero.Item | null | undefined,
+): string {
   return normalizeAttachmentResourceText(
     (item as unknown as { attachmentContentType?: unknown })
       ?.attachmentContentType,
@@ -5541,8 +5542,7 @@ function buildCollectionAttachmentResourceSummary(
       const attachmentItem = Zotero.Items.get(attachmentId) || null;
       if (!attachmentItem?.isAttachment?.()) continue;
       const contentType =
-        getAttachmentContentType(attachmentItem) ||
-        "application/octet-stream";
+        getAttachmentContentType(attachmentItem) || "application/octet-stream";
       const filename = getAttachmentFilename(attachmentItem);
       incrementAttachmentCount(
         attachmentCounts,
@@ -5592,8 +5592,8 @@ function buildAgentAttachmentResourcePool(params: {
     params.selectedCollectionContexts,
   )
     .map(buildCollectionAttachmentResourceSummary)
-    .filter(
-      (summary): summary is AgentAttachmentResourceSummary => Boolean(summary),
+    .filter((summary): summary is AgentAttachmentResourceSummary =>
+      Boolean(summary),
     );
   return {
     resources: resources.length ? resources : undefined,
@@ -7075,7 +7075,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   if (!item) {
     chatBox.innerHTML = `
       <div class="llm-welcome">
-        <div class="llm-welcome-icon">📄</div>
+        <div class="llm-welcome-icon llm-context-svg-icon llm-context-icon-paper" aria-hidden="true"></div>
         <div class="llm-welcome-text">Select an item or open a PDF to start.</div>
       </div>
     `;
@@ -7241,9 +7241,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         screenshotBar.type = "button";
         screenshotBar.className = "llm-user-screenshots-bar";
 
-        const screenshotIcon = doc.createElement("span") as HTMLSpanElement;
-        screenshotIcon.className = "llm-user-screenshots-icon";
-        screenshotIcon.textContent = "🖼";
+        const screenshotIcon = createContextIcon(
+          doc,
+          "image",
+          "llm-user-screenshots-icon",
+        );
 
         const screenshotLabel = doc.createElement("span") as HTMLSpanElement;
         screenshotLabel.className = "llm-user-screenshots-label";
@@ -7369,9 +7371,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         collectionsBar.className =
           "llm-user-papers-bar llm-user-collections-bar";
 
-        const collectionsIcon = doc.createElement("span") as HTMLSpanElement;
-        collectionsIcon.className = "llm-user-papers-icon";
-        collectionsIcon.textContent = "🗂️";
+        const collectionsIcon = createContextIcon(
+          doc,
+          "collection",
+          "llm-user-papers-icon",
+        );
 
         const collectionsLabel = doc.createElement("span") as HTMLSpanElement;
         collectionsLabel.className = "llm-user-papers-label";
@@ -7460,9 +7464,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         papersBar.type = "button";
         papersBar.className = "llm-user-papers-bar";
 
-        const papersIcon = doc.createElement("span") as HTMLSpanElement;
-        papersIcon.className = "llm-user-papers-icon";
-        papersIcon.textContent = "📚";
+        const papersIcon = createContextIcon(
+          doc,
+          "paper",
+          "llm-user-papers-icon",
+        );
 
         const papersLabel = doc.createElement("span") as HTMLSpanElement;
         papersLabel.className = "llm-user-papers-label";
@@ -7555,9 +7561,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         filesBar.type = "button";
         filesBar.className = "llm-user-files-bar";
 
-        const filesIcon = doc.createElement("span") as HTMLSpanElement;
-        filesIcon.className = "llm-user-files-icon";
-        filesIcon.textContent = "📎";
+        const filesIcon = createContextIcon(doc, "file", "llm-user-files-icon");
 
         const filesLabel = doc.createElement("span") as HTMLSpanElement;
         filesLabel.className = "llm-user-files-label";
@@ -7708,9 +7712,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           selectedBar.className = "llm-user-selected-text";
           selectedBar.dataset.contextSource = selectedSource;
 
-          const selectedIcon = doc.createElement("span") as HTMLSpanElement;
-          selectedIcon.className = "llm-user-selected-text-icon";
-          selectedIcon.textContent = getSelectedTextSourceIcon(selectedSource);
+          const selectedIcon = createSelectedTextSourceIcon(
+            doc,
+            selectedSource,
+            "llm-user-selected-text-icon",
+          );
 
           const selectedContent = doc.createElement("span") as HTMLSpanElement;
           selectedContent.className = "llm-user-selected-text-content";

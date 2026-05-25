@@ -100,15 +100,15 @@ describe("composeContextController paper card attachment labels", function () {
 
     assert.equal(
       formatPaperContextChipLabel(paperContext, "html"),
-      "📚 Liu et al., 2026 - HTML",
+      "Liu et al., 2026 - HTML",
     );
     assert.equal(
       formatPaperContextChipLabel(paperContext, "txt"),
-      "📚 Liu et al., 2026 - TXT",
+      "Liu et al., 2026 - TXT",
     );
     assert.equal(
       formatPaperContextChipLabel(paperContext, "docx"),
-      "📚 Liu et al., 2026 - DOCX",
+      "Liu et al., 2026 - DOCX",
     );
     assert.include(formatPaperContextChipTitle(paperContext, "docx"), "Word");
   });

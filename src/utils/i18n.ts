@@ -803,7 +803,7 @@ export function getWelcomeHtml(): string {
   if (getEffectiveLocale().startsWith("zh")) {
     return `
       <div class="llm-welcome">
-        <div class="llm-welcome-icon">💬</div>
+        <div class="llm-welcome-icon llm-context-svg-icon llm-context-icon-model-chip" aria-hidden="true"></div>
         <div class="llm-welcome-text">
           <div class="llm-welcome-title">开始对话 — 以下是你可以做的。</div>
           <ul class="llm-welcome-list">
@@ -818,7 +818,7 @@ export function getWelcomeHtml(): string {
   }
   return `
     <div class="llm-welcome">
-      <div class="llm-welcome-icon">💬</div>
+      <div class="llm-welcome-icon llm-context-svg-icon llm-context-icon-model-chip" aria-hidden="true"></div>
       <div class="llm-welcome-text">
         <div class="llm-welcome-title">Start chatting — here's what you can do.</div>
         <ul class="llm-welcome-list">

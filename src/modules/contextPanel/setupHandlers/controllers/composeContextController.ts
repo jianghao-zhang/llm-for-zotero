@@ -124,8 +124,7 @@ function buildCreatorYearBase(paperContext: PaperContextRef): string {
   const metadata = resolvePaperContextDisplayMetadata(paperContext);
   const creator = sanitizeText(metadata.firstCreator || "").trim();
   const year = extractPaperYear(paperContext);
-  const label = creator ? (year ? `${creator}, ${year}` : creator) : "Paper";
-  return `📚 ${label}`;
+  return creator ? (year ? `${creator}, ${year}` : creator) : "Paper";
 }
 
 export function formatPaperContextChipLabel(
