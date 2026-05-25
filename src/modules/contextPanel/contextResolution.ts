@@ -77,12 +77,17 @@ export function getLastKnownSelectedTabId(): string | number | null {
   return _lastKnownSelectedTabId;
 }
 
-export function getActiveReaderForSelectedTab(): any | null {
+export function refreshLastKnownSelectedTabId(): string | number | null {
   const tabs = getZoteroTabsState();
   const selectedTabId = tabs?.selectedID;
   if (selectedTabId === undefined || selectedTabId === null) return null;
-  // Cache whenever we see a valid ID
   _lastKnownSelectedTabId = selectedTabId;
+  return selectedTabId;
+}
+
+export function getActiveReaderForSelectedTab(): any | null {
+  const selectedTabId = refreshLastKnownSelectedTabId();
+  if (selectedTabId === null) return null;
   return (
     (
       Zotero as unknown as {
@@ -211,7 +216,9 @@ export function selectZoteroTab(tabId: string | number): boolean {
       ztoolkit.log(`[LLM] selectZoteroTab: selected "${tabId}" via ${source}`);
       return true;
     } catch (err) {
-      ztoolkit.log(`[LLM] selectZoteroTab: error selecting "${tabId}" via ${source} — ${err}`);
+      ztoolkit.log(
+        `[LLM] selectZoteroTab: error selecting "${tabId}" via ${source} — ${err}`,
+      );
     }
   }
   return false;
@@ -424,7 +431,10 @@ export function resolveContextSourceItem(
       sourceKind: "note",
     };
   }
-  if (activeNoteSession?.noteKind === "item" && activeNoteSession.parentItemId) {
+  if (
+    activeNoteSession?.noteKind === "item" &&
+    activeNoteSession.parentItemId
+  ) {
     const activeItem = getActiveContextAttachmentFromTabs();
     if (activeItem?.parentID === activeNoteSession.parentItemId) {
       const label = getContextItemLabel(activeItem);
@@ -541,7 +551,10 @@ export async function resolveContextSourceItemAsync(
       sourceKind: "note",
     };
   }
-  if (activeNoteSession?.noteKind === "item" && activeNoteSession.parentItemId) {
+  if (
+    activeNoteSession?.noteKind === "item" &&
+    activeNoteSession.parentItemId
+  ) {
     const activeItem = getActiveContextAttachmentFromTabs();
     if (activeItem?.parentID === activeNoteSession.parentItemId) {
       const label = getContextItemLabel(activeItem);
@@ -755,11 +768,11 @@ function normalizeSelectedTextContexts(value: unknown): SelectedTextContext[] {
       const normalizedPaperContext = normalizePaperContextRefs([
         typed.paperContext,
       ])[0];
-      const normalizedNoteContext = normalizeNoteContextRef(
-        typed.noteContext,
-        { sanitizeText },
-      );
-      const contextItemId = normalizePositiveInt(typed.contextItemId) || undefined;
+      const normalizedNoteContext = normalizeNoteContextRef(typed.noteContext, {
+        sanitizeText,
+      });
+      const contextItemId =
+        normalizePositiveInt(typed.contextItemId) || undefined;
       const rawPageIndex = Number(typed.pageIndex);
       const pageIndex =
         Number.isFinite(rawPageIndex) && rawPageIndex >= 0
@@ -825,24 +838,25 @@ function resolveNoteItemFromContext(
   }
   const libraryID = normalizePositiveInt(noteContext.libraryID);
   const noteItemKey =
-    typeof noteContext.noteItemKey === "string" && noteContext.noteItemKey.trim()
+    typeof noteContext.noteItemKey === "string" &&
+    noteContext.noteItemKey.trim()
       ? noteContext.noteItemKey.trim().toUpperCase()
       : "";
-  const getByLibraryAndKey = (Zotero.Items as unknown as {
-    getByLibraryAndKey?: (
-      libraryID: number,
-      key: string,
-    ) => Zotero.Item | null | undefined;
-  }).getByLibraryAndKey;
+  const getByLibraryAndKey = (
+    Zotero.Items as unknown as {
+      getByLibraryAndKey?: (
+        libraryID: number,
+        key: string,
+      ) => Zotero.Item | null | undefined;
+    }
+  ).getByLibraryAndKey;
   if (libraryID && noteItemKey && typeof getByLibraryAndKey === "function") {
     return getByLibraryAndKey(libraryID, noteItemKey) || null;
   }
   return null;
 }
 
-function syncNoteBackedSelectedTextContexts(
-  contexts: SelectedTextContext[],
-): {
+function syncNoteBackedSelectedTextContexts(contexts: SelectedTextContext[]): {
   contexts: SelectedTextContext[];
   changed: boolean;
 } {
@@ -863,7 +877,8 @@ function syncNoteBackedSelectedTextContexts(
       parentItemId: snapshot.parentItemId,
       parentItemKey: snapshot.parentItemKey || entry.noteContext.parentItemKey,
       noteKind: snapshot.noteKind,
-      title: snapshot.title || entry.noteContext.title || `Note ${snapshot.noteId}`,
+      title:
+        snapshot.title || entry.noteContext.title || `Note ${snapshot.noteId}`,
     };
     if (
       entry.text === snapshot.text &&
@@ -891,7 +906,8 @@ function normalizeSelectedTextPageLocation(
   location?: SelectedTextPageLocation | null,
 ): SelectedTextPageLocation | undefined {
   if (!location || typeof location !== "object") return undefined;
-  const contextItemId = normalizePositiveInt(location.contextItemId) || undefined;
+  const contextItemId =
+    normalizePositiveInt(location.contextItemId) || undefined;
   const rawPageIndex = Number(location.pageIndex);
   const pageIndex =
     Number.isFinite(rawPageIndex) && rawPageIndex >= 0
@@ -943,7 +959,10 @@ function buildSelectedTextContext(
 export function formatSelectedTextContextPageLabel(
   context: SelectedTextContext,
 ): string | null {
-  if (!Number.isFinite(context.pageIndex) || (context.pageIndex as number) < 0) {
+  if (
+    !Number.isFinite(context.pageIndex) ||
+    (context.pageIndex as number) < 0
+  ) {
     return null;
   }
   const label =
@@ -1331,7 +1350,8 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
       title: panelRoot.dataset.noteTitle || "",
     });
     if (!snapshot) return null;
-    const title = `${snapshot.title || panelRoot.dataset.noteTitle || ""}`.trim();
+    const title =
+      `${snapshot.title || panelRoot.dataset.noteTitle || ""}`.trim();
     if (snapshot.title) {
       panelRoot.dataset.noteTitle = snapshot.title;
     }
@@ -1389,10 +1409,13 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
       selectedContext,
     );
     if (selectedSource === "note" && selectedContext.noteContext) {
-      const noteSnapshot = resolveNoteChipSnapshot(selectedContext.noteContext, {
-        title: selectedContext.noteContext.title,
-        text: selectedContext.text,
-      });
+      const noteSnapshot = resolveNoteChipSnapshot(
+        selectedContext.noteContext,
+        {
+          title: selectedContext.noteContext.title,
+          text: selectedContext.text,
+        },
+      );
       if (noteSnapshot) {
         previewList.appendChild(
           createNoteContextChip(ownerDoc, noteSnapshot, {
@@ -1406,29 +1429,28 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
         continue;
       }
     }
-    const contextLabel =
-      (() => {
-        if (selectedSource === "note-edit") {
-          return "Editing";
+    const contextLabel = (() => {
+      if (selectedSource === "note-edit") {
+        return "Editing";
+      }
+      const pageLabel = formatSelectedTextContextPageLabel(selectedContext);
+      if (selectedSource === "pdf" && pageLabel) {
+        if (isGlobalConversation) {
+          const paperLabel = formatPaperCitationLabel(
+            selectedContext.paperContext,
+          );
+          return paperLabel
+            ? `${paperLabel}, ${pageLabel.replace(/^page /, "p")}`
+            : pageLabel.replace(/^page /, "p");
         }
-        const pageLabel = formatSelectedTextContextPageLabel(selectedContext);
-        if (selectedSource === "pdf" && pageLabel) {
-          if (isGlobalConversation) {
-            const paperLabel = formatPaperCitationLabel(
-              selectedContext.paperContext,
-            );
-            return paperLabel
-              ? `${paperLabel}, ${pageLabel.replace(/^page /, "p")}`
-              : pageLabel.replace(/^page /, "p");
-          }
-          return pageLabel;
-        }
-        return isGlobalConversation && selectedSource === "pdf"
-          ? formatPaperCitationLabel(selectedContext.paperContext)
-          : selectedContexts.length > 1 && index > 0
-            ? `Text Context (${index + 1})`
-            : "Text Context";
-      })();
+        return pageLabel;
+      }
+      return isGlobalConversation && selectedSource === "pdf"
+        ? formatPaperCitationLabel(selectedContext.paperContext)
+        : selectedContexts.length > 1 && index > 0
+          ? `Text Context (${index + 1})`
+          : "Text Context";
+    })();
 
     const previewBox = ownerDoc.createElement("div");
     previewBox.className = "llm-selected-context";
@@ -1491,22 +1513,24 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
         ? isExpanded
           ? "Collapse editing focus"
           : "Expand editing focus"
-      : isExpanded
-        ? "Collapse text context"
-        : "Expand text context";
+        : isExpanded
+          ? "Collapse text context"
+          : "Expand text context";
     previewMeta.setAttribute(
       "aria-expanded",
       isJumpablePdfContext ? "false" : isExpanded ? "true" : "false",
     );
-    previewMeta.dataset.contextPageIndex =
-      Number.isFinite(selectedContext.pageIndex)
-        ? `${Math.floor(selectedContext.pageIndex as number)}`
-        : "";
+    previewMeta.dataset.contextPageIndex = Number.isFinite(
+      selectedContext.pageIndex,
+    )
+      ? `${Math.floor(selectedContext.pageIndex as number)}`
+      : "";
     previewMeta.dataset.contextPageLabel = selectedContext.pageLabel || "";
-    previewMeta.dataset.contextItemId =
-      Number.isFinite(selectedContext.contextItemId)
-        ? `${Math.floor(selectedContext.contextItemId as number)}`
-        : "";
+    previewMeta.dataset.contextItemId = Number.isFinite(
+      selectedContext.contextItemId,
+    )
+      ? `${Math.floor(selectedContext.contextItemId as number)}`
+      : "";
 
     previewHeader.appendChild(previewMeta);
     if (selectedSource !== "note-edit") {
@@ -1559,7 +1583,9 @@ export function refreshActiveNoteChipPreview(body: Element): void {
     "[data-note-chip='true'][data-note-chip-kind='active']",
   ) as HTMLDivElement | null;
   if (!noteChip) return;
-  const noteId = Number(panelRoot.dataset.noteId || noteChip.dataset.noteId || 0);
+  const noteId = Number(
+    panelRoot.dataset.noteId || noteChip.dataset.noteId || 0,
+  );
   const snapshot = resolveNoteChipSnapshot(noteId);
   if (!snapshot) return;
   panelRoot.dataset.noteTitle = snapshot.title;

@@ -93,6 +93,15 @@ export function createActionLayoutController(
   };
 
   let layoutRetryScheduled = false;
+  const textMeasureContext = (() => {
+    const canvas = body.ownerDocument?.createElement(
+      "canvas",
+    ) as HTMLCanvasElement | null;
+    return (
+      (canvas?.getContext("2d") as CanvasRenderingContext2D | null) || null
+    );
+  })();
+
   const applyResponsiveActionButtonsLayout = () => {
     if (!modelBtn || !actionsLeft) return;
     const modelLabel = modelBtn.dataset.modelLabel || "default";
@@ -134,15 +143,6 @@ export function createActionLayoutController(
       const value = Number.parseFloat(style.getPropertyValue(property));
       return Number.isFinite(value) ? value : fallback;
     };
-
-    const textMeasureContext = (() => {
-      const canvas = body.ownerDocument?.createElement(
-        "canvas",
-      ) as HTMLCanvasElement | null;
-      return (
-        (canvas?.getContext("2d") as CanvasRenderingContext2D | null) || null
-      );
-    })();
 
     const measureLabelTextWidth = (
       button: HTMLButtonElement | null,
@@ -474,11 +474,7 @@ export function createActionLayoutController(
     ];
 
     if (modelCanUseTwoLineWrap) {
-      candidateStates.splice(
-        1,
-        0,
-        { ...fullState, model: "full-wrap2" },
-      );
+      candidateStates.splice(1, 0, { ...fullState, model: "full-wrap2" });
     }
 
     applyMeasurementBaseline();

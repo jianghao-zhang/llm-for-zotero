@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  browseAllItemCandidates,
   browsePaperCollectionCandidates,
   invalidatePaperSearchCache,
   searchPaperCandidates,
@@ -21,6 +22,7 @@ type MockRegularItemOptions = {
   journalAbbreviation?: string;
   proceedingsTitle?: string;
   conferenceName?: string;
+  dateAdded?: string;
   dateModified?: string;
   attachmentIDs?: number[];
   collectionIDs?: number[];
@@ -70,6 +72,7 @@ function makeRegularItem(options: MockRegularItemOptions): MockItem {
     journalAbbreviation,
     proceedingsTitle,
     conferenceName,
+    dateAdded = "2025-01-01T00:00:00Z",
     dateModified = "2025-01-01T00:00:00Z",
     attachmentIDs = [],
     collectionIDs = [],
@@ -90,6 +93,7 @@ function makeRegularItem(options: MockRegularItemOptions): MockItem {
     id,
     key: `ITEM-${id}`,
     libraryID,
+    dateAdded,
     dateModified,
     firstCreator: firstCreator || "",
     parentID: undefined,
@@ -303,12 +307,24 @@ describe("paperSearch", function () {
       7,
       makeRegularItem({
         id: 7,
-        title: "Loose Paper",
+        title: "Alpha Loose Paper",
         firstCreator: "Loose Author",
+        dateAdded: "2024-01-01T00:00:00Z",
         attachmentIDs: [107],
       }),
     );
-    itemsById.set(107, makeAttachment({ id: 107, title: "Loose PDF" }));
+    itemsById.set(107, makeAttachment({ id: 107, title: "Alpha Loose PDF" }));
+    itemsById.set(
+      8,
+      makeRegularItem({
+        id: 8,
+        title: "Zulu Loose Paper",
+        firstCreator: "Loose Author",
+        dateAdded: "2025-01-01T00:00:00Z",
+        attachmentIDs: [108],
+      }),
+    );
+    itemsById.set(108, makeAttachment({ id: 108, title: "Zulu Loose PDF" }));
 
     collectionsById.set(
       10,
@@ -350,7 +366,19 @@ describe("paperSearch", function () {
     );
     assert.equal(neural?.childCollections[0]?.papers[0]?.itemId, 6);
     assert.isDefined(unfiled);
-    assert.equal(unfiled?.papers[0]?.itemId, 7);
+    assert.deepEqual(
+      unfiled?.papers.map((paper) => paper.itemId),
+      [8, 7],
+    );
+
+    const allItemResults = await browseAllItemCandidates(1);
+    const allItemsUnfiled = allItemResults.find(
+      (collection) => collection.collectionId === 0,
+    );
+    assert.deepEqual(
+      allItemsUnfiled?.papers.map((paper) => paper.itemId),
+      [8, 7],
+    );
   });
 
   it("reuses the library index until the cache is invalidated", async function () {

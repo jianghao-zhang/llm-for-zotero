@@ -697,6 +697,13 @@ export function setupHandlers(
     for (const obs of prevObservers) obs.disconnect();
     delete (body as any).__llmResizeObservers;
   }
+  const prevResizeSchedulers = (body as any).__llmResizeSchedulers as
+    | Array<{ cancel?: () => void }>
+    | undefined;
+  if (prevResizeSchedulers) {
+    for (const scheduler of prevResizeSchedulers) scheduler.cancel?.();
+    delete (body as any).__llmResizeSchedulers;
+  }
 
   let renderQueuedFollowUpInputs: () => void = () => {};
   let scheduleQueuedFollowUpDrain: () => void = () => {};
@@ -1764,15 +1771,29 @@ export function setupHandlers(
     sendBtn,
     cancelBtn,
   });
+  let lastUserContextAlignmentPanelWidth = -1;
+  const getRoundedPanelWidth = () =>
+    Math.ceil(
+      panelRoot.getBoundingClientRect?.().width || panelRoot.clientWidth || 0,
+    );
   const responsiveLayoutScheduler = createCoalescedFrameScheduler({
     getWindow: () => body.ownerDocument?.defaultView || null,
     run: () => {
+      const panelWidth = getRoundedPanelWidth();
       withScrollGuard(
         chatBox,
         conversationKey,
         () => {
           applyResponsiveActionButtonsLayout();
-          syncUserContextAlignmentWidths(body);
+          if (
+            panelWidth <= 0 ||
+            panelWidth !== lastUserContextAlignmentPanelWidth
+          ) {
+            syncUserContextAlignmentWidths(body);
+            if (panelWidth > 0) {
+              lastUserContextAlignmentPanelWidth = panelWidth;
+            }
+          }
         },
         "relative",
       );
@@ -1784,6 +1805,59 @@ export function setupHandlers(
   const flushResponsiveLayoutSyncNow = () => {
     responsiveLayoutScheduler.flush();
   };
+  let pendingChatBoxResizePreviousState: ChatBoxViewportState | null = null;
+  const chatBoxViewportResizeScheduler = createCoalescedFrameScheduler({
+    getWindow: () => body.ownerDocument?.defaultView || null,
+    run: () => {
+      const previous =
+        pendingChatBoxResizePreviousState || chatBoxViewportState;
+      pendingChatBoxResizePreviousState = null;
+      if (!chatBox) return;
+      if (!isChatViewportVisible(chatBox)) return;
+      const current = buildChatBoxViewportState();
+      if (!current) return;
+      const viewportChanged = Boolean(
+        previous &&
+        (current.width !== previous.width ||
+          current.height !== previous.height),
+      );
+      if (viewportChanged && previous && previous.nearBottom) {
+        const targetBottom = Math.max(
+          0,
+          chatBox.scrollHeight - chatBox.clientHeight,
+        );
+        if (Math.abs(chatBox.scrollTop - targetBottom) > 1) {
+          chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        captureChatBoxViewportState();
+        if (item && chatBox.childElementCount) {
+          persistChatScrollSnapshot(item, chatBox);
+        }
+        return;
+      }
+      if (
+        viewportChanged &&
+        previous &&
+        !previous.nearBottom &&
+        previous.maxScrollTop > 0
+      ) {
+        const progress = Math.max(
+          0,
+          Math.min(1, previous.scrollTop / previous.maxScrollTop),
+        );
+        const targetScrollTop = Math.round(current.maxScrollTop * progress);
+        if (Math.abs(chatBox.scrollTop - targetScrollTop) > 1) {
+          chatBox.scrollTop = targetScrollTop;
+        }
+        captureChatBoxViewportState();
+        if (item && chatBox.childElementCount) {
+          persistChatScrollSnapshot(item, chatBox);
+        }
+        return;
+      }
+      chatBoxViewportState = current;
+    },
+  });
 
   const clearSelectedImageState = (itemId: number) =>
     clearSelectedImageState_(pinnedImageKeys, itemId);
@@ -1869,10 +1943,12 @@ export function setupHandlers(
   }> | null = null;
   const loadMineruChipStyleDeps = () => {
     if (!mineruChipStyleDepsPromise) {
-      mineruChipStyleDepsPromise = import("./mineruSync").then((mineruSync) => ({
-        getMineruAvailabilityForAttachmentId:
-          mineruSync.getMineruAvailabilityForAttachmentId,
-      }));
+      mineruChipStyleDepsPromise = import("./mineruSync").then(
+        (mineruSync) => ({
+          getMineruAvailabilityForAttachmentId:
+            mineruSync.getMineruAvailabilityForAttachmentId,
+        }),
+      );
     }
     return mineruChipStyleDepsPromise;
   };
@@ -2650,15 +2726,10 @@ export function setupHandlers(
                   ? "DOCX"
                   : null);
     if (badgeText) {
-      const badge = createElement(
-        ownerDoc,
-        "span",
-        "llm-paper-picker-badge",
-        {
-          textContent: badgeText,
-          title: options?.mineruActionTitle,
-        },
-      );
+      const badge = createElement(ownerDoc, "span", "llm-paper-picker-badge", {
+        textContent: badgeText,
+        title: options?.mineruActionTitle,
+      });
       titleLine.appendChild(badge);
     }
     rowMain.appendChild(titleLine);
@@ -5212,16 +5283,9 @@ export function setupHandlers(
   if (ResizeObserverCtor && panelRoot && modelBtn) {
     const newObservers: ResizeObserver[] = [];
     const ro = new ResizeObserverCtor(() => {
-      // Keep layout mutations on the guarded scheduler so flex-driven
-      // resize of .llm-messages doesn't corrupt the scroll snapshot.
-      withScrollGuard(
-        chatBox,
-        conversationKey,
-        () => {
-          scheduleResponsiveLayoutSync();
-        },
-        "relative",
-      );
+      // Keep layout mutations on the guarded scheduler so resize callbacks
+      // stay cheap during sidebar drags.
+      scheduleResponsiveLayoutSync();
     });
     newObservers.push(ro);
     ro.observe(panelRoot);
@@ -5231,49 +5295,10 @@ export function setupHandlers(
       const chatBoxResizeObserver = new ResizeObserverCtor(() => {
         if (!chatBox) return;
         if (!isChatViewportVisible(chatBox)) return;
-        const previous = chatBoxViewportState;
-        const current = buildChatBoxViewportState();
-        if (!current) return;
-        const viewportChanged = Boolean(
-          previous &&
-          (current.width !== previous.width ||
-            current.height !== previous.height),
-        );
-        if (viewportChanged && previous && previous.nearBottom) {
-          const targetBottom = Math.max(
-            0,
-            chatBox.scrollHeight - chatBox.clientHeight,
-          );
-          if (Math.abs(chatBox.scrollTop - targetBottom) > 1) {
-            chatBox.scrollTop = chatBox.scrollHeight;
-          }
-          captureChatBoxViewportState();
-          if (item && chatBox.childElementCount) {
-            persistChatScrollSnapshot(item, chatBox);
-          }
-          return;
+        if (!pendingChatBoxResizePreviousState) {
+          pendingChatBoxResizePreviousState = chatBoxViewportState;
         }
-        if (
-          viewportChanged &&
-          previous &&
-          !previous.nearBottom &&
-          previous.maxScrollTop > 0
-        ) {
-          const progress = Math.max(
-            0,
-            Math.min(1, previous.scrollTop / previous.maxScrollTop),
-          );
-          const targetScrollTop = Math.round(current.maxScrollTop * progress);
-          if (Math.abs(chatBox.scrollTop - targetScrollTop) > 1) {
-            chatBox.scrollTop = targetScrollTop;
-          }
-          captureChatBoxViewportState();
-          if (item && chatBox.childElementCount) {
-            persistChatScrollSnapshot(item, chatBox);
-          }
-          return;
-        }
-        chatBoxViewportState = current;
+        chatBoxViewportResizeScheduler.schedule();
       });
       newObservers.push(chatBoxResizeObserver);
       chatBoxResizeObserver.observe(chatBox);
@@ -5281,6 +5306,10 @@ export function setupHandlers(
     // Store observers on body so they can be disconnected on next
     // setupHandlers call (prevents accumulation across tab switches).
     (body as any).__llmResizeObservers = newObservers;
+    (body as any).__llmResizeSchedulers = [
+      responsiveLayoutScheduler,
+      chatBoxViewportResizeScheduler,
+    ];
   }
 
   const getSelectedProfile = () => {

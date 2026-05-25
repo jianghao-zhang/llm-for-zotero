@@ -53,6 +53,7 @@ import { refreshChat } from "./chat";
 import {
   getActiveContextAttachmentFromTabs,
   getActiveReaderForSelectedTab,
+  refreshLastKnownSelectedTabId,
   getItemSelectionCacheKeys,
   resolveContextSourceItem,
   resolveContextSourceItemId,
@@ -71,10 +72,17 @@ import {
   resolveInitialPanelItemState,
   resolveActiveLibraryID,
   resolveConversationSystemForItem,
+  resolveDisplayConversationKind,
   resolveShortcutMode,
 } from "./portalScope";
 import { getLockedGlobalConversationKey } from "./prefHelpers";
 import { getEditableSelectionFromDocument } from "./noteSelection";
+import {
+  clearCompletedPanelLifecycleSignature,
+  hasCompletedPanelLifecycleSignature,
+  markCompletedPanelLifecycleSignature,
+  type PanelLifecycleSignature,
+} from "./panelLifecycleSignature";
 import {
   activeClaudeConversationModeByLibrary,
   activeClaudeGlobalConversationByLibrary,
@@ -122,12 +130,50 @@ export function registerLLMStyles(win: _ZoteroTypes.MainWindow) {
   doc.documentElement?.appendChild(katexLink);
 }
 
+function getPanelItemIdKey(item: Zotero.Item | null | undefined): string {
+  const id = Math.floor(Number((item as any)?.id || 0));
+  return Number.isFinite(id) && id > 0 ? `${id}` : "";
+}
+
+function getPanelContextItemIdKey(
+  item: Zotero.Item | null | undefined,
+): string {
+  const id = resolveContextSourceItemId(item);
+  return id > 0 ? `${id}` : "";
+}
+
+function buildPanelLifecycleSignature(
+  rawItem: Zotero.Item | null | undefined,
+  resolvedItem: Zotero.Item | null | undefined,
+): PanelLifecycleSignature {
+  const rawContextItem = rawItem || resolvedItem;
+  return {
+    conversationKey: resolvedItem ? `${getConversationKey(resolvedItem)}` : "0",
+    rawContextItemId: getPanelItemIdKey(rawContextItem),
+    contextItemId: getPanelContextItemIdKey(rawContextItem),
+    conversationSystem:
+      resolveConversationSystemForItem(resolvedItem) || "upstream",
+    conversationKind: resolveDisplayConversationKind(resolvedItem) || "",
+    shortcutMode: resolveShortcutMode(resolvedItem),
+  };
+}
+
+function isPanelConversationLoaded(
+  resolvedItem: Zotero.Item | null | undefined,
+): boolean {
+  return (
+    !resolvedItem ||
+    loadedConversationKeys.has(getConversationKey(resolvedItem))
+  );
+}
+
 export function registerReaderContextPanel() {
   if (readerContextPanelRegistered) return;
   setReaderContextPanelRegistered(true);
   // Generation counter: incremented on every onAsyncRender call so stale
   // (superseded) renders can bail out at each await point.
   let renderGeneration = 0;
+  let lastItemChangeSignature = "";
   Zotero.ItemPaneManager.registerSection({
     paneID: PANE_ID,
     pluginID: config.addonID,
@@ -149,14 +195,22 @@ export function registerReaderContextPanel() {
         notifyStandaloneItemChanged(item || null);
         return true;
       }
-      ztoolkit.log(`LLM: panel itemChange tabType=${tabType}`);
-      // Refresh the cached tab ID (side effect of getActiveReaderForSelectedTab)
-      getActiveReaderForSelectedTab();
+      const selectedTabId = refreshLastKnownSelectedTabId();
+      const itemChangeSignature = [
+        tabType || "",
+        selectedTabId ?? "",
+        getPanelItemIdKey(item || null),
+      ].join("|");
+      if (itemChangeSignature === lastItemChangeSignature) {
+        return true;
+      }
+      lastItemChangeSignature = itemChangeSignature;
       return true;
     },
     onRender: ({ body, item }) => {
       // When standalone window is open, show placeholder instead of full UI
       if (isStandaloneWindowActive()) {
+        clearCompletedPanelLifecycleSignature(body);
         void releaseClaudeRuntimeForBody(body);
         renderStandalonePlaceholder(body);
         const resolvedState = resolveInitialPanelItemState(item);
@@ -176,8 +230,11 @@ export function registerReaderContextPanel() {
           resolveConversationSystemForItem(resolvedState.item) || "upstream";
 
         // Also check if a global lock requires switching to open chat
-        const libraryID = resolveActiveLibraryID() ||
-          (resolvedState.item ? Number(resolvedState.item.libraryID || 0) : 0) ||
+        const libraryID =
+          resolveActiveLibraryID() ||
+          (resolvedState.item
+            ? Number(resolvedState.item.libraryID || 0)
+            : 0) ||
           (item ? Number(item.libraryID || 0) : 0);
         const lockedKey =
           expectedSystem === "claude_code" || expectedSystem === "codex"
@@ -196,10 +253,10 @@ export function registerReaderContextPanel() {
         // - lock active + panel shows different global conversation
         // - lock cleared + panel still in global mode (need to switch back to paper)
         const lockStale =
-          (lockedKey !== null && (
-            currentKind === "paper" ||
-            (currentItemKey !== undefined && currentItemKey !== String(lockedKey))
-          )) ||
+          (lockedKey !== null &&
+            (currentKind === "paper" ||
+              (currentItemKey !== undefined &&
+                currentItemKey !== String(lockedKey)))) ||
           (lockedKey === null && currentKind === "global" && !needsFullRender);
 
         // Detect if the active item has changed (e.g. user switched reader tabs).
@@ -238,8 +295,7 @@ export function registerReaderContextPanel() {
             (newContextSourceIsSynchronous &&
               currentContextItemKey !== newContextItemKey));
         const systemChanged =
-          !needsFullRender &&
-          currentSystem !== expectedSystem;
+          !needsFullRender && currentSystem !== expectedSystem;
 
         if (
           needsFullRender ||
@@ -248,6 +304,7 @@ export function registerReaderContextPanel() {
           contextSourceChanged ||
           systemChanged
         ) {
+          clearCompletedPanelLifecycleSignature(body);
           // Build UI synchronously so panel data attributes (basePaperItemId,
           // conversationKind, etc.) are immediately correct.  The reader popup
           // "Add Text" path reads these attributes to decide paper-mismatch —
@@ -271,7 +328,8 @@ export function registerReaderContextPanel() {
           // Defer conversation loading and chat rendering
           void (async () => {
             try {
-              if (resolvedState.item) await ensureConversationLoaded(resolvedState.item);
+              if (resolvedState.item)
+                await ensureConversationLoaded(resolvedState.item);
               if (isStandaloneWindowActive()) return;
               refreshChat(body, resolvedState.item);
             } catch (err) {
@@ -287,19 +345,30 @@ export function registerReaderContextPanel() {
           panelRoot.dataset.rawContextItemId = rawContextItemKey;
           void retainClaudeRuntimeForBody(body, resolvedState.item);
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     },
-    onAsyncRender: async ({ body, item, setEnabled, tabType }) => {
+    onAsyncRender: async ({ body, item, setEnabled }) => {
       setEnabled(true);
       // Skip full render when standalone window is active
       if (isStandaloneWindowActive()) return;
-      const thisGeneration = ++renderGeneration;
-      ztoolkit.log(
-        `LLM: panel asyncRender tabType=${tabType} hasItem=${Boolean(item)} gen=${thisGeneration}`,
-      );
 
       const resolvedInitialState = resolveInitialPanelItemState(item);
       const resolvedItem = resolvedInitialState.item;
+      const lifecycleSignature = buildPanelLifecycleSignature(
+        item || null,
+        resolvedItem,
+      );
+      if (
+        hasCompletedPanelLifecycleSignature(body, lifecycleSignature, {
+          conversationLoaded: isPanelConversationLoaded(resolvedItem),
+        })
+      ) {
+        return;
+      }
+
+      const thisGeneration = ++renderGeneration;
 
       // If onRender already did the synchronous buildUI + setupHandlers for
       // this render cycle, skip the duplicate work.  We still run the
@@ -331,13 +400,18 @@ export function registerReaderContextPanel() {
       // or if the standalone window was opened during the await.
       if (renderGeneration !== thisGeneration) return;
       if (isStandaloneWindowActive()) return;
-      await renderShortcuts(body, resolvedItem, resolveShortcutMode(resolvedItem));
+      await renderShortcuts(
+        body,
+        resolvedItem,
+        resolveShortcutMode(resolvedItem),
+      );
       if (renderGeneration !== thisGeneration) return;
       if (isStandaloneWindowActive()) return;
       if (!syncAlreadyRendered) {
         setupHandlers(body, item);
       }
       refreshChat(body, resolvedItem);
+      markCompletedPanelLifecycleSignature(body, lifecycleSignature);
       // Defer content extraction so the panel becomes interactive sooner.
       const activeContextItem = getActiveContextAttachmentFromTabs();
       if (activeContextItem) {
@@ -561,9 +635,9 @@ export function registerReaderSelectionTracking() {
                     ? activeCodexConversationModeByLibrary.get(
                         buildCodexLibraryStateKey(panelLibraryId),
                       )
-                  : panelLibraryId && conversationSystem === "upstream"
-                    ? activeConversationModeByLibrary.get(panelLibraryId)
-                    : null;
+                    : panelLibraryId && conversationSystem === "upstream"
+                      ? activeConversationModeByLibrary.get(panelLibraryId)
+                      : null;
               const panelGlobalConversationKey =
                 panelModeLock === "global" && panelLibraryId
                   ? Math.floor(
@@ -576,7 +650,9 @@ export function registerReaderSelectionTracking() {
                             ? activeCodexGlobalConversationByLibrary.get(
                                 buildCodexLibraryStateKey(panelLibraryId),
                               )
-                          : activeGlobalConversationByLibrary.get(panelLibraryId)) || 0,
+                            : activeGlobalConversationByLibrary.get(
+                                panelLibraryId,
+                              )) || 0,
                       ),
                     )
                   : 0;
@@ -685,9 +761,10 @@ export function registerReaderSelectionTracking() {
             // Paper mode: resolve the conversation key from the reader's
             // paper item via resolveInitialPanelItemState + getConversationKey.
             // This correctly handles portal keys (multi-conversation papers).
-            const readerItem = readerPaperItemID > 0
-              ? Zotero.Items.get(readerPaperItemID) || null
-              : null;
+            const readerItem =
+              readerPaperItemID > 0
+                ? Zotero.Items.get(readerPaperItemID) || null
+                : null;
             if (readerItem) {
               const resolved = resolveInitialPanelItemState(readerItem, {
                 conversationSystem: bestState.conversationSystem,
@@ -747,8 +824,13 @@ export function registerReaderSelectionTracking() {
               const activeRoot = (activeBody as Element).querySelector(
                 "#llm-main",
               ) as HTMLDivElement | null;
-              if (Number(activeRoot?.dataset?.itemId || 0) === conversationKey) {
-                applySelectedTextPreview(activeBody as Element, conversationKey);
+              if (
+                Number(activeRoot?.dataset?.itemId || 0) === conversationKey
+              ) {
+                applySelectedTextPreview(
+                  activeBody as Element,
+                  conversationKey,
+                );
                 refreshedPanels += 1;
                 break;
               }
@@ -968,7 +1050,9 @@ function getActiveNoteItemFromWindow(
         ? ""
         : `${tabs.selectedID}`;
     const activeTab = Array.isArray(tabs?._tabs)
-      ? tabs._tabs.find((tab: Record<string, unknown>) => `${tab?.id || ""}` === selectedId)
+      ? tabs._tabs.find(
+          (tab: Record<string, unknown>) => `${tab?.id || ""}` === selectedId,
+        )
       : null;
     const data = (activeTab?.data || {}) as Record<string, unknown>;
     const candidateIds = [
@@ -991,9 +1075,11 @@ function getActiveNoteItemFromWindow(
   }
 
   try {
-    const pane = (win as unknown as {
-      ZoteroPane?: { getSelectedItems?: () => Zotero.Item[] };
-    }).ZoteroPane;
+    const pane = (
+      win as unknown as {
+        ZoteroPane?: { getSelectedItems?: () => Zotero.Item[] };
+      }
+    ).ZoteroPane;
     const selectedItems = pane?.getSelectedItems?.() || [];
     const noteItem = selectedItems.find((item: Zotero.Item) =>
       (item as any)?.isNote?.(),
@@ -1062,8 +1148,12 @@ function refreshTrackedNoteEditingSelection(
     if (!noteItem) return 0;
     try {
       const parentId = Number((noteItem as any).parentItemID ?? 0);
-      return Number.isFinite(parentId) && parentId > 0 ? Math.floor(parentId) : 0;
-    } catch { return 0; }
+      return Number.isFinite(parentId) && parentId > 0
+        ? Math.floor(parentId)
+        : 0;
+    } catch {
+      return 0;
+    }
   })();
 
   if (nextNoteId === 0 && tracker.lastNoteId === 0) {
@@ -1085,7 +1175,9 @@ function refreshTrackedNoteEditingSelection(
     ) {
       return;
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 
   const nextSelectionText = noteItem
     ? collectAccessibleDocuments(win.document).reduce((found, doc) => {
@@ -1113,18 +1205,18 @@ function refreshTrackedNoteEditingSelection(
     tracker.lastNoteId > 0 &&
     (tracker.lastNoteId !== nextNoteId || !nextSelectionText)
   ) {
-    if (
-      syncSelectedTextContextForSource(
-        tracker.lastNoteId,
-        "",
-        "note-edit",
-      )
-    ) {
+    if (syncSelectedTextContextForSource(tracker.lastNoteId, "", "note-edit")) {
       refreshPanelsForConversationKey(tracker.lastNoteId);
     }
     // Also clear from the parent paper panel (used by standalone window).
     if (tracker.lastParentPaperItemId > 0) {
-      if (syncSelectedTextContextForSource(tracker.lastParentPaperItemId, "", "note-edit")) {
+      if (
+        syncSelectedTextContextForSource(
+          tracker.lastParentPaperItemId,
+          "",
+          "note-edit",
+        )
+      ) {
         refreshPanelsForConversationKey(tracker.lastParentPaperItemId);
       }
     }
@@ -1143,7 +1235,13 @@ function refreshTrackedNoteEditingSelection(
     // Also sync to the parent paper panel so the standalone window (which is
     // keyed to the parent paper item, not the note) shows the editing chip.
     if (nextParentPaperItemId > 0) {
-      if (syncSelectedTextContextForSource(nextParentPaperItemId, nextSelectionText, "note-edit")) {
+      if (
+        syncSelectedTextContextForSource(
+          nextParentPaperItemId,
+          nextSelectionText,
+          "note-edit",
+        )
+      ) {
         refreshPanelsForConversationKey(nextParentPaperItemId);
       }
     }
@@ -1190,7 +1288,11 @@ export function registerNoteEditingSelectionTracking(
       if (!tracker) return;
       win.clearInterval(tracker.intervalId);
       if (debounceTimer !== null) clearTimeout(debounceTimer);
-      win.document.removeEventListener("selectionchange", debouncedRefresh, true);
+      win.document.removeEventListener(
+        "selectionchange",
+        debouncedRefresh,
+        true,
+      );
       win.document.removeEventListener("mouseup", debouncedRefresh, true);
       win.document.removeEventListener("keyup", debouncedRefresh, true);
       delete trackedWindow.__llmNoteEditingSelectionTracking;

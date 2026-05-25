@@ -1,6 +1,11 @@
 import { assert } from "chai";
 import { createCodexGlobalPortalItem } from "../src/codexAppServer/portal";
-import { resolveContextSourceItem } from "../src/modules/contextPanel/contextResolution";
+import {
+  getActiveReaderForSelectedTab,
+  getLastKnownSelectedTabId,
+  refreshLastKnownSelectedTabId,
+  resolveContextSourceItem,
+} from "../src/modules/contextPanel/contextResolution";
 
 describe("context resolution scope boundaries", function () {
   const globalScope = globalThis as any;
@@ -43,5 +48,31 @@ describe("context resolution scope boundaries", function () {
 
     assert.equal(resolved.contextItem, null);
     assert.equal(resolved.sourceKind, "none");
+  });
+
+  it("refreshes the selected tab cache without resolving the reader", function () {
+    let readerLookups = 0;
+    globalScope.Zotero = {
+      Tabs: {
+        selectedID: "reader-cache-test",
+        selectedType: "reader",
+        _tabs: [],
+      },
+      Reader: {
+        getByTabID: () => {
+          readerLookups += 1;
+          return { id: "reader-cache-test" };
+        },
+      },
+    };
+
+    assert.equal(refreshLastKnownSelectedTabId(), "reader-cache-test");
+    assert.equal(getLastKnownSelectedTabId(), "reader-cache-test");
+    assert.equal(readerLookups, 0);
+
+    const reader = getActiveReaderForSelectedTab();
+
+    assert.deepEqual(reader, { id: "reader-cache-test" });
+    assert.equal(readerLookups, 1);
   });
 });

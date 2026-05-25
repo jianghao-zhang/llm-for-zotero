@@ -6279,17 +6279,21 @@ label.llm-search-results-item:hover {
 }
 
 .llm-paper-picker-selected {
+  --llm-paper-picker-selection-gutter: 18px;
   opacity: 0.5;
 }
 
-.llm-paper-picker-selected::after {
+.llm-paper-picker-selected::before {
   content: "\2713";
   position: absolute;
-  right: 8px;
+  left: var(--llm-paper-picker-depth-indent, 9px);
   top: 50%;
   transform: translateY(-50%);
+  width: 12px;
+  text-align: center;
   font-size: var(--llm-fs-12);
   color: var(--fill-secondary);
+  pointer-events: none;
 }
 
 .llm-paper-picker-collection-add-btn {
@@ -6313,6 +6317,8 @@ label.llm-search-results-item:hover {
 }
 
 .llm-paper-picker-collection-row:hover .llm-paper-picker-collection-add-btn,
+.llm-paper-picker-collection-row.llm-paper-picker-selected
+  .llm-paper-picker-collection-add-btn,
 .llm-paper-picker-item[aria-selected="true"]
   .llm-paper-picker-collection-add-btn {
   opacity: 1;
