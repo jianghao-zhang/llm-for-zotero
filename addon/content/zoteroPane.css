@@ -6030,15 +6030,44 @@ label.llm-search-results-item:hover {
   transform: translateY(-1px);
 }
 
-/* Picker item-type icon (emoji) */
+/* Picker item-type icon */
 .llm-paper-picker-item-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex-shrink: 0;
-  width: 1.1em;
-  font-size: var(--llm-fs-12);
-  line-height: 1;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  background-color: var(--fill-secondary);
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: contain;
+}
+
+.llm-paper-picker-icon-paper {
+  mask-image: url("icons/action-paper.svg");
+  -webkit-mask-image: url("icons/action-paper.svg");
+}
+
+.llm-paper-picker-icon-pdf {
+  mask-image: url("icons/action-pdf-page.svg");
+  -webkit-mask-image: url("icons/action-pdf-page.svg");
+}
+
+.llm-paper-picker-icon-note {
+  mask-image: url("icons/action-note.svg");
+  -webkit-mask-image: url("icons/action-note.svg");
+}
+
+.llm-paper-picker-icon-image {
+  mask-image: url("icons/action-image.svg");
+  -webkit-mask-image: url("icons/action-image.svg");
+}
+
+.llm-paper-picker-icon-file {
+  mask-image: url("icons/action-file.svg");
+  -webkit-mask-image: url("icons/action-file.svg");
 }
 
 .llm-paper-context-chip.llm-paper-context-chip-full

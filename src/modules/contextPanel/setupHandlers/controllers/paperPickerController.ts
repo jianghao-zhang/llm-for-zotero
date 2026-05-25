@@ -37,6 +37,7 @@ import { resolvePaperContextDisplayMetadata } from "./composeContextController";
 type StatusLevel = "ready" | "warning" | "error";
 type ActiveSlashToken = PaperSearchSlashToken;
 type PaperPickerMode = "browse" | "search" | "empty";
+type PickerIconName = "paper" | "pdf" | "note" | "image" | "file";
 type PaperPickerRow =
   | {
       kind: "collection";
@@ -206,11 +207,11 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
 
   function resolvePickerKindIcon(
     kind: "pdf" | "note" | "figure" | "other",
-  ): string {
-    if (kind === "pdf") return "📚";
-    if (kind === "note") return "📝";
-    if (kind === "figure") return "🖼";
-    return "📎";
+  ): PickerIconName {
+    if (kind === "pdf") return "pdf";
+    if (kind === "note") return "note";
+    if (kind === "figure") return "image";
+    return "file";
   }
 
   function resolvePickerKindLabel(
@@ -222,24 +223,34 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     return "File";
   }
 
-  function resolveGroupIcon(group: PaperSearchGroupCandidate): string {
-    if (group.itemKind === "standalone-note") return "📝";
+  function resolveGroupIcon(group: PaperSearchGroupCandidate): PickerIconName {
+    if (group.itemKind === "standalone-note") return "note";
     const hasPdf = group.attachments.some(
       (attachment) => resolvePickerItemKind(attachment.contentType) === "pdf",
     );
-    if (hasPdf) return "📚";
+    if (hasPdf) return "paper";
     const hasFigure = group.attachments.some(
       (attachment) =>
         resolvePickerItemKind(attachment.contentType) === "figure",
     );
-    if (hasFigure) return "🖼";
+    if (hasFigure) return "image";
     const hasNote = group.attachments.some(
       (attachment) => resolvePickerItemKind(attachment.contentType) === "note",
     );
-    if (hasNote) return "📝";
-    if (group.attachments.length > 0) return "📎";
-    return "📄";
+    if (hasNote) return "note";
+    if (group.attachments.length > 0) return "file";
+    return "file";
   }
+
+  const createPickerIcon = (
+    ownerDoc: Document,
+    icon: PickerIconName,
+  ): HTMLSpanElement =>
+    createElement(
+      ownerDoc,
+      "span",
+      `llm-paper-picker-item-icon llm-paper-picker-icon-${icon}`,
+    );
 
   const getPaperPickerAttachmentDisplayTitle = (
     group: PaperSearchGroupCandidate,
@@ -930,8 +941,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           const selectedCollections =
             selectedCollectionContextCache.get(item.id) || [];
           isCollectionSelected = selectedCollections.some(
-            (collectionRef) =>
-              collectionRef.collectionId === row.collectionId,
+            (collectionRef) => collectionRef.collectionId === row.collectionId,
           );
           option.classList.toggle(
             "llm-paper-picker-selected",
@@ -1004,9 +1014,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           "llm-paper-picker-group-title-line",
         );
         titleLine.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-item-icon", {
-            textContent: resolveGroupIcon(group),
-          }),
+          createPickerIcon(ownerDoc, resolveGroupIcon(group)),
           createElement(ownerDoc, "span", "llm-paper-picker-title", {
             textContent: group.title,
             title: group.title,
@@ -1063,9 +1071,7 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
           "llm-paper-picker-attachment-main",
         );
         attachmentMain.append(
-          createElement(ownerDoc, "span", "llm-paper-picker-item-icon", {
-            textContent: resolvePickerKindIcon(attachmentKind),
-          }),
+          createPickerIcon(ownerDoc, resolvePickerKindIcon(attachmentKind)),
           attachmentText,
         );
         option.append(
