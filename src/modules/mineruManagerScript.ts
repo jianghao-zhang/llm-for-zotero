@@ -124,6 +124,20 @@ const MINERU_STATUS_DOT_COLORS: Record<MineruStatus, string> = {
   idle: "#d1d5db",
 };
 
+export const MINERU_PARSE_FILTERS_CHANGED_EVENT =
+  "llmforzotero:mineru-parse-filters-changed";
+
+export type MineruManagerVisibilityInput = Pick<
+  MineruItemEntry,
+  "availability" | "excluded"
+>;
+
+export function shouldShowMineruManagerItem(
+  item: MineruManagerVisibilityInput,
+): boolean {
+  return !item.excluded || item.availability !== "missing";
+}
+
 export type MineruManagerActionLabelInput = {
   batchRunning: boolean;
   batchPaused: boolean;
@@ -287,6 +301,22 @@ export async function registerMineruManagerScript(
     return item.availability !== "missing";
   }
 
+  function getManagerVisibleSourceItems(): MineruItemEntry[] {
+    return allItems.filter(shouldShowMineruManagerItem);
+  }
+
+  function pruneSelectedIdsToVisibleItems(): void {
+    const visibleIds = new Set(
+      getManagerVisibleSourceItems().map((item) => item.attachmentId),
+    );
+    for (const id of [...selectedIds]) {
+      if (!visibleIds.has(id)) selectedIds.delete(id);
+    }
+    if (lastClickedId !== null && !visibleIds.has(lastClickedId)) {
+      lastClickedId = null;
+    }
+  }
+
   function getAvailabilityDisplayStatus(item: MineruItemEntry): MineruStatus {
     return isMineruAvailable(item) ? "cached" : "idle";
   }
@@ -357,7 +387,7 @@ export async function registerMineruManagerScript(
   }
 
   function rebuildTagIndex(): void {
-    tagIndex = buildMineruTagIndex(allItems, {
+    tagIndex = buildMineruTagIndex(getManagerVisibleSourceItems(), {
       includeAutomatic: showAutomaticTags,
       getColor: resolveTagColor,
     });
@@ -388,7 +418,7 @@ export async function registerMineruManagerScript(
   }
 
   function getFolderScopedItems(): MineruItemEntry[] {
-    return filterMineruItemsForFolderAndTagView(allItems, {
+    return filterMineruItemsForFolderAndTagView(getManagerVisibleSourceItems(), {
       folderScope: activeCollectionId,
       folderItemIds: getActiveFolderItemIdSet(),
       tagScope: "all",
@@ -397,14 +427,17 @@ export async function registerMineruManagerScript(
   }
 
   function getCombinedFilteredItems(): MineruItemEntry[] {
-    return filterMineruItemsForFolderAndTagView(allItems, {
-      folderScope: activeCollectionId,
-      folderItemIds: getActiveFolderItemIdSet(),
-      tagScope,
-      selectedTags,
-      includeAutomatic: showAutomaticTags,
-      tagMatchMode,
-    });
+    return filterMineruItemsForFolderAndTagView(
+      getManagerVisibleSourceItems(),
+      {
+        folderScope: activeCollectionId,
+        folderItemIds: getActiveFolderItemIdSet(),
+        tagScope,
+        selectedTags,
+        includeAutomatic: showAutomaticTags,
+        tagMatchMode,
+      },
+    );
   }
 
   function getFilteredItemIds(): number[] {
@@ -562,7 +595,7 @@ export async function registerMineruManagerScript(
   function buildCollectionMaps(): void {
     directItemsMap.clear();
     recursiveItemsMap.clear();
-    for (const item of allItems) {
+    for (const item of getManagerVisibleSourceItems()) {
       for (const colId of item.collectionIds) {
         let s = directItemsMap.get(colId);
         if (!s) {
@@ -739,11 +772,14 @@ export async function registerMineruManagerScript(
     const inner = doc.createElement("div");
     inner.style.cssText = "min-width: max-content;";
     parent.appendChild(inner);
+    const visibleSourceItems = getManagerVisibleSourceItems();
     inner.appendChild(
-      createSidebarEntry(t("My Library"), "all", 0, allItems.length),
+      createSidebarEntry(t("My Library"), "all", 0, visibleSourceItems.length),
     );
     for (const root of collectionTree) renderSidebarNode(inner, root, 1);
-    const uc = allItems.filter((i) => i.collectionIds.length === 0).length;
+    const uc = visibleSourceItems.filter(
+      (i) => i.collectionIds.length === 0,
+    ).length;
     if (uc > 0)
       inner.appendChild(
         createSidebarEntry(t("Unfiled Items"), "unfiled", 0, uc),
@@ -2445,6 +2481,7 @@ export async function registerMineruManagerScript(
     }
     buildCollectionMaps();
     rebuildTagIndex();
+    pruneSelectedIdsToVisibleItems();
     const actionableItems = allItems.filter((i) => !i.excluded);
     localTotalCount = actionableItems.length;
     localProcessedCount = actionableItems.filter(isMineruAvailable).length;
@@ -2493,6 +2530,19 @@ export async function registerMineruManagerScript(
   const debouncedRefresh = () => {
     scheduleRefresh();
   };
+  const handleParseFiltersChanged = () => {
+    scheduleRefresh(150);
+  };
+  win.addEventListener(
+    MINERU_PARSE_FILTERS_CHANGED_EVENT,
+    handleParseFiltersChanged,
+  );
+  win.addEventListener("unload", () =>
+    win.removeEventListener(
+      MINERU_PARSE_FILTERS_CHANGED_EVENT,
+      handleParseFiltersChanged,
+    ),
+  );
 
   let notifierId: string | null = null;
   try {

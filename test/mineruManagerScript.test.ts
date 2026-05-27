@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   getMineruManagerActionLabels,
   getMineruParentDisplayStatus,
+  shouldShowMineruManagerItem,
   type MineruParentStatusChild,
 } from "../src/modules/mineruManagerScript";
 
@@ -17,6 +18,35 @@ function child(
 }
 
 describe("mineruManagerScript", function () {
+  describe("shouldShowMineruManagerItem", function () {
+    it("hides uncached rows skipped by parsing filters", function () {
+      assert.isFalse(
+        shouldShowMineruManagerItem({
+          excluded: true,
+          availability: "missing",
+        }),
+      );
+    });
+
+    it("keeps cached skipped rows visible for cache management", function () {
+      assert.isTrue(
+        shouldShowMineruManagerItem({
+          excluded: true,
+          availability: "local",
+        }),
+      );
+    });
+
+    it("keeps normal uncached rows visible", function () {
+      assert.isTrue(
+        shouldShowMineruManagerItem({
+          excluded: false,
+          availability: "missing",
+        }),
+      );
+    });
+  });
+
   describe("getMineruManagerActionLabels", function () {
     it("shows filtered labels for folder or tag scopes", function () {
       const labels = getMineruManagerActionLabels({

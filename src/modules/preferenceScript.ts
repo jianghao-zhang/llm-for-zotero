@@ -100,7 +100,10 @@ import {
   testMineruLocalConnection,
   testProxyConnection,
 } from "../utils/mineruClient";
-import { registerMineruManagerScript } from "./mineruManagerScript";
+import {
+  MINERU_PARSE_FILTERS_CHANGED_EVENT,
+  registerMineruManagerScript,
+} from "./mineruManagerScript";
 import {
   cleanSyncedMineruPackages,
   repairMineruSyncPackages,
@@ -602,6 +605,11 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   }
 
   const doc = _window.document;
+  const notifyMineruParseFiltersChanged = () => {
+    _window.dispatchEvent(
+      new _window.CustomEvent(MINERU_PARSE_FILTERS_CHANGED_EVENT),
+    );
+  };
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // ── Translate static XHTML text ────────────────────────────────
@@ -3729,6 +3737,7 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
           .map((s) => s.trim())
           .filter(Boolean);
         setMineruExcludePatterns(parsed);
+        notifyMineruParseFiltersChanged();
       }, 500);
     });
   }
