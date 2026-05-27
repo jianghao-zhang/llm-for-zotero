@@ -311,6 +311,11 @@ import {
   resolveShortcutMode,
 } from "./portalScope";
 import { getPanelDomRefs } from "./setupHandlers/domRefs";
+import {
+  chooseAutoLoadedContextPanelItem,
+  chooseCurrentPaperBaseItemForMode,
+  isAutoLoadedSnapshotForCurrentPaper,
+} from "./paperContextPreloadIdentity";
 import type { SetupHandlersContext } from "./setupHandlers/types";
 import { observeElementDisconnected } from "./setupHandlers/lifecycle";
 import {
@@ -547,6 +552,12 @@ export function setupHandlers(
   });
   const rawPanelItem =
     activeContextPanelRawItems.get(body) || initialItem || null;
+  const resolveLiveRawPanelItem = (): Zotero.Item | null => {
+    if (activeContextPanelRawItems.has(body)) {
+      return activeContextPanelRawItems.get(body) || null;
+    }
+    return rawPanelItem;
+  };
   let item = resolvedInitialState.item;
   let basePaperItem =
     resolvedInitialState.basePaperItem ||
@@ -1210,6 +1221,20 @@ export function setupHandlers(
     const parentItem = Zotero.Items.get(noteSession.parentItemId) || null;
     return parentItem?.isRegularItem?.() ? parentItem : null;
   };
+  const resolveRegularPaperBaseItem = (
+    candidate: Zotero.Item | null | undefined,
+  ): Zotero.Item | null => {
+    const resolved = resolveConversationBaseItem(candidate);
+    return resolved?.isRegularItem?.() ? resolved : null;
+  };
+  const resolveActiveReaderPaperBaseItem = (): Zotero.Item | null => {
+    const activeContext = getActiveContextAttachmentFromTabs();
+    const resolvedFromContext =
+      activeContext && activeContext.parentID
+        ? Zotero.Items.get(activeContext.parentID) || null
+        : null;
+    return resolvedFromContext?.isRegularItem?.() ? resolvedFromContext : null;
+  };
   const resolveCurrentPaperBaseItem = (): Zotero.Item | null => {
     const noteSession = resolveCurrentNoteSession();
     if (noteSession?.noteKind === "item") {
@@ -1222,20 +1247,18 @@ export function setupHandlers(
     if (noteSession) {
       return null;
     }
-    if (basePaperItem?.isRegularItem?.()) return basePaperItem;
-    const resolvedFromItem = resolveConversationBaseItem(item);
-    if (resolvedFromItem?.isRegularItem?.()) {
-      basePaperItem = resolvedFromItem;
-      return resolvedFromItem;
-    }
-    const activeContext = getActiveContextAttachmentFromTabs();
-    const resolvedFromContext =
-      activeContext && activeContext.parentID
-        ? Zotero.Items.get(activeContext.parentID) || null
-        : null;
-    if (resolvedFromContext?.isRegularItem?.()) {
-      basePaperItem = resolvedFromContext;
-      return resolvedFromContext;
+    const resolvedBaseItem = chooseCurrentPaperBaseItemForMode({
+      isGlobalMode: isGlobalMode(),
+      liveRawBaseItem: resolveRegularPaperBaseItem(resolveLiveRawPanelItem()),
+      activeReaderBaseItem: resolveActiveReaderPaperBaseItem(),
+      cachedBasePaperItem: basePaperItem?.isRegularItem?.()
+        ? basePaperItem
+        : null,
+      currentItemBaseItem: resolveRegularPaperBaseItem(item),
+    });
+    if (resolvedBaseItem?.isRegularItem?.()) {
+      basePaperItem = resolvedBaseItem;
+      return resolvedBaseItem;
     }
     return null;
   };
@@ -2302,6 +2325,8 @@ export function setupHandlers(
 
   let autoLoadedContextSourceItemSnapshot: Zotero.Item | null | undefined;
   let autoLoadedPaperContextSnapshot: PaperContextRef | null | undefined;
+  let autoLoadedPaperContextOwnerItemId: number | null = null;
+  let autoLoadedPaperContextGeneration = 0;
   let autoLoadedPaperContextPromise: Promise<PaperContextRef | null> | null =
     null;
   let requestAutoLoadedPaperContextRefresh: (() => void) | null = null;
@@ -2327,10 +2352,48 @@ export function setupHandlers(
       panelRoot.dataset.contextItemId = "";
       return;
     }
+    const ownerItemId = Math.floor(
+      Number(paperContext?.itemId || resolveCurrentPaperBaseItem()?.id || 0),
+    );
+    autoLoadedPaperContextOwnerItemId =
+      Number.isFinite(ownerItemId) && ownerItemId > 0 ? ownerItemId : null;
     autoLoadedContextSourceItemSnapshot = contextSourceItem;
     autoLoadedPaperContextSnapshot = paperContext;
     writeAutoLoadedContextItemId(contextSourceItem, paperContext);
     requestAutoLoadedPaperContextRefresh?.();
+  };
+
+  const clearAutoLoadedContextSnapshot = () => {
+    autoLoadedPaperContextGeneration += 1;
+    autoLoadedContextSourceItemSnapshot = undefined;
+    autoLoadedPaperContextSnapshot = undefined;
+    autoLoadedPaperContextOwnerItemId = null;
+    autoLoadedPaperContextPromise = null;
+    panelRoot.dataset.contextItemId = "";
+  };
+
+  const getCurrentAutoLoadedPaperOwnerItemId = (): number | null => {
+    if (!item || isGlobalMode()) return null;
+    const ownerItemId = Math.floor(
+      Number(resolveCurrentPaperBaseItem()?.id || 0),
+    );
+    return Number.isFinite(ownerItemId) && ownerItemId > 0 ? ownerItemId : null;
+  };
+
+  const isAutoLoadedContextSnapshotCurrent = (): boolean => {
+    return isAutoLoadedSnapshotForCurrentPaper({
+      currentOwnerItemId: getCurrentAutoLoadedPaperOwnerItemId(),
+      snapshotOwnerItemId: autoLoadedPaperContextOwnerItemId,
+    });
+  };
+
+  const resolveAutoLoadedContextPanelItem = (): Zotero.Item | null => {
+    return chooseAutoLoadedContextPanelItem({
+      isGlobalMode: isGlobalMode(),
+      currentItem: item,
+      currentPaperBaseItem: resolveCurrentPaperBaseItem(),
+      liveRawPanelItem: resolveLiveRawPanelItem(),
+    });
   };
 
   const resolveAutoLoadedContextSourceItemSync = (): Zotero.Item | null => {
@@ -2347,7 +2410,7 @@ export function setupHandlers(
       return null;
     }
     if (isGlobalMode()) return null;
-    const sourceItem = rawPanelItem || item;
+    const sourceItem = resolveAutoLoadedContextPanelItem();
     const activeReaderAttachment = getActiveContextAttachmentFromTabs();
     if (activeReaderAttachment) return activeReaderAttachment;
     if (
@@ -2365,11 +2428,14 @@ export function setupHandlers(
       return null;
     }
     if (autoLoadedPaperContextSnapshot !== undefined) {
-      writeAutoLoadedContextItemId(
-        autoLoadedContextSourceItemSnapshot ?? null,
-        autoLoadedPaperContextSnapshot,
-      );
-      return autoLoadedPaperContextSnapshot;
+      if (isAutoLoadedContextSnapshotCurrent()) {
+        writeAutoLoadedContextItemId(
+          autoLoadedContextSourceItemSnapshot ?? null,
+          autoLoadedPaperContextSnapshot,
+        );
+        return autoLoadedPaperContextSnapshot;
+      }
+      clearAutoLoadedContextSnapshot();
     }
     return resolvePaperContextRefFromAttachment(
       resolveAutoLoadedContextSourceItemSync(),
@@ -2384,21 +2450,28 @@ export function setupHandlers(
         return null;
       }
       if (autoLoadedPaperContextSnapshot !== undefined) {
-        writeAutoLoadedContextItemId(
-          autoLoadedContextSourceItemSnapshot ?? null,
-          autoLoadedPaperContextSnapshot,
-        );
-        return autoLoadedPaperContextSnapshot;
+        if (isAutoLoadedContextSnapshotCurrent()) {
+          writeAutoLoadedContextItemId(
+            autoLoadedContextSourceItemSnapshot ?? null,
+            autoLoadedPaperContextSnapshot,
+          );
+          return autoLoadedPaperContextSnapshot;
+        }
+        clearAutoLoadedContextSnapshot();
       }
       if (autoLoadedPaperContextPromise) return autoLoadedPaperContextPromise;
+      const requestGeneration = autoLoadedPaperContextGeneration;
       autoLoadedPaperContextPromise = (async () => {
-        const contextSource = await resolveContextSourceItemAsync(
-          rawPanelItem || item,
-        );
+        const panelItem = resolveAutoLoadedContextPanelItem();
+        if (!panelItem) return null;
+        const contextSource = await resolveContextSourceItemAsync(panelItem);
         const contextSourceItem = contextSource.contextItem;
         const paperContext =
           resolvePaperContextRefFromAttachment(contextSourceItem);
-        if (panelRoot.dataset.handlersAttached === thisGen) {
+        if (
+          panelRoot.dataset.handlersAttached === thisGen &&
+          requestGeneration === autoLoadedPaperContextGeneration
+        ) {
           setAutoLoadedContextSnapshot(contextSourceItem, paperContext);
         }
         return paperContext;
@@ -2415,6 +2488,19 @@ export function setupHandlers(
       await resolveAutoLoadedPaperContextAsync();
       return autoLoadedContextSourceItemSnapshot ?? null;
     };
+
+  const refreshAutoLoadedPaperContextForCurrentItem = () => {
+    clearAutoLoadedContextSnapshot();
+    if (!item || isGlobalMode()) return;
+    const contextSourceItem = resolveAutoLoadedContextSourceItemSync();
+    const paperContext =
+      resolvePaperContextRefFromAttachment(contextSourceItem);
+    if (paperContext) {
+      setAutoLoadedContextSnapshot(contextSourceItem, paperContext);
+      return;
+    }
+    void resolveAutoLoadedPaperContextAsync();
+  };
 
   let paperChipMenu: HTMLDivElement | null = null;
   let paperChipMenuAnchor: HTMLDivElement | null = null;
@@ -4053,6 +4139,7 @@ export function setupHandlers(
     resolveCurrentPaperBaseItem,
     getManualPaperContextsForItem,
     resolveAutoLoadedPaperContext,
+    refreshAutoLoadedPaperContextForCurrentItem,
     persistDraftInputForCurrentConversation,
     restoreDraftInputForCurrentConversation,
     syncConversationIdentity,
@@ -5310,7 +5397,7 @@ export function setupHandlers(
   };
 
   // Initialize preview state
-  void resolveAutoLoadedPaperContextAsync();
+  refreshAutoLoadedPaperContextForCurrentItem();
   updatePaperPreviewPreservingScroll();
   updateFilePreviewPreservingScroll();
   updateImagePreviewPreservingScroll();

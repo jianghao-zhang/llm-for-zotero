@@ -244,6 +244,7 @@ export type HistoryLifecycleControllerDeps = {
   resolveCurrentPaperBaseItem: () => Zotero.Item | null;
   getManualPaperContextsForItem: (itemId: number, auto: any) => any[];
   resolveAutoLoadedPaperContext: () => any;
+  refreshAutoLoadedPaperContextForCurrentItem: () => void;
   persistDraftInputForCurrentConversation: () => void;
   restoreDraftInputForCurrentConversation: () => void;
   syncConversationIdentity: () => void;
@@ -366,6 +367,8 @@ export function createHistoryLifecycleController(
   const resolveCurrentPaperBaseItem = deps.resolveCurrentPaperBaseItem;
   const getManualPaperContextsForItem = deps.getManualPaperContextsForItem;
   const resolveAutoLoadedPaperContext = deps.resolveAutoLoadedPaperContext;
+  const refreshAutoLoadedPaperContextForCurrentItem =
+    deps.refreshAutoLoadedPaperContextForCurrentItem;
   const persistDraftInputForCurrentConversation =
     deps.persistDraftInputForCurrentConversation;
   const restoreDraftInputForCurrentConversation =
@@ -2158,6 +2161,7 @@ export function createHistoryLifecycleController(
       setCurrentItem(nextItem as any);
     }
     syncConversationIdentity();
+    refreshAutoLoadedPaperContextForCurrentItem();
     void renderShortcuts(body, item as Zotero.Item, resolveShortcutMode(item));
     if (isClaudeConversationSystem()) {
       rememberClaudeConversationSelection({
