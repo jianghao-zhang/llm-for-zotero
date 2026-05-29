@@ -34,6 +34,124 @@ function getAttachmentFilename(
   );
 }
 
+function getZoteroItemsApi(): {
+  get?: (itemId: number) => Zotero.Item | null | undefined;
+} | null {
+  if (typeof Zotero === "undefined") return null;
+  return (
+    (
+      Zotero as unknown as {
+        Items?: { get?: (itemId: number) => Zotero.Item | null | undefined };
+      }
+    ).Items || null
+  );
+}
+
+function getItemFieldText(
+  item: Zotero.Item | null | undefined,
+  field: string,
+): string {
+  if (!item) return "";
+  try {
+    return normalizeText(String(item.getField(field) || ""));
+  } catch (_err) {
+    return "";
+  }
+}
+
+function getFirstCreatorText(item: Zotero.Item | null | undefined): string {
+  if (!item) return "";
+  return normalizeText(
+    String(
+      getItemFieldText(item, "firstCreator") ||
+        (item as Zotero.Item).firstCreator ||
+        "",
+    ),
+  );
+}
+
+function getYearText(item: Zotero.Item | null | undefined): string {
+  if (!item) return "";
+  const rawYear = normalizeText(
+    String(
+      getItemFieldText(item, "year") ||
+        getItemFieldText(item, "date") ||
+        getItemFieldText(item, "issued") ||
+      "",
+    ),
+  );
+  return extractYearValue(rawYear) || rawYear;
+}
+
+type PaperContextDisplayFields = {
+  title: string;
+  attachmentTitle?: string;
+  citationKey?: string;
+  firstCreator?: string;
+  year?: string;
+};
+
+export type PaperContextDisplayCache = Map<
+  string,
+  PaperContextDisplayFields | null
+>;
+
+function getPaperContextDisplayCacheKey(
+  paperContext: Pick<PaperContextRef, "itemId" | "contextItemId">,
+): string | null {
+  const itemId = Math.floor(Number(paperContext.itemId));
+  const contextItemId = Math.floor(Number(paperContext.contextItemId));
+  if (
+    !Number.isFinite(itemId) ||
+    itemId <= 0 ||
+    !Number.isFinite(contextItemId) ||
+    contextItemId <= 0
+  ) {
+    return null;
+  }
+  return `${itemId}:${contextItemId}`;
+}
+
+function resolveLivePaperContextDisplayFields(
+  paperContext: PaperContextRef,
+): PaperContextDisplayFields | null {
+  const itemId = Math.floor(Number(paperContext.itemId));
+  const contextItemId = Math.floor(Number(paperContext.contextItemId));
+  if (
+    !Number.isFinite(itemId) ||
+    itemId <= 0 ||
+    !Number.isFinite(contextItemId) ||
+    contextItemId <= 0
+  ) {
+    return null;
+  }
+
+  const items = getZoteroItemsApi();
+  const item = items?.get?.(itemId) || null;
+  const contextItem = items?.get?.(contextItemId) || null;
+  const contextIsSameItem = itemId === contextItemId;
+  if (!item?.isRegularItem?.()) return null;
+  if (!contextIsSameItem && !contextItem?.isAttachment?.()) return null;
+  if (
+    contextItem?.isAttachment?.() &&
+    Math.floor(Number(contextItem.parentID || 0)) !== itemId
+  ) {
+    return null;
+  }
+
+  const title = getItemFieldText(item, "title") || `Paper ${itemId}`;
+  const attachmentTitle = contextItem?.isAttachment?.()
+    ? getAttachmentDisplayTitle(contextItem)
+    : "";
+  return {
+    title,
+    attachmentTitle: attachmentTitle || undefined,
+    citationKey: getItemFieldText(item, "citationKey") || undefined,
+    firstCreator: getFirstCreatorText(item) || undefined,
+    year: getYearText(item) || undefined,
+  };
+}
+
 export function isTextLikeAttachmentSourceMode(
   mode: PaperContentSourceMode | undefined | null,
 ): mode is TextAttachmentSourceMode {
@@ -50,6 +168,28 @@ export function formatAttachmentSourceType(
   if (mode === "txt") return "TXT attachment";
   if (mode === "docx") return "DOCX attachment";
   return "Attachment";
+}
+
+export function resolvePaperContextDisplayRef(
+  paperContext: PaperContextRef,
+  cache?: PaperContextDisplayCache,
+): PaperContextRef {
+  const displayRef: PaperContextRef = { ...paperContext };
+  const cacheKey = getPaperContextDisplayCacheKey(paperContext);
+  let displayFields: PaperContextDisplayFields | null | undefined;
+  if (cacheKey && cache?.has(cacheKey)) {
+    displayFields = cache.get(cacheKey) || null;
+  } else {
+    displayFields = resolveLivePaperContextDisplayFields(paperContext);
+    if (cacheKey && cache) {
+      cache.set(cacheKey, displayFields);
+    }
+  }
+  if (!displayFields) return displayRef;
+  return {
+    ...displayRef,
+    ...displayFields,
+  };
 }
 
 export function formatPaperAttachmentTitle(

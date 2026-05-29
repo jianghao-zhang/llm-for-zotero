@@ -180,10 +180,11 @@ import { resolveMultiContextPlan } from "./multiContextPlanner";
 import { resolveContextImages, buildImageResolver } from "./mineruImages";
 import {
   formatPaperCitationLabel,
+  resolvePaperContextDisplayRef,
   resolvePaperContextRefFromAttachment,
   resolvePaperContextRefFromItem,
+  type PaperContextDisplayCache,
 } from "./paperAttribution";
-import { resolvePaperContextAttachmentLabel } from "./setupHandlers/controllers/composeContextController";
 import { buildPaperKey } from "./pdfContext";
 import { isTextOnlyModel, resolveProviderCapabilities } from "../../providers";
 import {
@@ -7505,6 +7506,11 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
   if (!chatBox) return;
   const doc = body.ownerDocument!;
   setPromptMenuTarget(null);
+  const paperContextDisplayCache: PaperContextDisplayCache = new Map();
+  const resolvePaperContextForCardDisplay = (
+    paperContext: PaperContextRef,
+  ): PaperContextRef =>
+    resolvePaperContextDisplayRef(paperContext, paperContextDisplayCache);
 
   if (!item) {
     chatBox.innerHTML = `
@@ -7895,6 +7901,9 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
       const paperContexts = normalizePaperContexts(msg.paperContexts);
       hasUserContext = hasUserContext || paperContexts.length > 0;
       if (paperContexts.length) {
+        const displayPaperContexts = paperContexts.map(
+          resolvePaperContextForCardDisplay,
+        );
         const papersBar = doc.createElement("button") as HTMLButtonElement;
         papersBar.type = "button";
         papersBar.className = "llm-user-papers-bar";
@@ -7908,7 +7917,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         const papersLabel = doc.createElement("span") as HTMLSpanElement;
         papersLabel.className = "llm-user-papers-label";
         papersLabel.textContent = formatPaperCountLabel(paperContexts.length);
-        papersLabel.title = paperContexts
+        papersLabel.title = displayPaperContexts
           .map((entry) => entry.title)
           .join("\n");
         papersBar.append(papersIcon, papersLabel);
@@ -7918,7 +7927,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
         papersExpanded = papersExpandedEl;
         const papersList = doc.createElement("div") as HTMLDivElement;
         papersList.className = "llm-user-papers-list";
-        for (const paperContext of paperContexts) {
+        for (const paperContext of displayPaperContexts) {
           const paperItem = doc.createElement("div") as HTMLDivElement;
           paperItem.className = "llm-user-papers-item";
 
@@ -7936,8 +7945,7 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           paperMeta.textContent = metaParts.join(" · ") || "Supplemental paper";
           paperMeta.title = paperMeta.textContent;
 
-          const attachmentTitle =
-            resolvePaperContextAttachmentLabel(paperContext);
+          const attachmentTitle = paperContext.attachmentTitle || "";
           const paperAttachment = doc.createElement("span") as HTMLSpanElement;
           paperAttachment.className = "llm-user-papers-item-attachment";
           paperAttachment.textContent = attachmentTitle;
