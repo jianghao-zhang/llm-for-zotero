@@ -50,6 +50,12 @@ export type HistorySearchPopupControllerDeps = {
   resolveScopeLabel?: (entry: ConversationHistoryEntry) => string;
 };
 
+export function shouldCloseHistorySearchPopupAfterSelection(
+  result: boolean | void,
+): boolean {
+  return result !== false;
+}
+
 export function sortHistorySearchPopupEntries(
   entries: readonly ConversationHistoryEntry[],
 ): ConversationHistoryEntry[] {
@@ -515,8 +521,10 @@ export function createHistorySearchPopupController(
     const entry = renderedEntriesByKey.get(conversationKey);
     if (!entry) return false;
     void Promise.resolve(deps.onSelect(entry))
-      .then(() => {
-        controller.close();
+      .then((result) => {
+        if (shouldCloseHistorySearchPopupAfterSelection(result)) {
+          controller.close();
+        }
       })
       .catch((err) => {
         log("LLM: history search popup selection failed", err);

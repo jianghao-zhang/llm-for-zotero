@@ -171,6 +171,18 @@ describe("conversation search index", function () {
         sql.includes(`FROM ${CONVERSATION_SEARCH_INDEX_TABLE}`) &&
         sql.includes("body_text AS bodyText"),
     );
+    const searchSql = searchQuery?.sql || "";
+    const tokenFilterSql = searchSql.slice(
+      searchSql.indexOf("user_turn_count > 0"),
+    );
+    assert.include(
+      tokenFilterSql,
+      "\n        OR (LOWER(COALESCE(title, '')) LIKE ?",
+    );
+    assert.notInclude(
+      tokenFilterSql,
+      "\n       AND (LOWER(COALESCE(title, '')) LIKE ?",
+    );
     assert.deepEqual(searchQuery?.params, [
       "codex",
       2,

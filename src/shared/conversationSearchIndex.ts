@@ -640,6 +640,7 @@ export async function searchConversationIndexWithStatus(params: {
   }
   const limit = normalizeOptionalLimit(params.limit);
   if (limit) queryParams.push(limit);
+  const tokenFilterSql = tokenClauses.join("\n        OR ");
   const rows = (await db.queryAsync(
     `SELECT conversation_id AS conversationID,
             legacy_conversation_key AS conversationKey,
@@ -655,7 +656,7 @@ export async function searchConversationIndexWithStatus(params: {
      WHERE system = ?
        AND library_id = ?
        AND user_turn_count > 0
-       AND ${tokenClauses.join("\n       AND ")}
+       AND (${tokenFilterSql})
      ORDER BY last_activity_at DESC, legacy_conversation_key DESC
      ${limit ? "LIMIT ?" : ""}`,
     queryParams,

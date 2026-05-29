@@ -10,6 +10,7 @@ import {
   HISTORY_SEARCH_POPUP_ITEM_TAG,
   mapHistorySearchPopupResults,
   resolveHistorySearchPopupThemeFromColors,
+  shouldCloseHistorySearchPopupAfterSelection,
   sortHistorySearchPopupEntries,
 } from "../src/modules/contextPanel/setupHandlers/controllers/historySearchPopupController";
 
@@ -57,6 +58,12 @@ describe("historySearchPopupController helpers", function () {
       HISTORY_SEARCH_POPUP_DELETE_CLASS,
       "llm-standalone-search-delete",
     );
+  });
+
+  it("keeps the popup open only when selection returns false", function () {
+    assert.equal(shouldCloseHistorySearchPopupAfterSelection(false), false);
+    assert.equal(shouldCloseHistorySearchPopupAfterSelection(true), true);
+    assert.equal(shouldCloseHistorySearchPopupAfterSelection(undefined), true);
   });
 
   it("sorts empty-query popup entries newest first", function () {
