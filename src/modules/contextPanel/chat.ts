@@ -183,6 +183,7 @@ import {
   resolvePaperContextRefFromAttachment,
   resolvePaperContextRefFromItem,
 } from "./paperAttribution";
+import { resolvePaperContextAttachmentLabel } from "./setupHandlers/controllers/composeContextController";
 import { buildPaperKey } from "./pdfContext";
 import { isTextOnlyModel, resolveProviderCapabilities } from "../../providers";
 import {
@@ -7935,7 +7936,17 @@ export function refreshChat(body: Element, item?: Zotero.Item | null) {
           paperMeta.textContent = metaParts.join(" · ") || "Supplemental paper";
           paperMeta.title = paperMeta.textContent;
 
+          const attachmentTitle =
+            resolvePaperContextAttachmentLabel(paperContext);
+          const paperAttachment = doc.createElement("span") as HTMLSpanElement;
+          paperAttachment.className = "llm-user-papers-item-attachment";
+          paperAttachment.textContent = attachmentTitle;
+          paperAttachment.title = attachmentTitle;
+
           paperItem.append(paperTitle, paperMeta);
+          if (attachmentTitle) {
+            paperItem.appendChild(paperAttachment);
+          }
           papersList.appendChild(paperItem);
         }
         papersExpandedEl.appendChild(papersList);

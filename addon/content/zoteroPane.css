@@ -3371,6 +3371,17 @@
   text-overflow: ellipsis;
 }
 
+.llm-user-papers-item-attachment {
+  display: block;
+  grid-column: 1;
+  color: var(--fill-tertiary);
+  font-size: var(--llm-fs-10);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .llm-user-papers-item-badge {
   grid-column: 2;
   grid-row: 1 / -1;

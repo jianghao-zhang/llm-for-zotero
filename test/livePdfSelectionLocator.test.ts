@@ -3,6 +3,7 @@ import {
   clearPageTextCache,
   lookupCachedQuoteLocationForAttachment,
   locateQuoteInPageTexts,
+  locateQuoteInLivePdfReader,
   locateSelectionInPageTexts,
   stripBoundaryEllipsis,
   splitQuoteAtEllipsis,
@@ -187,6 +188,35 @@ describe("livePdfSelectionLocator", function () {
     assert.equal(result.status, "ambiguous");
     assert.isNull(result.computedPageIndex);
     assert.deepEqual(result.matchedPageIndexes, [4, 9]);
+  });
+
+  it("preserves exact duplicate quote ambiguity without FindController", async function () {
+    clearPageTextCache();
+    const quote =
+      "evolution candidates have expected log probability strictly beyond the shell boundary";
+    const pageOne = `Main text says ${quote}.`;
+    const pageTwo = "Appendix setup with unrelated text.";
+    const pageThree = `Appendix restatement says ${quote}.`;
+    const restore = installPdfWorkerStub(async () => ({
+      text: pageOne + pageTwo + pageThree,
+      pageChars: [pageOne.length, pageTwo.length, pageThree.length],
+    }));
+    const reader = {
+      _item: { id: 707 },
+      itemID: 707,
+    };
+
+    try {
+      const result = await locateQuoteInLivePdfReader(reader, quote, {
+        skipFindController: true,
+      });
+
+      assert.equal(result.status, "ambiguous");
+      assert.isNull(result.computedPageIndex);
+      assert.deepEqual(result.matchedPageIndexes, [0, 2]);
+    } finally {
+      restore();
+    }
   });
 
   it("returns not-found for quotes with math fragments absent from the page text", function () {
@@ -381,6 +411,27 @@ describe("citation page cache warming", function () {
       restore();
     }
   });
+
+  it("does not cache hidden quote locations for exact duplicate quotes", async function () {
+    clearPageTextCache();
+    const quote =
+      "evolution candidates have expected log probability strictly beyond the shell boundary";
+    const pageOne = `Main text says ${quote}.`;
+    const pageTwo = `Appendix restatement says ${quote}.`;
+    const restore = installPdfWorkerStub(async () => ({
+      text: pageOne + pageTwo,
+      pageChars: [pageOne.length, pageTwo.length],
+    }));
+
+    try {
+      const location = await warmQuoteLocationCacheForAttachment(808, quote);
+
+      assert.isNull(location);
+      assert.isNull(lookupCachedQuoteLocationForAttachment(808, quote));
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe("stripBoundaryEllipsis", function () {
@@ -546,20 +597,68 @@ describe("buildRawPrefixQueries", function () {
     );
     assert.isFalse(result.some((query) => query.startsWith("“")));
   });
+
+  it("prefers long ellipsis segments before short suffix queries", function () {
+    const result = buildRawPrefixQueries(
+      "Theorem 4.4 (Shell escape). ... evolution candidates have expected log-probability strictly beyond the shell boundary. Moreover, a positive fraction of evolution candidates escape the shell.",
+    );
+
+    assert.equal(
+      result[0],
+      "evolution candidates have expected log-probability strictly beyond the shell boundary. Moreover, a positive fraction of evolution candidates escape the shell.",
+    );
+    assert.isAbove(
+      result.indexOf("escape the shell"),
+      0,
+      "short suffix should come after a meaningful ellipsis segment",
+    );
+  });
 });
 
 describe("scrollToExactQuoteInReader", function () {
-  function createFindControllerReader(pageMatches: unknown[]) {
+  function createFindControllerReader(
+    pageMatches: unknown[],
+    options?: {
+      page?: number;
+      dispatchMatchesCountTotal?: number;
+      dispatchSelectedPageIdx?: number;
+      findBarCountText?: string;
+      matchesCountTotal?: number;
+      selectedPageIdx?: number;
+    },
+  ) {
     const findController = {
       _rawQuery: "",
       pageMatches: [] as unknown[],
       _pendingFindMatches: new Set<unknown>(),
       _pagesToSearch: 0,
+      matchesCount:
+        options?.matchesCountTotal !== undefined
+          ? { total: options.matchesCountTotal }
+          : undefined,
+      selected:
+        options?.selectedPageIdx !== undefined
+          ? { pageIdx: options.selectedPageIdx }
+          : undefined,
     };
+    const findBar = options?.findBarCountText
+      ? {
+          open: () => undefined,
+          findResultsCount: { textContent: options.findBarCountText },
+        }
+      : undefined;
     const eventBus = {
       dispatch: (_eventName: string, params: { query: string }) => {
         findController._rawQuery = params.query;
         findController.pageMatches = pageMatches;
+        if (options?.dispatchMatchesCountTotal !== undefined) {
+          findController.matchesCount = {
+            total: options.dispatchMatchesCountTotal,
+          };
+        }
+        if (options?.dispatchSelectedPageIdx !== undefined) {
+          findController.selected = { pageIdx: options.dispatchSelectedPageIdx };
+        }
       },
     };
     return {
@@ -567,8 +666,9 @@ describe("scrollToExactQuoteInReader", function () {
         PDFViewerApplication: {
           pdfDocument: { numPages: 3 },
           pagesCount: 3,
-          page: 2,
+          page: options?.page ?? 2,
           eventBus,
+          findBar,
           findController,
         },
       },
@@ -604,6 +704,134 @@ describe("scrollToExactQuoteInReader", function () {
     assert.include(result.reason, "page 1");
     assert.isAtLeast(result.queries.length, 1);
     assert.isAtLeast(result.debugSummary.length, 1);
+  });
+
+  it("treats FindController match counts as hits only with a selected match page", async function () {
+    const reader = createFindControllerReader([], {
+      dispatchMatchesCountTotal: 1,
+      dispatchSelectedPageIdx: 2,
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isTrue(result.matched);
+    assert.equal(result.matchedPageIndex, 2);
+    assert.include(result.reason, "page 3");
+  });
+
+  it("does not use stale FindController counts and selected pages as a match", async function () {
+    const reader = createFindControllerReader([], {
+      matchesCountTotal: 1,
+      selectedPageIdx: 2,
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+  });
+
+  it("does not use stale find-bar counts and the current viewport page as a match", async function () {
+    const reader = createFindControllerReader([], {
+      page: 3,
+      findBarCountText: "1 of 1",
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+  });
+
+  it("does not choose an arbitrary page when FindController reports multiple pages", async function () {
+    const reader = createFindControllerReader([[0], [], [0]]);
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isFalse(result.matched);
+    assert.isUndefined(result.matchedPageIndex);
+    assert.include(result.reason, "multiple pages");
+  });
+
+  it("uses the selected highlighted page when FindController reports multiple pages", async function () {
+    const reader = createFindControllerReader([[0], [], [0]], {
+      dispatchSelectedPageIdx: 2,
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isTrue(result.matched);
+    assert.equal(result.matchedPageIndex, 2);
+    assert.include(result.reason, "selected");
+  });
+
+  it("uses the selected highlighted page for count-only FindController matches", async function () {
+    const reader = createFindControllerReader([], {
+      dispatchMatchesCountTotal: 2,
+      dispatchSelectedPageIdx: 1,
+    });
+    const result = await scrollToExactQuoteInReader(
+      reader,
+      "Representational drift remained stable across repeated measurements in the target region.",
+      { expectedPageIndex: null },
+    );
+
+    assert.isTrue(result.matched);
+    assert.equal(result.matchedPageIndex, 1);
+    assert.include(result.reason, "selected");
+  });
+
+  it("resolves live quote lookup from FindController count plus selected page", async function () {
+    const originalZotero = (globalThis as any).Zotero;
+    const originalZtoolkit = (globalThis as any).ztoolkit;
+    (globalThis as any).Zotero = {
+      PDFWorker: {
+        getFullText: async () => null,
+      },
+    };
+    (globalThis as any).ztoolkit = { log: () => undefined };
+    const reader = createFindControllerReader([], {
+      dispatchMatchesCountTotal: 1,
+      dispatchSelectedPageIdx: 1,
+    });
+
+    try {
+      const result = await locateQuoteInLivePdfReader(
+        reader,
+        "Representational drift remained stable across repeated measurements in the target region.",
+      );
+
+      assert.equal(result.status, "resolved");
+      assert.equal(result.computedPageIndex, 1);
+      assert.include(result.reason || "", "page 2");
+    } finally {
+      if (originalZotero === undefined) {
+        delete (globalThis as any).Zotero;
+      } else {
+        (globalThis as any).Zotero = originalZotero;
+      }
+      if (originalZtoolkit === undefined) {
+        delete (globalThis as any).ztoolkit;
+      } else {
+        (globalThis as any).ztoolkit = originalZtoolkit;
+      }
+      clearPageTextCache();
+    }
   });
 });
 
