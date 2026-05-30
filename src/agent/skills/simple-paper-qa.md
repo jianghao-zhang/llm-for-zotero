@@ -38,4 +38,5 @@ Use Zotero paper tools as resources, not a ritual.
 - When `paper_read` returns exact passages, include 1-3 short blockquotes from those passages when useful for grounding the explanation.
 - If `paper_read` provides quote anchors like `[[quote:Q_x7a2]]`, use those anchor tokens for direct quotes instead of copying the quote/citation manually.
 - If no quote anchor is provided for a direct quote, put the provided `sourceLabel` on the next non-empty line after the blockquote, before any commentary.
+- Do not write `[[source=...]]`, `section=...`, or `chunk=...` metadata in the final answer.
 - Do not call visual/page tools, `file_io`, or `run_command` just to improve citation anchors or page numbers. Use the provided `sourceLabel`; the UI can bind citations after rendering.

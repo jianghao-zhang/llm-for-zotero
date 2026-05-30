@@ -82,7 +82,7 @@ export function buildAgentTraceMarkdownForRender(
   return replaceQuoteCitationPlaceholdersForMarkdown(
     sanitizeText(text || ""),
     message?.quoteCitations,
-    { unresolved: "unavailable" },
+    { resolved: "preserve", unresolved: "unavailable" },
   );
 }
 

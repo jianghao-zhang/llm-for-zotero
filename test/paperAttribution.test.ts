@@ -96,6 +96,10 @@ describe("paperAttribution", function () {
       buildPaperQuoteCitationGuidance(paper).join("\n"),
       "If quote anchors are provided, use the exact [[quote:<id>]] token",
     );
+    assert.include(
+      buildPaperQuoteCitationGuidance(paper).join("\n"),
+      "Do not write [[source=...]], section=..., or chunk=...",
+    );
   });
 
   it("formats child attachment source labels and quote guidance", function () {

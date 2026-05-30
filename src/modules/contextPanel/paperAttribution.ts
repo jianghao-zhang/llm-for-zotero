@@ -77,7 +77,7 @@ function getYearText(item: Zotero.Item | null | undefined): string {
       getItemFieldText(item, "year") ||
         getItemFieldText(item, "date") ||
         getItemFieldText(item, "issued") ||
-      "",
+        "",
     ),
   );
   return extractYearValue(rawYear) || rawYear;
@@ -304,6 +304,7 @@ export function buildPaperQuoteCitationGuidance(
         "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
         "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
         "- Use the EXACT source label above. Do NOT translate or romanize author names.",
+        "- Do not write [[source=...]], section=..., or chunk=... metadata in the final answer.",
       ];
     }
     return [
@@ -317,6 +318,7 @@ export function buildPaperQuoteCitationGuidance(
       "- Put the source label on the next non-empty line after the blockquote, before any commentary.",
       "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
       "- Use the EXACT source label above. Do NOT translate or romanize author names.",
+      "- Do not write [[source=...]], section=..., or chunk=... metadata in the final answer.",
     ];
   }
   return [
@@ -331,6 +333,7 @@ export function buildPaperQuoteCitationGuidance(
     "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
     "- Use the EXACT source label provided for each paper. Do NOT translate or romanize author names.",
     "- Do not cite raw chunk ids, citation keys, or invented page numbers.",
+    "- Do not write [[source=...]], section=..., or chunk=... metadata in the final answer.",
   ];
 }
 
@@ -347,6 +350,7 @@ export function buildGenericSourceQuoteCitationGuidance(): string[] {
     "- Never put headings, bullets, interpretation, or other prose between a quoted passage and its source label; clickable quote citations depend on this adjacency.",
     "- Use the EXACT source label provided for each source. Do NOT translate or romanize author names.",
     "- Do not cite raw chunk ids, citation keys, or invented page numbers.",
+    "- Do not write [[source=...]], section=..., or chunk=... metadata in the final answer.",
   ];
 }
 

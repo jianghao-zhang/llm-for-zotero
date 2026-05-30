@@ -305,10 +305,7 @@ describe("Mermaid rendering helpers", function () {
 
     const normalized = normalizeMermaidFlowchartLabels(source);
 
-    assert.include(
-      normalized,
-      'B["LEC population activity (time cells?)"]',
-    );
+    assert.include(normalized, 'B["LEC population activity (time cells?)"]');
     assert.include(normalized, 'C["Intrinsic drift: over time"]');
     assert.include(normalized, "A[Continuous experience]");
   });
@@ -321,8 +318,7 @@ describe("Mermaid rendering helpers", function () {
   });
 
   it("does not rewrite Mermaid edge labels while normalizing node labels", function () {
-    const source =
-      "flowchart TD\n  A[Bad label?] -->|question [yes?]| B[Done]";
+    const source = "flowchart TD\n  A[Bad label?] -->|question [yes?]| B[Done]";
 
     const normalized = normalizeMermaidFlowchartLabels(source);
 
@@ -363,7 +359,8 @@ describe("Mermaid rendering helpers", function () {
   });
 
   it("adds SVG polish rules for the expanded Mermaid viewer", function () {
-    const svg = '<svg viewBox="0 0 10 10"><g class="cluster"><rect /></g></svg>';
+    const svg =
+      '<svg viewBox="0 0 10 10"><g class="cluster"><rect /></g></svg>';
 
     const polished = polishRenderedMermaidSvg(svg, "light");
 
@@ -406,10 +403,7 @@ describe("Mermaid rendering helpers", function () {
       'B["Graceful memory <code>continuum</code> & sequence scaffold"]',
     );
     assert.include(normalized, 'C["<strong>Conclusion</strong>"]');
-    assert.include(
-      normalized,
-      "-->|edge **label** stays markdown source| B",
-    );
+    assert.include(normalized, "-->|edge **label** stays markdown source| B");
   });
 
   it("strips locked Mermaid init overrides while preserving safe directives", function () {
@@ -536,7 +530,7 @@ describe("Mermaid rendering helpers", function () {
 });
 
 describe("agentTrace render", function () {
-  it("expands quote anchors before rendering agent trace markdown", function () {
+  it("preserves known quote anchors before agent trace DOM decoration", function () {
     const quoteCitation = buildQuoteCitation({
       quoteText: "Interleaved trace quote anchors should not leak.",
       citationLabel: "(Chandra et al., 2025)",
@@ -549,9 +543,9 @@ describe("agentTrace render", function () {
       { quoteCitations: [quoteCitation!] },
     );
 
-    assert.include(rendered, "> Interleaved trace quote anchors");
-    assert.include(rendered, "(Chandra et al., 2025)");
-    assert.notInclude(rendered, "[[quote:");
+    assert.include(rendered, `[[quote:${quoteCitation!.id}]]`);
+    assert.notInclude(rendered, "> Interleaved trace quote anchors");
+    assert.notInclude(rendered, "(Chandra et al., 2025)");
   });
 
   it("does not render unresolved quote anchors in agent trace markdown", function () {
@@ -689,7 +683,10 @@ describe("agentTrace render", function () {
 
     assert.exists(copyable);
     assert.exists(copyButton);
-    assert.equal(copyButton?.attributes["aria-label"], "Copy original markdown");
+    assert.equal(
+      copyButton?.attributes["aria-label"],
+      "Copy original markdown",
+    );
   });
 
   it("renders tagged display math as KaTeX tag markup", function () {
@@ -837,8 +834,7 @@ describe("agentTrace render", function () {
       .map((item) => item.text);
     const codexProgressMessages = items.filter(
       (item): item is Extract<(typeof items)[number], { type: "message" }> =>
-        item.type === "message" &&
-        item.text !== "Request sent to Codex.",
+        item.type === "message" && item.text !== "Request sent to Codex.",
     );
 
     assert.includeMembers(progressMessages, [
@@ -1114,9 +1110,10 @@ describe("agentTrace render", function () {
     const longLabel =
       "Custom tool output with a long label that should become an expandable detail value";
 
-    assert.deepEqual(buildAgentTraceChipDetails({ label: "URL", title: longTitle }), [
-      { label: "URL", value: longTitle, kind: "url" },
-    ]);
+    assert.deepEqual(
+      buildAgentTraceChipDetails({ label: "URL", title: longTitle }),
+      [{ label: "URL", value: longTitle, kind: "url" }],
+    );
     assert.deepEqual(buildAgentTraceChipDetails({ label: longLabel }), [
       { label: "Detail", value: longLabel, kind: "text" },
     ]);
@@ -1526,7 +1523,9 @@ describe("agentTrace render", function () {
     assert.isFalse(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.isFalse(items.some((item) => item.type === "inline_text"));
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("keeps unique original-agent interleaved text in trace and final answer in the assistant bubble", function () {
@@ -1597,7 +1596,9 @@ describe("agentTrace render", function () {
     assert.isTrue(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.deepEqual(inlineTexts, [scratchText]);
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("suppresses original-agent duplicate inline final text without suppressing the assistant bubble", function () {
@@ -1649,7 +1650,9 @@ describe("agentTrace render", function () {
     assert.isTrue(isInterleaved);
     assert.isFalse(inlineTextReplacesAssistantText);
     assert.isFalse(items.some((item) => item.type === "inline_text"));
-    assert.isTrue(shouldAttachAssistantResponseContextMenu({ text: finalText }));
+    assert.isTrue(
+      shouldAttachAssistantResponseContextMenu({ text: finalText }),
+    );
   });
 
   it("does not mark rolled-back scratch text as interleaved", function () {
@@ -2050,8 +2053,7 @@ describe("agentTrace render", function () {
         eventType: "message_delta",
         payload: {
           type: "message_delta",
-          text:
-            " the Obsidian vault location and look for any existing note for this paper.",
+          text: " the Obsidian vault location and look for any existing note for this paper.",
         },
         createdAt: 3,
       },
@@ -2069,17 +2071,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: sentence,
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: sentence,
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineTexts = items
       .filter(
         (
@@ -2124,8 +2122,7 @@ describe("agentTrace render", function () {
         eventType: "message_delta",
         payload: {
           type: "message_delta",
-          text:
-            " the Obsidian vault location and look for any existing note for this paper.",
+          text: " the Obsidian vault location and look for any existing note for this paper.",
         },
         createdAt: 3,
       },
@@ -2164,17 +2161,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: sentence,
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: sentence,
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineTexts = items
       .filter(
         (
@@ -2235,17 +2228,13 @@ describe("agentTrace render", function () {
       },
     ];
 
-    const { items, isInterleaved } = buildAgentTraceDisplayItems(
-      events,
-      null,
-      {
-        role: "assistant",
-        text: "dog dog",
-        timestamp: 1,
-        runMode: "agent",
-        modelProviderLabel: "Claude Code",
-      },
-    );
+    const { items, isInterleaved } = buildAgentTraceDisplayItems(events, null, {
+      role: "assistant",
+      text: "dog dog",
+      timestamp: 1,
+      runMode: "agent",
+      modelProviderLabel: "Claude Code",
+    });
     const inlineText = items.find((item) => item.type === "inline_text");
 
     assert.isTrue(isInterleaved);

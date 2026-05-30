@@ -23,6 +23,7 @@ type AgentEvidenceSnippet = {
   pageLabel?: string;
   chunkKind?: string;
   chunkIndex?: number;
+  quoteCitationId?: string;
   score?: number;
 };
 
@@ -439,6 +440,11 @@ function snippetFromRecord(value: unknown): AgentEvidenceSnippet | null {
   if (chunkKind) snippet.chunkKind = chunkKind;
   const chunkIndex = normalizePositiveInt(record.chunkIndex);
   if (chunkIndex !== undefined) snippet.chunkIndex = chunkIndex;
+  const quoteCitationId = normalizeText(record.quoteCitationId, 80).replace(
+    /[^A-Za-z0-9_-]/g,
+    "",
+  );
+  if (quoteCitationId) snippet.quoteCitationId = quoteCitationId;
   const score = normalizeNumber(record.score);
   if (score !== undefined) snippet.score = score;
   return snippet;
@@ -920,16 +926,23 @@ function truncateSnippet(value: string): string {
 }
 
 function formatSnippet(snippet: AgentEvidenceSnippet, index: number): string {
-  const metadata = [
-    snippet.sourceLabel ? `source=${snippet.sourceLabel}` : "",
-    snippet.pageLabel ? `page=${snippet.pageLabel}` : "",
-    snippet.sectionLabel ? `section=${snippet.sectionLabel}` : "",
-    snippet.chunkIndex !== undefined ? `chunk=${snippet.chunkIndex}` : "",
+  const lines = [`  ${index + 1}. Evidence snippet:`];
+  if (snippet.quoteCitationId) {
+    lines.push(`     quoteCitationId: ${snippet.quoteCitationId}`);
+  }
+  if (snippet.sourceLabel) {
+    lines.push(`     sourceLabel: ${snippet.sourceLabel}`);
+  }
+  const locator = [
+    snippet.pageLabel ? `page ${snippet.pageLabel}` : "",
+    snippet.sectionLabel ? `section ${snippet.sectionLabel}` : "",
+    snippet.chunkIndex !== undefined ? `chunkIndex ${snippet.chunkIndex}` : "",
   ].filter(Boolean);
-  const prefix = metadata.length
-    ? `  ${index + 1}. [${metadata.join(", ")}]`
-    : `  ${index + 1}.`;
-  return `${prefix} ${truncateSnippet(snippet.text)}`;
+  if (locator.length) {
+    lines.push(`     internalLocator: ${locator.join("; ")}`);
+  }
+  lines.push(`     text: ${truncateSnippet(snippet.text)}`);
+  return lines.join("\n");
 }
 
 function formatEvidenceEntry(entry: AgentEvidenceEntry): string[] {
@@ -1044,6 +1057,7 @@ export function buildAgentEvidenceContextBlock(params: {
   return [
     "Preserved evidence from prior agent tool reads:",
     "Reuse this evidence when it directly answers the follow-up. Re-read only when the user asks for updated evidence, the preserved snippets are insufficient, or the resource scope changed.",
+    "Citation rule: use quoteCitationId as [[quote:<id>]] when available, otherwise put sourceLabel on the next non-empty line after a blockquote. Do not copy source/page/section/chunk metadata into the final answer.",
     ...entries.flatMap(formatEvidenceEntry),
   ].join("\n");
 }

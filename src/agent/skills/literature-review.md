@@ -89,6 +89,7 @@ If key figures from deep-read papers would strengthen a thematic point, embed th
 - The citation label should match the Zotero item metadata (use `creators` and `date` fields).
 - Do NOT invent citations or cite papers not in the user's library.
 - If a deep-read passage provides a quote anchor like `[[quote:Q_x7a2]]`, use that anchor token for the direct quote. If no quote anchor is provided, put the source label on the next non-empty line after the blockquote.
+- Do not write `[[source=...]]`, `section=...`, or `chunk=...` metadata in the final answer.
 
 ### After writing
 

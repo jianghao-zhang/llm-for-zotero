@@ -22,7 +22,7 @@ describe("chat retry model inputs", function () {
     storedPath: "/tmp/paper.pdf",
   };
 
-  it("expands quote anchors before rendering assistant bubbles", function () {
+  it("preserves known quote anchors for interactive assistant rendering", function () {
     const quoteCitation = buildQuoteCitation({
       quoteText: "Rendered quote anchors should not leak.",
       citationLabel: "(Lee, 2026)",
@@ -35,9 +35,9 @@ describe("chat retry model inputs", function () {
       quoteCitations: [quoteCitation!],
     });
 
-    assert.include(rendered, "> Rendered quote anchors");
-    assert.include(rendered, "(Lee, 2026)");
-    assert.notInclude(rendered, "[[quote:");
+    assert.include(rendered, `[[quote:${quoteCitation!.id}]]`);
+    assert.notInclude(rendered, "> Rendered quote anchors");
+    assert.notInclude(rendered, "(Lee, 2026)");
   });
 
   it("does not render unresolved quote anchors in assistant bubbles", function () {
@@ -81,6 +81,34 @@ describe("chat retry model inputs", function () {
     assert.include(payload!.plainText, "[quote unavailable]");
     assert.notInclude(payload!.plainText, "[[quote:");
     assert.notInclude(payload!.renderedHtml, "[[quote:");
+  });
+
+  it("sanitizes leaked source metadata markers before assistant rendering", function () {
+    const rendered = buildAssistantDisplayMarkdownForRender({
+      text: '"our results provide evidence that the activity of dynamic engrams..." [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=28]]',
+      quoteCitations: [],
+    });
+
+    assert.include(rendered, "> our results provide evidence");
+    assert.include(rendered, "(Tomé, 2024)");
+    assert.notInclude(rendered, "[[source=");
+    assert.notInclude(rendered, "section=");
+    assert.notInclude(rendered, "chunk=");
+  });
+
+  it("sanitizes leaked source metadata markers in clipboard payloads", function () {
+    const payload = buildRenderedMarkdownClipboardPayload(
+      '"our model predicted that memory engrams are highly dynamic" [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=8]]',
+      [],
+    );
+
+    assert.isNotNull(payload);
+    assert.include(payload!.plainText, "> our model predicted");
+    assert.include(payload!.plainText, "(Tomé, 2024)");
+    assert.notInclude(payload!.plainText, "[[source=");
+    assert.notInclude(payload!.plainText, "section=");
+    assert.notInclude(payload!.plainText, "chunk=");
+    assert.notInclude(payload!.renderedHtml, "[[source=");
   });
 
   const visionConfig: EffectiveRequestConfig = {

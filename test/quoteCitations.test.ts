@@ -5,6 +5,7 @@ import {
   buildSelectedTextQuoteCitations,
   extractQuoteCitationsFromToolContent,
   replaceQuoteCitationPlaceholdersForMarkdown,
+  sanitizeInvalidStructuredSourceMarkers,
 } from "../src/modules/contextPanel/quoteCitations";
 import { renderMarkdown } from "../src/utils/markdown";
 
@@ -101,6 +102,20 @@ describe("quoteCitations", function () {
     assert.include(preserved, "[[quote:Q_missing]]");
     assert.equal(suppressed, "Evidence: [quote unavailable]");
     assert.notInclude(suppressed, "[[quote:");
+  });
+
+  it("repairs leaked source metadata markers into plain quote citations", function () {
+    const leaked =
+      '    "our model predicted that memory engrams are highly dynamic, with neurons being removed from and added to the engram over the course of memory consolidation" [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=8]]\n\n' +
+      "Critically, they show that dynamic engrams explain behavior.";
+
+    const sanitized = sanitizeInvalidStructuredSourceMarkers(leaked);
+
+    assert.include(sanitized, "> our model predicted");
+    assert.include(sanitized, "(Tomé, 2024)");
+    assert.notInclude(sanitized, "[[source=");
+    assert.notInclude(sanitized, "section=");
+    assert.notInclude(sanitized, "chunk=");
   });
 
   it("extracts quote citations from nested tool content and JSON text payloads", function () {

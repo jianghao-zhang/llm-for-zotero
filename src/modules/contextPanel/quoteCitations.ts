@@ -8,6 +8,9 @@ import { formatPaperSourceLabel } from "./paperAttribution";
 export const QUOTE_CITATION_PATTERN = /\[\[quote:([A-Za-z0-9_-]+)\]\]/g;
 const BLOCKQUOTE_WRAPPED_QUOTE_CITATION_PATTERN =
   /^[ \t]*(?:>[ \t]*)+\[\[quote:([A-Za-z0-9_-]+)\]\][ \t]*$/gm;
+const STRUCTURED_SOURCE_MARKER_PATTERN =
+  /\[\[\s*source\s*=\s*([^\]]+?)\s*\]\]/gi;
+const BRACKETED_SOURCE_METADATA_PATTERN = /\[\s*source\s*=\s*([^\]]+?)\s*\]/gi;
 
 function normalizeText(value: unknown): string {
   if (typeof value !== "string") return "";
@@ -48,6 +51,64 @@ function truncateForPrompt(value: string, maxLength = 360): string {
 
 function jsonEscape(value: string): string {
   return JSON.stringify(value);
+}
+
+function extractSourceMarkerCitationLabel(value: string): string {
+  const match =
+    value.match(/(?:^|,\s*)source\s*=\s*(\([^)]{1,180}\))/i) ||
+    value.match(/^(\([^)]{1,180}\))/);
+  return match?.[1] ? normalizeCitationLabel(match[1]) : "";
+}
+
+function normalizeLeakedQuoteText(value: string): string {
+  let text = normalizeText(value.replace(/^>\s*/, ""));
+  text = text.replace(/^["“”]+|["“”]+$/g, "").trim();
+  return text;
+}
+
+function replaceInvalidSourceMarkerLine(line: string, pattern: RegExp): string {
+  pattern.lastIndex = 0;
+  const match = pattern.exec(line);
+  pattern.lastIndex = 0;
+  if (!match) return line;
+  const citationLabel = extractSourceMarkerCitationLabel(match[1] || "");
+  const rawBefore = line.slice(0, match.index);
+  const before = rawBefore.trim();
+  const after = line.slice(match.index + match[0].length).trim();
+  const beforeLooksLikeQuote =
+    /^>\s*/.test(before) ||
+    /^["“]/.test(before) ||
+    (/^[ \t]{4,}/.test(rawBefore) && /^["“]/.test(before));
+  if (citationLabel && before && !after && beforeLooksLikeQuote) {
+    const quoteText = normalizeLeakedQuoteText(before);
+    if (quoteText) return `> ${quoteText}\n\n${citationLabel}`;
+  }
+  const replacement = citationLabel || "";
+  pattern.lastIndex = 0;
+  return line
+    .replace(pattern, replacement)
+    .replace(/[ \t]{2,}/g, " ")
+    .trimEnd();
+}
+
+export function sanitizeInvalidStructuredSourceMarkers(
+  markdown: string,
+): string {
+  if (!markdown) return markdown;
+  const lines = markdown.split("\n");
+  return lines
+    .map((line) => {
+      let next = replaceInvalidSourceMarkerLine(
+        line,
+        STRUCTURED_SOURCE_MARKER_PATTERN,
+      );
+      next = replaceInvalidSourceMarkerLine(
+        next,
+        BRACKETED_SOURCE_METADATA_PATTERN,
+      );
+      return next;
+    })
+    .join("\n");
 }
 
 function hashBase36(value: string): string {
@@ -138,6 +199,7 @@ export function buildQuoteAnchorPromptBlock(
     "Quote anchors for direct evidence:",
     "- When you need to include one of these exact quotes, write only the matching token, e.g. [[quote:Q_x7a2]].",
     "- Do not manually copy the quote or citation label when a quote anchor is available; the app will render the quote and clickable citation.",
+    "- Do not write source/section/chunk metadata such as [[source=...]] in the final answer; those fields are internal context only.",
   ];
   for (const citation of normalized) {
     lines.push(
@@ -150,9 +212,7 @@ export function buildQuoteAnchorPromptBlock(
   return lines;
 }
 
-export function formatQuoteCitationMarkdown(
-  citation: QuoteCitation,
-): string {
+export function formatQuoteCitationMarkdown(citation: QuoteCitation): string {
   const quoteLines = normalizeMultilineText(citation.quoteText)
     .split("\n")
     .map((line) => `> ${line}`)
@@ -177,12 +237,14 @@ export function replaceQuoteCitationPlaceholdersForMarkdown(
   markdown: string,
   quoteCitations: QuoteCitation[] | undefined | null,
   options: {
+    resolved?: "markdown" | "preserve";
     unresolved?: UnresolvedQuoteCitationPlaceholderMode;
   } = {},
 ): string {
-  if (!markdown || !QUOTE_CITATION_PATTERN.test(markdown)) {
+  const safeMarkdown = sanitizeInvalidStructuredSourceMarkers(markdown);
+  if (!safeMarkdown || !QUOTE_CITATION_PATTERN.test(safeMarkdown)) {
     QUOTE_CITATION_PATTERN.lastIndex = 0;
-    return markdown;
+    return safeMarkdown;
   }
   QUOTE_CITATION_PATTERN.lastIndex = 0;
   const byId = new Map(
@@ -191,15 +253,20 @@ export function replaceQuoteCitationPlaceholdersForMarkdown(
       citation,
     ]),
   );
+  const resolved = options.resolved || "markdown";
   const unresolved = options.unresolved || "preserve";
   const replaceToken = (token: string, id: string): string => {
     const citation = byId.get(id);
-    if (citation) return formatQuoteCitationMarkdown(citation);
+    if (citation) {
+      return resolved === "preserve"
+        ? `[[quote:${citation.id}]]`
+        : formatQuoteCitationMarkdown(citation);
+    }
     return unresolved === "preserve"
       ? token
       : formatUnresolvedQuoteCitationPlaceholder(unresolved);
   };
-  const normalizedMarkdown = markdown.replace(
+  const normalizedMarkdown = safeMarkdown.replace(
     BLOCKQUOTE_WRAPPED_QUOTE_CITATION_PATTERN,
     (token, id: string) => replaceToken(token, id),
   );

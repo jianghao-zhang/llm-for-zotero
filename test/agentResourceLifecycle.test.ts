@@ -279,7 +279,10 @@ describe("agent resource lifecycle", function () {
     assert.include(text, "MD=2");
     assert.include(text, "DOCX=1");
     assert.include(text, "unsupported=4");
-    assert.include(text, "enumerate item attachments with library_search plus library_read");
+    assert.include(
+      text,
+      "enumerate item attachments with library_search plus library_read",
+    );
     assert.notInclude(text, "translation.docx");
   });
 
@@ -595,6 +598,7 @@ describe("agent resource lifecycle", function () {
                     sectionLabel: "Results",
                     pageLabel: "p. 4",
                     chunkIndex: 2,
+                    quoteCitationId: "Q_prior_read",
                   },
                 ],
               },
@@ -612,7 +616,10 @@ describe("agent resource lifecycle", function () {
     });
     assert.include(block, "Preserved evidence from prior agent tool reads");
     assert.include(block, "Baseline Paper");
-    assert.include(block, "source=(Smith, 2024)");
+    assert.include(block, "sourceLabel: (Smith, 2024)");
+    assert.include(block, "quoteCitationId: Q_prior_read");
+    assert.include(block, "internalLocator: page p. 4; section Results");
+    assert.notInclude(block, "[source=");
     assert.include(block, "intervention selectively changed");
 
     const plan = buildAgentResourceContextPlan(req);
@@ -814,9 +821,12 @@ describe("agent resource lifecycle", function () {
       });
       assert.include(hydrated, "Persisted Paper");
       assert.include(hydrated, "Persisted evidence survives");
-      assert.include(hydrated, "source=(Persisted, 2024)");
-      assert.include(hydrated, "section=Discussion");
-      assert.include(hydrated, "page=p. 9");
+      assert.include(hydrated, "sourceLabel: (Persisted, 2024)");
+      assert.include(
+        hydrated,
+        "internalLocator: page p. 9; section Discussion",
+      );
+      assert.notInclude(hydrated, "[source=");
 
       const staleReq = request({
         conversationKey: req.conversationKey,
@@ -924,6 +934,9 @@ describe("agent resource lifecycle", function () {
     assert.include(block, "Read Attachment");
     assert.include(block, "sourceKind=attachment_text");
     assert.include(block, "Translated attachment evidence.");
-    assert.include(block, "source=(translation.md, attachment under Smith, 2024)");
+    assert.include(
+      block,
+      "sourceLabel: (translation.md, attachment under Smith, 2024)",
+    );
   });
 });

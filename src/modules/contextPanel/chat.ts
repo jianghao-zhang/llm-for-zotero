@@ -1773,7 +1773,7 @@ export function buildAssistantDisplayMarkdownForRender(
   return replaceQuoteCitationPlaceholdersForMarkdown(
     sanitizeText(message.text || ""),
     message.quoteCitations,
-    { unresolved: "unavailable" },
+    { resolved: "preserve", unresolved: "unavailable" },
   );
 }
 

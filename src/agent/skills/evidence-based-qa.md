@@ -52,7 +52,8 @@ If `paper_read` provides quote anchors like `[[quote:Q_x7a2]]`, use those
 anchor tokens for direct quotes instead of copying the quote/citation manually.
 If no quote anchor is provided for a direct quote, put the provided
 `sourceLabel` on the next non-empty line after the blockquote, before any
-commentary.
+commentary. Do not write `[[source=...]]`, `section=...`, or `chunk=...`
+metadata in the final answer.
 
 ### Budget
 

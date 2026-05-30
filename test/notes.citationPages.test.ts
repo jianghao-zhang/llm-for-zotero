@@ -146,6 +146,29 @@ describe("notes citation page export", function () {
     assert.notInclude(result.noteHtml, "[[quote:");
   });
 
+  it("does not export leaked source metadata markers into chat-history text", function () {
+    const messages: Message[] = [
+      {
+        role: "assistant",
+        text: '"our results provide evidence that the activity of dynamic engrams..." [[source=(Tomé, 2024), section=Dynamic and selective engrams emerge with memory consolidation, chunk=28]]',
+        timestamp: 2,
+        modelName: "Claude",
+        quoteCitations: [],
+      },
+    ];
+
+    const result = buildChatHistoryNotePayload(messages);
+
+    assert.include(result.noteText, "> our results provide evidence");
+    assert.include(result.noteText, "(Tomé, 2024)");
+    assert.notInclude(result.noteText, "[[source=");
+    assert.notInclude(result.noteText, "section=");
+    assert.notInclude(result.noteText, "chunk=");
+    assert.notInclude(result.noteHtml, "[[source=");
+    assert.notInclude(result.noteHtml, "section=");
+    assert.notInclude(result.noteHtml, "chunk=");
+  });
+
   it("does not export model-written blockquote pages without a verified cache", function () {
     const quote =
       "We choose Hebbian learning, not only for its biological plausibility, but to also allow rapid learning when entering a new environment.";

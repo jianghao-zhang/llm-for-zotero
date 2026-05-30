@@ -3581,11 +3581,7 @@
   overflow: hidden;
   border: 1px solid var(--stroke-secondary);
   border-radius: 8px;
-  background: color-mix(
-    in srgb,
-    var(--material-background) 86%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--material-background) 86%, transparent);
 }
 
 .llm-assistant-generated-image {
@@ -5690,11 +5686,104 @@ label.llm-search-results-item:hover {
 }
 
 .llm-quote-citation-anchor {
-  margin: 8px 0;
+  margin: 10px 0;
 }
 
-.llm-quote-citation-anchor blockquote {
-  margin-bottom: 4px;
+.llm-quote-card {
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--material-background) 96%,
+    var(--fill-primary) 4%
+  );
+  overflow: hidden;
+}
+
+.llm-quote-card-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "toggle title citation";
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 0;
+  padding: 7px 9px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.llm-quote-card[data-expanded="false"] .llm-quote-card-header {
+  grid-template-areas:
+    "toggle title citation"
+    ". preview preview";
+  row-gap: 4px;
+}
+
+.llm-quote-card-header:hover {
+  background: color-mix(in srgb, var(--fill-primary) 5%, transparent);
+}
+
+.llm-quote-card-header:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.llm-quote-card-toggle {
+  grid-area: toggle;
+  color: var(--fill-secondary);
+  font-size: 11px;
+  line-height: 1;
+  width: 12px;
+  text-align: center;
+}
+
+.llm-quote-card-title {
+  grid-area: title;
+  color: var(--fill-primary);
+  font-size: var(--llm-fs-11);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.llm-quote-card-preview {
+  display: none;
+  grid-area: preview;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  color: var(--fill-secondary);
+  font-size: var(--llm-fs-11);
+  font-style: italic;
+  line-height: 1.42;
+  user-select: text;
+}
+
+.llm-quote-card[data-expanded="false"] .llm-quote-card-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.llm-quote-card-citation {
+  grid-area: citation;
+  min-width: 0;
+  justify-self: end;
+}
+
+.llm-quote-card-body {
+  border-top: 1px solid
+    color-mix(in srgb, var(--stroke-secondary) 70%, transparent);
+  padding: 8px 10px 9px 27px;
+  color: var(--fill-secondary);
+  font-style: italic;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.llm-quote-card[data-expanded="false"] .llm-quote-card-body {
+  display: none;
 }
 
 .llm-quote-citation-missing {
@@ -5749,6 +5838,21 @@ label.llm-search-results-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
+}
+
+.llm-citation-text[role="button"] {
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.llm-citation-text[role="button"]:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.llm-citation-text[role="button"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .llm-citation-icon {

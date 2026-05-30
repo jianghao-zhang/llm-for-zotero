@@ -425,6 +425,7 @@ describe("assistantCitationLinks", function () {
       ".llm-citation-inline-wrap",
       ".llm-citation-text",
       ".llm-citation-icon",
+      ".llm-quote-card",
     ]) {
       assert.include(INLINE_CITATION_SKIP_SELECTOR, selector);
     }

@@ -108,6 +108,7 @@ export const INLINE_CITATION_SKIP_SELECTOR = [
   ".llm-citation-text",
   ".llm-citation-icon",
   ".llm-quote-citation-anchor",
+  ".llm-quote-card",
   ".llm-quote-citation-missing",
 ].join(", ");
 
@@ -2405,6 +2406,8 @@ function createCitationButton(params: {
     baseLabelText = params.rawCitationText || displayCitationLabel;
   }
   textSpan.dataset.rawText = baseLabelText;
+  textSpan.setAttribute("role", "button");
+  textSpan.setAttribute("tabindex", "0");
   const navigationDisplayCitationLabel =
     matchedDisplayLabel || displayCitationLabel;
   const labelText = formatCitationDisplayTextWithPage(
@@ -2414,7 +2417,7 @@ function createCitationButton(params: {
   textSpan.textContent = labelText;
   container.appendChild(textSpan);
 
-  // --- Icon button (the only clickable element) ---
+  // --- Icon button (label and icon both activate the same jump) ---
   const citationButton = params.ownerDoc.createElement(
     "button",
   ) as HTMLButtonElement;
@@ -2460,6 +2463,23 @@ function createCitationButton(params: {
       quoteText: params.quoteText,
     });
   };
+  const handleCitationMouseDown = (event: Event) => {
+    const mouse = event as MouseEvent;
+    if (typeof mouse.button === "number" && mouse.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleCitationClick();
+  };
+  const handleCitationClickEvent = (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const handleCitationKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleCitationClick();
+  };
   const warmActiveReaderCache = () => {
     const activeReader = getActiveReaderForSelectedTab();
     if (activeReader) startCitationPageTextCacheWarm(activeReader);
@@ -2473,24 +2493,15 @@ function createCitationButton(params: {
   );
   citationButton.addEventListener("pointerenter", warmActiveReaderCache);
   citationButton.addEventListener("focus", warmActiveReaderCache);
+  textSpan.addEventListener("pointerenter", warmActiveReaderCache);
+  textSpan.addEventListener("focus", warmActiveReaderCache);
 
-  citationButton.addEventListener("mousedown", (event: Event) => {
-    const mouse = event as MouseEvent;
-    if (typeof mouse.button === "number" && mouse.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-    handleCitationClick();
-  });
-  citationButton.addEventListener("click", (event: Event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  citationButton.addEventListener("keydown", (event: KeyboardEvent) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    event.preventDefault();
-    event.stopPropagation();
-    handleCitationClick();
-  });
+  textSpan.addEventListener("mousedown", handleCitationMouseDown);
+  textSpan.addEventListener("click", handleCitationClickEvent);
+  textSpan.addEventListener("keydown", handleCitationKeyDown);
+  citationButton.addEventListener("mousedown", handleCitationMouseDown);
+  citationButton.addEventListener("click", handleCitationClickEvent);
+  citationButton.addEventListener("keydown", handleCitationKeyDown);
 
   container.appendChild(citationButton);
 
@@ -2534,6 +2545,95 @@ function createQuoteCitationUnavailableElement(
   return missing;
 }
 
+function buildQuotePreviewText(quoteText: string): string {
+  const normalized = sanitizeText(quoteText || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "";
+  return normalized.length > 220
+    ? `${normalized.slice(0, 217).trimEnd()}...`
+    : normalized;
+}
+
+function createQuoteCardElement(params: {
+  ownerDoc: Document;
+  quoteText: string;
+  quoteCitationId?: string;
+  citationContent: Node;
+}): HTMLElement {
+  const wrapper = params.ownerDoc.createElement("div");
+  wrapper.className = "llm-quote-card llm-quote-citation-anchor";
+  wrapper.dataset.expanded = "true";
+  if (params.quoteCitationId) {
+    wrapper.dataset.quoteCitationId = params.quoteCitationId;
+  }
+
+  const header = params.ownerDoc.createElement("div");
+  header.className = "llm-quote-card-header";
+  header.setAttribute("role", "button");
+  header.setAttribute("tabindex", "0");
+  header.setAttribute("aria-expanded", "true");
+
+  const toggleIcon = params.ownerDoc.createElement("span");
+  toggleIcon.className = "llm-quote-card-toggle";
+  toggleIcon.setAttribute("aria-hidden", "true");
+  toggleIcon.textContent = "▾";
+
+  const title = params.ownerDoc.createElement("span");
+  title.className = "llm-quote-card-title";
+  title.textContent = "Evidence quote";
+
+  const preview = params.ownerDoc.createElement("span");
+  preview.className = "llm-quote-card-preview";
+  preview.textContent = buildQuotePreviewText(params.quoteText);
+
+  const citation = params.ownerDoc.createElement("span");
+  citation.className = "llm-quote-card-citation";
+  citation.appendChild(params.citationContent);
+
+  header.append(toggleIcon, title, preview, citation);
+
+  const body = params.ownerDoc.createElement("div");
+  body.className = "llm-quote-card-body";
+  body.textContent = sanitizeText(params.quoteText || "").trim();
+
+  const setExpanded = (expanded: boolean) => {
+    wrapper.dataset.expanded = expanded ? "true" : "false";
+    header.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggleIcon.textContent = expanded ? "▾" : "▸";
+  };
+  const toggleExpanded = () => {
+    setExpanded(wrapper.dataset.expanded !== "true");
+  };
+  const shouldIgnoreToggle = (target: EventTarget | null): boolean => {
+    const element =
+      target && typeof (target as { closest?: unknown }).closest === "function"
+        ? (target as Element)
+        : null;
+    return Boolean(
+      element?.closest(
+        ".llm-citation-row, .llm-citation-inline-wrap, .llm-citation-text, .llm-citation-icon",
+      ),
+    );
+  };
+  header.addEventListener("click", (event: Event) => {
+    if (shouldIgnoreToggle(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleExpanded();
+  });
+  header.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (shouldIgnoreToggle(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleExpanded();
+  });
+
+  wrapper.append(header, body);
+  return wrapper;
+}
+
 function createQuoteCitationAnchorElement(params: {
   ownerDoc: Document;
   body: Element;
@@ -2541,41 +2641,35 @@ function createQuoteCitationAnchorElement(params: {
   candidates: AssistantCitationPaperCandidate[];
   quoteCitation: QuoteCitation;
 }): HTMLElement {
-  const wrapper = params.ownerDoc.createElement("div");
-  wrapper.className = "llm-quote-citation-anchor";
-  wrapper.dataset.quoteCitationId = params.quoteCitation.id;
-
-  const blockquote = params.ownerDoc.createElement("blockquote");
-  blockquote.textContent = params.quoteCitation.quoteText;
-  wrapper.appendChild(blockquote);
-
-  const citationRow = params.ownerDoc.createElement("div");
-  citationRow.className = "llm-citation-row-container";
   const extractedCitation = extractStandalonePaperSourceLabel(
     params.quoteCitation.citationLabel,
   );
+  let citationContent: Node;
   if (extractedCitation) {
     const matchingCandidates = resolveQuoteCitationCandidates(
       params.quoteCitation,
       extractedCitation,
       params.candidates,
     );
-    citationRow.appendChild(
-      createCitationButton({
-        ownerDoc: params.ownerDoc,
-        body: params.body,
-        panelItem: params.panelItem,
-        candidates: matchingCandidates,
-        extractedCitation,
-        quoteText: params.quoteCitation.quoteText,
-        rawCitationText: params.quoteCitation.citationLabel,
-      }),
-    );
+    citationContent = createCitationButton({
+      ownerDoc: params.ownerDoc,
+      body: params.body,
+      panelItem: params.panelItem,
+      candidates: matchingCandidates,
+      extractedCitation,
+      quoteText: params.quoteCitation.quoteText,
+      rawCitationText: params.quoteCitation.citationLabel,
+    });
   } else {
-    citationRow.textContent = params.quoteCitation.citationLabel;
+    citationContent = params.ownerDoc.createElement("span");
+    citationContent.textContent = params.quoteCitation.citationLabel;
   }
-  wrapper.appendChild(citationRow);
-  return wrapper;
+  return createQuoteCardElement({
+    ownerDoc: params.ownerDoc,
+    quoteText: params.quoteCitation.quoteText,
+    quoteCitationId: params.quoteCitation.id,
+    citationContent,
+  });
 }
 
 function textContainsQuoteCitationPlaceholder(text: string): boolean {
@@ -2909,9 +3003,15 @@ export function decorateAssistantCitationLinks(params: {
       quoteText,
     });
 
-    citationEl.classList.add("llm-citation-row-container");
-    citationEl.textContent = "";
-    citationEl.appendChild(citationElement);
+    const quoteCard = createQuoteCardElement({
+      ownerDoc,
+      quoteText,
+      citationContent: citationElement,
+    });
+    const blockquoteParent = blockquote.parentNode;
+    if (!blockquoteParent) continue;
+    blockquoteParent.replaceChild(quoteCard, blockquote);
+    citationEl.parentNode?.removeChild(citationEl);
 
     // If the citation was mixed with continuation text (edge-case leading-line
     // extraction), re-insert the remainder as a new paragraph after this element
@@ -2919,10 +3019,7 @@ export function decorateAssistantCitationLinks(params: {
     if (citationRemainder) {
       const remainderEl = ownerDoc.createElement("p");
       remainderEl.textContent = citationRemainder;
-      citationEl.parentElement?.insertBefore(
-        remainderEl,
-        citationEl.nextSibling,
-      );
+      quoteCard.parentElement?.insertBefore(remainderEl, quoteCard.nextSibling);
     }
   }
 

@@ -40,5 +40,6 @@ A selected Zotero collection/folder is also a valid comparison corpus. In collec
 - When `paper_read` returns exact passages, include short blockquotes from the already-returned passages when useful for grounding the comparison.
 - If `paper_read` provides quote anchors like `[[quote:Q_x7a2]]`, use those anchor tokens for direct quotes instead of copying the quote/citation manually.
 - If no quote anchor is provided for a direct quote, put the provided `sourceLabel` on the next non-empty line after the blockquote, before any commentary.
+- Do not write `[[source=...]]`, `section=...`, or `chunk=...` metadata in the final answer.
 - Do not call visual/page tools, `file_io`, or `run_command` just to improve citation anchors or page numbers. Use the provided `sourceLabel`; the UI can bind citations after rendering.
 - Stop after the first useful batched result when it covers the selected papers. Make at most one follow-up `paper_read({ mode:'targeted', ... })` for a concrete missing dimension.
