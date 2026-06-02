@@ -1575,6 +1575,7 @@ export class ZoteroGateway {
     libraryID: number;
     query: string;
     filters?: AgentLibraryFilters;
+    allowedItemIds?: number[];
     limit?: number;
   }): Promise<{ items: LibraryItemTarget[]; totalCount: number }> {
     const libraryID = Number.isFinite(params.libraryID) ? Math.floor(params.libraryID) : 0;
@@ -1582,6 +1583,17 @@ export class ZoteroGateway {
       return { items: [], totalCount: 0 };
     }
     const normalizedLimit = normalizeResultLimit(params.limit) || 50;
+    const allowedItemIds = Array.isArray(params.allowedItemIds)
+      ? new Set(
+          params.allowedItemIds
+            .map((itemId) =>
+              Number.isFinite(itemId) && itemId > 0
+                ? Math.floor(itemId)
+                : 0,
+            )
+            .filter(Boolean),
+        )
+      : null;
     try {
       const search = params.filters
         ? buildAgentLibrarySearch(libraryID, params.filters)
@@ -1595,6 +1607,7 @@ export class ZoteroGateway {
         const item = Zotero.Items.get(id);
         if (!item) continue;
         const topId = (item.parentID as number | false | undefined) || id;
+        if (allowedItemIds && !allowedItemIds.has(topId)) continue;
         if (!seen.has(topId)) {
           seen.add(topId);
           resolvedIds.push(topId);

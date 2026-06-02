@@ -11,6 +11,7 @@ import type {
 import type { AgentRuntimeRequest } from "../types";
 import type { PaperContextRef, TagContextRef } from "../../shared/types";
 import type {
+  AgentLibraryFilters,
   EditableArticleMetadataSnapshot,
   LibraryItemTarget,
   ZoteroGateway,
@@ -1528,53 +1529,56 @@ export class LibraryRetrieveService {
         ? records.length
         : input.maxCandidatePapers;
     try {
+      const allRecordItemIds = Array.from(byItemId.keys());
+      const runQuicksearch = async (
+        query: string,
+        options: {
+          filters?: AgentLibraryFilters;
+          allowedItemIds?: number[];
+        } = {},
+      ): Promise<void> => {
+        const result = await this.zoteroGateway.searchAllLibraryItems({
+          libraryID: scope.libraryID,
+          query,
+          filters: options.filters,
+          allowedItemIds: options.allowedItemIds,
+          limit: scanLimit,
+        });
+        if (result.totalCount > result.items.length) scan.truncated = true;
+        result.items.forEach((target) => mark(target.itemId, query));
+      };
+
       if (scope.collectionIds.length) {
         for (const query of input.queryPlan.effectiveQueries) {
           for (const collectionId of scope.collectionIds) {
-            const result = await this.zoteroGateway.searchAllLibraryItems({
-              libraryID: scope.libraryID,
-              query,
+            await runQuicksearch(query, {
               filters: { collectionId },
-              limit: scanLimit,
             });
-            if (result.totalCount > result.items.length) scan.truncated = true;
-            result.items.forEach((target) => mark(target.itemId, query));
           }
         }
-        scan.matched = matchedIds.size;
-        return scan;
       }
       if (scope.tagContexts.length) {
         for (const query of input.queryPlan.effectiveQueries) {
           for (const tagContext of scope.tagContexts) {
-            const filters = tagContext.scope
-              ? undefined
-              : { tag: tagContext.name };
-            const result = await this.zoteroGateway.searchAllLibraryItems({
-              libraryID: scope.libraryID,
+            await runQuicksearch(
               query,
-              filters,
-              limit: scanLimit,
-            });
-            if (result.totalCount > result.items.length) scan.truncated = true;
-            result.items.forEach((target) => mark(target.itemId, query));
+              tagContext.scope
+                ? { allowedItemIds: allRecordItemIds }
+                : { filters: { tag: tagContext.name } },
+            );
           }
         }
+      }
+      if (scope.collectionIds.length || scope.tagContexts.length) {
         scan.matched = matchedIds.size;
         return scan;
       }
       const explicit = new Set(scope.explicitItemIds);
       for (const query of input.queryPlan.effectiveQueries) {
-        const result = await this.zoteroGateway.searchAllLibraryItems({
-          libraryID: scope.libraryID,
+        await runQuicksearch(
           query,
-          limit: scanLimit,
-        });
-        if (result.totalCount > result.items.length) scan.truncated = true;
-        result.items.forEach((target) => {
-          if (explicit.size && !explicit.has(target.itemId)) return;
-          mark(target.itemId, query);
-        });
+          explicit.size ? { allowedItemIds: allRecordItemIds } : {},
+        );
       }
       scan.matched = matchedIds.size;
       return scan;
