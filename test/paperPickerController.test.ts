@@ -99,6 +99,7 @@ class FakeClassList {
 
 class FakeStyle {
   display = "";
+  height = "";
   private properties = new Map<string, string>();
 
   setProperty(name: string, value: string): void {
@@ -1091,6 +1092,110 @@ describe("paper picker controller", function () {
       assert.lengthOf(folderPanel.children, 1);
       assert.lengthOf(tagPanel.children, 5);
       assert.lengthOf(referencePanel.children, 1);
+    } finally {
+      selectedCollectionContextCache.delete(itemId);
+      selectedPaperContextCache.delete(itemId);
+      selectedPaperPreviewExpandedCache.delete(itemId);
+      invalidatePaperSearchCache(1);
+      (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero =
+        originalZotero;
+      (globalThis as typeof globalThis & { ztoolkit?: unknown }).ztoolkit =
+        originalToolkit;
+    }
+  });
+
+  it("uses the current anchor height before the first browse render", async function () {
+    const originalZotero = (
+      globalThis as typeof globalThis & { Zotero?: unknown }
+    ).Zotero;
+    const originalToolkit = (
+      globalThis as typeof globalThis & { ztoolkit?: any }
+    ).ztoolkit;
+    const itemId = 146;
+    const paper = makeRegularItem(1);
+    const attachment = makeAttachment(1);
+    const items = new Map<number, Zotero.Item>([
+      [paper.id, paper],
+      [attachment.id, attachment],
+    ]);
+    const fakeDocument = new FakeDocument();
+    const body = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as Element;
+    const panelRoot = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as FakeElement;
+    const inputSection = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as FakeElement;
+    const paperPicker = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as FakeElement;
+    const paperPickerList = fakeDocument.createElementNS(
+      "http://www.w3.org/1999/xhtml",
+      "div",
+    ) as unknown as FakeElement;
+    const inputBox = makeFakeInput("@");
+
+    panelRoot.setBoundingClientRect({ top: 0, bottom: 800, height: 800 });
+    inputSection.setBoundingClientRect({ top: 520, bottom: 650, height: 130 });
+    paperPicker.style.display = "none";
+    paperPicker.appendChild(paperPickerList);
+    inputSection.appendChild(paperPicker);
+
+    (globalThis as typeof globalThis & { Zotero?: unknown }).Zotero = {
+      Items: {
+        getAll: async () => [paper],
+        get: (id: number) => items.get(id) || null,
+      },
+      Collections: {
+        getByLibrary: () => [],
+      },
+      Libraries: {
+        getName: () => "My Library",
+      },
+    };
+    (globalThis as typeof globalThis & { ztoolkit?: unknown }).ztoolkit = {
+      log: () => undefined,
+    };
+    invalidatePaperSearchCache(1);
+
+    try {
+      const controller = createPaperPickerController({
+        body,
+        panelRoot: panelRoot as unknown as HTMLElement,
+        inputBox,
+        paperPicker: paperPicker as unknown as HTMLDivElement,
+        paperPickerList: paperPickerList as unknown as HTMLDivElement,
+        getItem: () => ({ id: itemId }) as Zotero.Item,
+        getCurrentLibraryID: () => 1,
+        isWebChatMode: () => false,
+        resolveAutoLoadedPaperContext: () => null,
+        getManualPaperContextsForItem: () => [],
+        isPaperContextMineru: () => false,
+        getTextContextConversationKey: () => null,
+        persistDraftInputForCurrentConversation: () => undefined,
+        updatePaperPreviewPreservingScroll: () => undefined,
+        updateSelectedTextPreviewPreservingScroll: () => undefined,
+        setStatusMessage: () => undefined,
+        log: () => undefined,
+      });
+
+      controller.schedulePaperPickerSearch();
+      await waitForPickerSearch();
+
+      assert.equal(paperPicker.style.display, "block");
+      assert.equal(
+        paperPicker.style.getPropertyValue("--llm-paper-picker-max-height"),
+        "500px",
+      );
+      const shell = paperPickerList.children[0];
+      const referencePanel = shell.children[1];
+      assert.equal(referencePanel.style.height, "270px");
     } finally {
       selectedCollectionContextCache.delete(itemId);
       selectedPaperContextCache.delete(itemId);

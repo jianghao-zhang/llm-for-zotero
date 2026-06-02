@@ -1643,6 +1643,10 @@ export function createPaperPickerController(deps: PaperPickerControllerDeps): {
     if (!paperPicker || !paperPickerList) return;
     const ownerDoc = body.ownerDocument;
     if (!ownerDoc) return;
+    // Prime placement before panel heights are calculated. On first standalone
+    // open the picker has no measured max height yet, so rendering before
+    // positioning can leave the panel stack using stale/default geometry.
+    showPaperPicker();
     if (referenceSelectorState.mode === "empty") {
       paperPickerList.innerHTML = "";
       paperPicker.scrollTop = 0;
