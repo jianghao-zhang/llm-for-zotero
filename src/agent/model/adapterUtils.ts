@@ -11,9 +11,21 @@ import { parseDataUrl, readFileRefAsBase64 } from "./shared";
 // ── Resolved content parts ──────────────────────────────────────────────────
 
 export type ResolvedTextPart = { type: "text"; text: string };
-export type ResolvedImagePart = { type: "image"; mimeType: string; base64: string };
-export type ResolvedPdfPart = { type: "pdf"; base64: string; filename?: string };
-export type ResolvedFilePlaceholder = { type: "file_placeholder"; name: string };
+export type ResolvedImagePart = {
+  type: "image";
+  mimeType: string;
+  base64: string;
+  detail?: "low" | "high" | "auto";
+};
+export type ResolvedPdfPart = {
+  type: "pdf";
+  base64: string;
+  filename?: string;
+};
+export type ResolvedFilePlaceholder = {
+  type: "file_placeholder";
+  name: string;
+};
 
 export type ResolvedContentPart =
   | ResolvedTextPart
@@ -42,7 +54,12 @@ export async function resolveContentParts(
     if (part.type === "image_url") {
       const parsed = parseDataUrl(part.image_url.url);
       if (parsed) {
-        parts.push({ type: "image", mimeType: parsed.mimeType, base64: parsed.data });
+        parts.push({
+          type: "image",
+          mimeType: parsed.mimeType,
+          base64: parsed.data,
+          detail: part.image_url.detail,
+        });
       } else {
         parts.push({ type: "text", text: "[image]" });
       }
@@ -74,9 +91,12 @@ export function partitionMessages(messages: AgentModelMessage[]): {
   const conversationMessages: AgentModelMessage[] = [];
   for (const message of messages) {
     if (message.role === "system") {
-      const text = typeof message.content === "string"
-        ? message.content
-        : message.content.map((p) => (p.type === "text" ? p.text : "")).join("");
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .map((p) => (p.type === "text" ? p.text : ""))
+              .join("");
       if (text.trim()) systemTexts.push(text);
     } else {
       conversationMessages.push(message);

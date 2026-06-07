@@ -1,5 +1,16 @@
 import { getActiveReaderForSelectedTab } from "./contextResolution";
 
+const PDF_PAGE_MODEL_RENDER_SCALE = 2.6;
+const PDF_PAGE_MODEL_RETRY_SCALE = 2.0;
+
+function getPdfPageRenderScaleForCount(total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return PDF_PAGE_MODEL_RENDER_SCALE;
+  if (total >= 24) return 2.0;
+  if (total >= 12) return 2.2;
+  if (total >= 6) return 2.4;
+  return PDF_PAGE_MODEL_RENDER_SCALE;
+}
+
 // ── Zotero reader introspection helpers ──────────────────────────────────────
 // These mirror the equivalent private helpers in agent/services/pdfPageService
 // but live here so contextPanel code can use them without importing agent code.
@@ -814,7 +825,7 @@ async function renderPdfPageToDataUrl(
     const preferredScale =
       Number.isFinite(requestedScale) && requestedScale > 0
         ? requestedScale
-        : 1.8;
+        : PDF_PAGE_MODEL_RENDER_SCALE;
     const renderWindow = getPdfRenderWindow(canvasDoc, reader);
     const viewportResult = resolvePdfViewport(
       rawPage,
@@ -939,18 +950,20 @@ export async function captureCurrentPdfPage(): Promise<string | null> {
   );
   const pageNumber = pageIndex + 1;
 
-  // Fast path: grab the already-rendered canvas.
-  const rendered = await waitForRenderedPageCanvas(app, reader, pageNumber);
-  if (rendered && rendered.width > 0 && rendered.height > 0) {
-    try {
-      return rendered.toDataURL("image/png");
-    } catch {
-      // Canvas may be tainted — fall through to PDF.js re-render.
-    }
-  }
+  const renderedOffscreen = await renderPdfPageToDataUrl(
+    app,
+    reader,
+    pageNumber,
+    { scale: PDF_PAGE_MODEL_RENDER_SCALE },
+  );
+  if (renderedOffscreen) return renderedOffscreen;
 
-  // Fallback: render the page off-screen via the PDF.js API.
-  return renderPdfPageToDataUrl(app, reader, pageNumber);
+  // Fallback: grab the already-rendered canvas from the reader.
+  const rendered = await waitForRenderedPageCanvas(app, reader, pageNumber);
+  if (rendered && !isCanvasLikelyBlank(rendered)) {
+    return canvasToDataUrl(rendered);
+  }
+  return null;
 }
 
 /**
@@ -1043,8 +1056,8 @@ async function capturePageByNavigation(
   await new Promise((resolve) => setTimeout(resolve, 120));
   const retryScale =
     Number.isFinite(options.scale) && (options.scale as number) > 1
-      ? Math.max(1, (options.scale as number) - 0.35)
-      : 1;
+      ? Math.max(PDF_PAGE_MODEL_RETRY_SCALE, (options.scale as number) - 0.6)
+      : PDF_PAGE_MODEL_RETRY_SCALE;
   const retry = await renderPdfPageToDataUrl(app, reader, pageNumber, {
     scale: retryScale,
   });
@@ -1094,15 +1107,7 @@ export async function capturePdfPages(
 
   const results: string[] = [];
   const total = pageNumbers.length;
-  const renderScale = Number.isFinite(total)
-    ? total >= 16
-      ? 1
-      : total >= 10
-        ? 1.1
-        : total >= 6
-          ? 1.25
-          : 1.8
-    : 1.8;
+  const renderScale = getPdfPageRenderScaleForCount(total);
   try {
     for (let idx = 0; idx < total; idx++) {
       opts?.onProgress?.(idx + 1, total);

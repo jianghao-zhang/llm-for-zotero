@@ -325,6 +325,64 @@ describe("OpenAICompatibleAgentAdapter", function () {
     assert.notInclude(JSON.stringify(capturedSecondBody), "reasoning_content");
   });
 
+  it("preserves high-detail image hints for OpenAI-compatible chat payloads", async function () {
+    let capturedBody: Record<string, unknown> | null = null;
+    (
+      globalThis as typeof globalThis & {
+        ztoolkit: { getGlobal: (name: string) => unknown };
+      }
+    ).ztoolkit = {
+      getGlobal: (name: string) => {
+        if (name !== "fetch") return undefined;
+        return async (_url: string, init?: RequestInit) => {
+          capturedBody = JSON.parse(String(init?.body || "{}")) as Record<
+            string,
+            unknown
+          >;
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            headers: { get: () => "application/json" },
+            body: undefined,
+            json: async () => ({
+              choices: [{ message: { content: "Done" } }],
+            }),
+            text: async () => "",
+          };
+        };
+      },
+    };
+
+    await adapter.runStep({
+      request: makeRequest({
+        apiBase: "https://api.openai.com/v1",
+        providerProtocol: "openai_chat_compat",
+      }),
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect the figure." },
+            {
+              type: "image_url",
+              image_url: {
+                url: "data:image/png;base64,AAAA",
+                detail: "high",
+              },
+            },
+          ],
+        },
+      ],
+      tools,
+    });
+
+    const messages = capturedBody?.messages as Array<Record<string, unknown>>;
+    const content = messages?.[0]?.content as Array<Record<string, unknown>>;
+    const imageUrl = content?.[1]?.image_url as Record<string, unknown>;
+    assert.equal(imageUrl?.detail, "high");
+  });
+
   it("rejects unresolved PDF file_refs instead of serializing them as image_url", async function () {
     try {
       await adapter.runStep({

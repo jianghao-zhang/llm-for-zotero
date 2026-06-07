@@ -407,7 +407,7 @@ export function attachComposeCaptureController(
             body.ownerDocument?.defaultView ||
             (Zotero.getMainWindow?.() as Window | null);
           const optimized = win
-            ? await optimizeImageDataUrl(win, dataUrl)
+            ? await optimizeImageDataUrl(win, dataUrl, { mode: "pdf-page" })
             : dataUrl;
           const existingImages = selectedImageCache.get(item.id) || [];
           const nextImages = [...existingImages, optimized].slice(
@@ -546,7 +546,11 @@ export function attachComposeCaptureController(
             const optimized: string[] = [];
             for (const dataUrl of dataUrls) {
               optimized.push(
-                win ? await optimizeImageDataUrl(win, dataUrl) : dataUrl,
+                win
+                  ? await optimizeImageDataUrl(win, dataUrl, {
+                      mode: "pdf-page",
+                    })
+                  : dataUrl,
               );
             }
             const existingImages = selectedImageCache.get(item.id) || [];

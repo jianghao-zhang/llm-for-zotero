@@ -116,7 +116,10 @@ async function buildMessagesPayload(messages: AgentModelMessage[]) {
             }
             parts.push({
               type: "image_url",
-              image_url: { url: `data:${rp.mimeType};base64,${rp.base64}` },
+              image_url: {
+                url: `data:${rp.mimeType};base64,${rp.base64}`,
+                ...(rp.detail ? { detail: rp.detail } : {}),
+              },
             });
             break;
           case "pdf":

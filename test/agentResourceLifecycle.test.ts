@@ -939,4 +939,24 @@ describe("agent resource lifecycle", function () {
       "sourceLabel: (translation.md, attachment under Smith, 2024)",
     );
   });
+
+  it("marks request screenshots as high-detail image inputs", async function () {
+    const messages = await buildAgentInitialMessages(
+      request({
+        model: "gpt-4.1",
+        screenshots: ["data:image/png;base64,AAAA"],
+      }),
+      [],
+      [],
+    );
+    const userMessage = messages[messages.length - 1];
+    assert.isArray(userMessage.content);
+    if (!Array.isArray(userMessage.content)) return;
+    const imagePart = userMessage.content.find(
+      (part) => part.type === "image_url",
+    );
+    assert.equal(imagePart?.type, "image_url");
+    if (imagePart?.type !== "image_url") return;
+    assert.equal(imagePart.image_url.detail, "high");
+  });
 });

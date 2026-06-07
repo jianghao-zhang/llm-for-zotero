@@ -7,14 +7,40 @@ function estimateDataUrlByteLength(dataUrl: string): number {
   return Math.max(0, Math.floor((payloadLength * 3) / 4));
 }
 
+type ImageOptimizationMode = "screenshot" | "pdf-page";
+
+type ImageOptimizationProfile = {
+  maxDimension: number;
+  maxLosslessBytes: number;
+  maxPassthroughBytes: number;
+  jpegQuality: number;
+};
+
+const IMAGE_OPTIMIZATION_PROFILES: Record<
+  ImageOptimizationMode,
+  ImageOptimizationProfile
+> = {
+  screenshot: {
+    maxDimension: 2048,
+    maxLosslessBytes: 2 * 1024 * 1024,
+    maxPassthroughBytes: 4 * 1024 * 1024,
+    jpegQuality: 0.88,
+  },
+  "pdf-page": {
+    maxDimension: 3072,
+    maxLosslessBytes: 8 * 1024 * 1024,
+    maxPassthroughBytes: 12 * 1024 * 1024,
+    jpegQuality: 0.95,
+  },
+};
+
 async function optimizeImageDataUrl(
   win: Window,
   dataUrl: string,
+  options: { mode?: ImageOptimizationMode } = {},
 ): Promise<string> {
-  const maxDimension = 2048;
-  const maxLosslessBytes = 2 * 1024 * 1024;
-  const maxPassthroughBytes = 4 * 1024 * 1024;
-  const jpegQuality = 0.88;
+  const { maxDimension, maxLosslessBytes, maxPassthroughBytes, jpegQuality } =
+    IMAGE_OPTIMIZATION_PROFILES[options.mode || "screenshot"];
 
   try {
     const ImageCtor = win.Image as typeof Image;

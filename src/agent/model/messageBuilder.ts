@@ -192,6 +192,7 @@ function buildFullUserMessage(
         type: "image_url" as const,
         image_url: {
           url,
+          detail: "high" as const,
         },
       })),
       ...pdfAttachments.map((a) => ({
