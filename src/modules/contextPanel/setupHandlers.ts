@@ -4541,8 +4541,6 @@ export function setupHandlers(
 
           // [webchat] Entering webchat mode → fresh session, then apply webchat UI AFTER re-render
           if (entry.authMode === "webchat" && !wasWebChat) {
-            initializeWebChatConversationForCurrentItem();
-            refreshChatPreservingScroll();
             // Clear cached images so stale screenshots don't auto-attach to ChatGPT
             if (item) {
               selectedImageCache.delete(item.id);
@@ -4564,6 +4562,9 @@ export function setupHandlers(
             applyWebChatModeUI();
             void (async () => {
               await createAndSwitchPaperConversation();
+              if (!isWebChatMode()) return;
+              initializeWebChatConversationForCurrentItem();
+              refreshChatPreservingScroll();
 
               // Show preloading screen to verify connectivity before enabling webchat
               const chatShellEl = body.querySelector(

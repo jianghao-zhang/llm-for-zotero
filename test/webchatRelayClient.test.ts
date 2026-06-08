@@ -341,6 +341,17 @@ describe("webchat relay/client", function () {
       "https://chat.deepseek.com/a/chat/s/deepseek-thread-2?from=sidebar",
     );
     assert.equal(deepseek.remote_chat_id, "deepseek-thread-2");
+
+    const root = await invokeEndpoint(
+      "/llm-for-zotero/webchat/update_chat_url",
+      "POST",
+      {
+        chatUrl: "https://chat.deepseek.com/",
+      },
+    );
+
+    assert.equal(root.remote_chat_url, "https://chat.deepseek.com/");
+    assert.isNull(root.remote_chat_id);
   });
 
   it("propagates per-turn diagnostics through phase, snapshot, and terminal response", async function () {

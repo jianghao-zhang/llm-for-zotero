@@ -1340,8 +1340,7 @@ const UpdateChatUrlEndpoint = createEndpoint(["POST"], (opts) => {
         : null;
   if (chatUrl) {
     S().remote_chat_url = chatUrl;
-    S().remote_chat_id =
-      deriveRemoteChatIdFromUrl(chatUrl) || S().remote_chat_id;
+    S().remote_chat_id = deriveRemoteChatIdFromUrl(chatUrl);
     if (!S().turn_status) {
       S().turn_status = "ready";
     }

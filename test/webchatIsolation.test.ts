@@ -146,10 +146,18 @@ describe("webchat isolation", function () {
       entryStart,
     );
     const entryBlock = source.slice(entryStart, entryBlockEnd);
+    const paperSwitch = entryBlock.indexOf(
+      "await createAndSwitchPaperConversation();",
+    );
+    const webchatInit = entryBlock.indexOf(
+      "initializeWebChatConversationForCurrentItem();",
+    );
 
     assert.isAtLeast(entryStart, 0);
     assert.isAbove(entryBlockEnd, entryStart);
-    assert.include(entryBlock, "await createAndSwitchPaperConversation();");
+    assert.isAtLeast(paperSwitch, 0);
+    assert.isAtLeast(webchatInit, 0);
+    assert.isBelow(paperSwitch, webchatInit);
     assert.notInclude(entryBlock, "createAndSwitchGlobalConversation");
   });
 
