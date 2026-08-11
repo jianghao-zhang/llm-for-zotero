@@ -212,11 +212,11 @@ describe("AgentRuntime", function () {
         request: {
           conversationKey: 1,
           mode: "agent",
-          userText: "help me understand this paper",
+          userText: "inspect figure 2 in this paper",
           selectedPaperContexts: [
             { itemId: 10, contextItemId: 11, title: "Paper" },
           ],
-          forcedSkillIds: ["evidence-based-qa"],
+          forcedSkillIds: ["analyze-figures"],
           model: "gpt-5.4",
           apiBase: "",
           apiKey: "test",
@@ -232,10 +232,9 @@ describe("AgentRuntime", function () {
             event.type === "status",
         )
         .map((event) => event.text);
-      assert.includeMembers(statusTexts, [
-        "Skill activated: simple-paper-qa",
-        "Skill activated: evidence-based-qa",
-      ]);
+      assert.include(statusTexts, "Skill activated: analyze-figures");
+      assert.notInclude(statusTexts, "Skill activated: simple-paper-qa");
+      assert.notInclude(statusTexts, "Skill activated: evidence-based-qa");
     } finally {
       setUserSkills([]);
       restoreDb();
@@ -1724,7 +1723,7 @@ describe("AgentRuntime", function () {
       assert.equal(outcome.kind, "completed");
       if (outcome.kind !== "completed") return;
       assert.equal(outcome.text, "Saved Zotero note.");
-      assert.isTrue(sawInitialZoteroRule);
+      assert.isFalse(sawInitialZoteroRule);
       assert.isFalse(sawInitialFileRule);
       assert.isFalse(sawCorrectivePrompt);
       assert.equal(stepIndex, 2);

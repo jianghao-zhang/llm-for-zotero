@@ -7,6 +7,8 @@ import {
   registerLLMStyles,
   registerNoteEditingSelectionTracking,
   registerReaderSelectionTracking,
+  unregisterAllReaderContextPanels,
+  unregisterReaderContextPanel,
   unregisterAllNoteEditingSelectionTracking,
   unregisterNoteEditingSelectionTracking,
   unregisterReaderSelectionTracking,
@@ -317,7 +319,7 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   );
 
   registerLLMStyles(win);
-  registerReaderContextPanel();
+  registerReaderContextPanel(win);
   registerReaderSelectionTracking();
   registerNoteEditingSelectionTracking(win);
   registerZoteroItemContextMenu({
@@ -389,6 +391,7 @@ function registerPrefsPane() {
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
+  unregisterReaderContextPanel(win);
   unregisterNoteEditingSelectionTracking(win);
   ztoolkit.unregisterAll();
   closeAllAddonDialogs();
@@ -404,6 +407,7 @@ function onShutdown(): void {
   }
   ztoolkit.unregisterAll();
   unregisterReaderSelectionTracking();
+  unregisterAllReaderContextPanels();
   unregisterAllNoteEditingSelectionTracking();
   closeAllAddonDialogs();
   addon.data.standaloneWindow?.close();

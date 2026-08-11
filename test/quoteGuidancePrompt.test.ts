@@ -127,10 +127,15 @@ describe("quote guidance prompts", function () {
     assertBalancedEvidenceGuidance(BALANCED_EVIDENCE_GUIDANCE);
   });
 
-  it("keeps direct chat guidance from requesting dangling source labels", function () {
-    assertEvidenceToExplanationGuidance(DEFAULT_SYSTEM_PROMPT);
-    assertSourceLabelPlacementGuidance(DEFAULT_SYSTEM_PROMPT);
-    assertStrictBlockquoteSourceGuidance(DEFAULT_SYSTEM_PROMPT);
+  it("keeps direct chat evidence guidance compact and citation-safe", function () {
+    assert.include(DEFAULT_SYSTEM_PROMPT, "Ground paper-specific claims");
+    assert.include(DEFAULT_SYSTEM_PROMPT, "distinguish source claims");
+    assert.include(DEFAULT_SYSTEM_PROMPT, "short verbatim quotes only");
+    assert.include(DEFAULT_SYSTEM_PROMPT, "[[quote:...]]");
+    assert.include(DEFAULT_SYSTEM_PROMPT, "sourceLabel strings exactly");
+    assert.include(DEFAULT_SYSTEM_PROMPT, "never invent pages");
+    assert.notInclude(DEFAULT_SYSTEM_PROMPT, "Example source quote");
+    assert.notInclude(DEFAULT_SYSTEM_PROMPT, "1-3 high-signal snippets");
   });
 
   it("includes balanced evidence guidance in the core agent persona", function () {
@@ -213,22 +218,22 @@ describe("quote guidance prompts", function () {
     assertDirectQuoteSafety(text);
   });
 
-  it("keeps static skill prompts aligned with balanced evidence guidance", function () {
+  it("keeps citation binding outside retired reasoning workflow skills", function () {
     const skills = [
-      "../src/agent/skills/simple-paper-qa.md",
-      "../src/agent/skills/compare-papers.md",
-      "../src/agent/skills/evidence-based-qa.md",
-      "../src/agent/skills/literature-review.md",
+      "../src/agent/skills/analyze-figures.md",
+      "../src/agent/skills/write-note.md",
+      "../src/agent/skills/import-cited-reference.md",
     ];
 
     for (const skill of skills) {
       const text = readSkill(skill);
-      assertBalancedEvidenceGuidance(text);
-      assertDirectQuoteSafety(text);
+      assert.include(text, "activation: manual");
+      assert.notInclude(text, "Step 1");
+      assert.notInclude(text, "Recipe");
     }
   });
 
-  it("guides figure tasks with MinerU cache through extracted PDF crops", async function () {
+  it("does not inject a hidden figure workflow around the retained helper", async function () {
     const paperContext: PaperContextRef = {
       ...paper(),
       title: "Figure Paper",
@@ -245,20 +250,15 @@ describe("quote guidance prompts", function () {
     );
     const text = messages.map((message) => message.content).join("\n");
 
-    assert.include(text, "paper_read({ mode:'figures'");
-    assert.include(text, "precise PDF crops");
-    assert.include(text, "full.md");
-    assert.include(text, "do not read or embed MinerU image paths");
     assert.include(text, "/tmp/llm-for-zotero-mineru/12");
-    assert.include(text, "Use `paper_read({ mode:'visual'");
-    assert.include(text, "only when the user explicitly asks");
-    assert.notInclude(text, "read the extracted image path with `file_io`");
+    assert.notInclude(text, "TURN RULE: This is a figure/table");
+    assert.notInclude(text, "call `paper_read({ mode:'figures'");
   });
 
   it("describes figure image support generically without naming specific models", function () {
     const text = readSkill("../src/agent/skills/analyze-figures.md");
 
-    assert.include(text, "Visual models");
+    assert.include(text, "available PDF/image tools");
     for (const modelName of ["GPT-4o", "Codex", "Claude", "Gemini"]) {
       assert.notInclude(text, modelName);
     }

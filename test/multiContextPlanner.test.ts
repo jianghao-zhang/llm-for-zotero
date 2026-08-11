@@ -1339,7 +1339,10 @@ describe("multiContextPlanner", function () {
       advanced: {
         temperature: 0.2,
         maxTokens: 512,
-        inputTokenCap: 1_600,
+        // Keep this test independent of the current default-system-prompt
+        // length: force a manifest-only budget instead of relying on prompt
+        // overhead to consume the remaining context window.
+        inputTokenCap: 800,
       },
     });
 

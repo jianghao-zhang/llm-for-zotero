@@ -14,10 +14,13 @@ import {
   isDeniedTrustedZoteroMcpGuardianReviewForTests,
   listCodexAppServerModels,
   NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
+  parseCodexAppServerThreadSnapshot,
   resolveCodexNativeApprovalRequest,
+  resolveCodexNativeThreadTitle,
   resolveSafeCodexNativeApprovalRequest,
   resetCodexNativePathSafetyStateForTests,
   runCodexAppServerNativeTurn,
+  shouldStartNewNativeThreadForModel,
 } from "../src/codexAppServer/nativeClient";
 import {
   buildCodexNativePriorReadContextBlock,
@@ -52,6 +55,7 @@ function createNativeLifecycleTestProcess(params: {
   requests: Array<{ method: string; params: Record<string, any> }>;
   deltaForTurn?: (turnNumber: number) => string;
   skillsListResult?: unknown;
+  threadReadResult?: unknown;
 }): CodexAppServerProcess {
   let turnNumber = 0;
   const threadIds = [...params.newThreadIds];
@@ -107,10 +111,20 @@ function createNativeLifecycleTestProcess(params: {
           );
           return;
         }
+        if (request.method === "thread/read") {
+          setTimeout(
+            () =>
+              handleMessage({
+                id: request.id,
+                result: params.threadReadResult || {},
+              }),
+            0,
+          );
+          return;
+        }
         if (
           request.method === "thread/archive" ||
           request.method === "thread/name/set" ||
-          request.method === "thread/read" ||
           request.method === "thread/inject_items"
         ) {
           setTimeout(() => handleMessage({ id: request.id, result: {} }), 0);
@@ -154,7 +168,10 @@ function createNativeLifecycleTestProcess(params: {
   return proc;
 }
 
-function installDirectPathTestPrefs(skillMode: "native" | "off" = "off") {
+function installDirectPathTestPrefs(
+  skillMode: "native" | "off" = "off",
+  sessionFolder = "",
+) {
   const originalZotero = (globalThis as any).Zotero;
   (globalThis as any).Zotero = {
     ...(originalZotero || {}),
@@ -165,6 +182,9 @@ function installDirectPathTestPrefs(skillMode: "native" | "off" = "off") {
       get: (key: string) => {
         if (key.endsWith(".codexAppServerZoteroMcpToolsEnabled")) return false;
         if (key.endsWith(".codexNativeSkillMode")) return skillMode;
+        if (key.endsWith(".codexAppServerSessionFolder")) {
+          return sessionFolder;
+        }
         return undefined;
       },
     },
@@ -203,6 +223,261 @@ function createDirectPdfSelection(params: {
 }
 
 describe("Codex app-server native client", function () {
+  it("parses shared thread titles and final user/assistant messages", function () {
+    const snapshot = parseCodexAppServerThreadSnapshot({
+      thread: {
+        id: "thread-shared",
+        name: "Renamed in Codex App",
+        turns: [
+          {
+            id: "turn-external",
+            status: "completed",
+            startedAt: 100,
+            completedAt: 101,
+            items: [
+              {
+                id: "item-user",
+                type: "userMessage",
+                content: [{ type: "text", text: "Continue in the app" }],
+              },
+              {
+                id: "item-progress",
+                type: "agentMessage",
+                phase: "commentary",
+                text: "Checking",
+              },
+              {
+                id: "item-final",
+                type: "agentMessage",
+                phase: "final_answer",
+                text: "External answer",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(snapshot, {
+      threadId: "thread-shared",
+      name: "Renamed in Codex App",
+      turns: [
+        {
+          id: "turn-external",
+          status: "completed",
+          startedAt: 100,
+          completedAt: 101,
+          userText: "Continue in the app",
+          assistantText: "External answer",
+        },
+      ],
+    });
+  });
+
+  it("uses the selected-text comment as the initial shared thread title", function () {
+    assert.equal(
+      resolveCodexNativeThreadTitle({
+        requestedTitle: "Please explain this selected text.",
+        paperTitle: "Recursive Language Models",
+        userText:
+          "Selected text contexts with explicit sources:\nText Context 1:\ntext\n\nUser comment for this context:\nHow reliable is this claim?\n\nUser question:\nPlease explain this selected text.",
+      }),
+      "How reliable is this claim?",
+    );
+    assert.equal(
+      resolveCodexNativeThreadTitle({
+        requestedTitle: "Please explain this selected text.",
+        paperTitle: "Recursive Language Models",
+      }),
+      "Recursive Language Models — selected text",
+    );
+  });
+
+  it("starts a clean native thread when the selected model changes", function () {
+    assert.isFalse(
+      shouldStartNewNativeThreadForModel(
+        "deepseek-v4-flash:0731",
+        "DEEPSEEK-V4-FLASH:0731",
+      ),
+    );
+    assert.isTrue(
+      shouldStartNewNativeThreadForModel(
+        "gpt-5.3-codex-spark",
+        "deepseek-v4-flash:0731",
+      ),
+    );
+    assert.isFalse(
+      shouldStartNewNativeThreadForModel(undefined, "deepseek-v4-flash:0731"),
+    );
+  });
+
+  it("reinjects visible history into a clean configured-folder thread after a model switch", async function () {
+    const processKey = "native-model-switch-clean-thread-test";
+    const requests: Array<{
+      method: string;
+      params: Record<string, any>;
+    }> = [];
+    const proc = createNativeLifecycleTestProcess({
+      newThreadIds: ["thread-deepseek-clean"],
+      requests,
+    });
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZtoolkit = (globalThis as any).ztoolkit;
+    const expectedCwd = "/Users/example/Documents/cccodex/codex-cli/papers/";
+    const restorePrefs = installDirectPathTestPrefs("off", expectedCwd);
+    const persistedThreadIds: string[] = [];
+    let visibilityRefreshes = 0;
+    CodexAppServerProcess.spawn = async () => proc;
+    (globalThis as any).ztoolkit = { log: () => undefined };
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-model-switch-test",
+          conversationKey: 6_000_000_034,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "deepseek-v4-flash:0731",
+        messages: [
+          { role: "user", content: "Earlier Spark request." },
+          { role: "assistant", content: "Earlier Spark response." },
+          { role: "user", content: "Continue with DeepSeek." },
+        ],
+        hooks: {
+          loadProviderSession: async () => ({
+            threadId: "thread-spark",
+            cwd: "/Users/example/old-project/",
+            model: "gpt-5.3-codex-spark",
+          }),
+          persistProviderSessionId: async (threadId) => {
+            persistedThreadIds.push(threadId);
+          },
+          notifyCodexAppTasksChanged: async () => {
+            visibilityRefreshes += 1;
+            return true;
+          },
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      if (originalZtoolkit === undefined) {
+        delete (globalThis as any).ztoolkit;
+      } else {
+        (globalThis as any).ztoolkit = originalZtoolkit;
+      }
+      restorePrefs();
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    assert.notExists(
+      requests.find((request) => request.method === "thread/resume"),
+    );
+    const threadStart = requests.find(
+      (request) => request.method === "thread/start",
+    );
+    const historyInjection = requests.find(
+      (request) => request.method === "thread/inject_items",
+    );
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    );
+    assert.equal(threadStart?.params.cwd, expectedCwd);
+    assert.equal(threadStart?.params.model, "deepseek-v4-flash:0731");
+    assert.deepEqual(persistedThreadIds, ["thread-deepseek-clean"]);
+    assert.equal(visibilityRefreshes, 1);
+    assert.equal(historyInjection?.params.threadId, "thread-deepseek-clean");
+    assert.include(
+      JSON.stringify(historyInjection?.params.items || []),
+      "Earlier Spark request.",
+    );
+    assert.include(
+      JSON.stringify(historyInjection?.params.items || []),
+      "Earlier Spark response.",
+    );
+    assert.equal(turnStart?.params.threadId, "thread-deepseek-clean");
+    assert.equal(turnStart?.params.cwd, expectedCwd);
+  });
+
+  it("refreshes a resumed shared thread before and after sending", async function () {
+    const processKey = "native-shared-thread-sync";
+    const requests: Array<{
+      method: string;
+      params: Record<string, any>;
+    }> = [];
+    const proc = createNativeLifecycleTestProcess({
+      newThreadIds: [],
+      requests,
+      threadReadResult: {
+        thread: {
+          id: "thread-shared",
+          name: "Renamed in Codex App",
+          turns: [
+            {
+              id: "turn-external",
+              status: "completed",
+              startedAt: 100,
+              completedAt: 101,
+              items: [
+                {
+                  id: "external-user",
+                  type: "userMessage",
+                  content: [{ type: "text", text: "External question" }],
+                },
+                {
+                  id: "external-answer",
+                  type: "agentMessage",
+                  text: "External answer",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const restorePrefs = installDirectPathTestPrefs("off");
+    const snapshots: Array<{ snapshot: unknown; currentTurnId?: string }> = [];
+    CodexAppServerProcess.spawn = async () => proc;
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-shared-thread-sync",
+          conversationKey: 6_000_000_099,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "gpt-5.6",
+        messages: [{ role: "user", content: "Continue from Zotero" }],
+        processKey,
+        hooks: {
+          loadProviderSessionId: async () => "thread-shared",
+          persistProviderSessionId: async () => undefined,
+          onExternalThreadSnapshot: async (snapshot, currentTurnId) => {
+            snapshots.push({ snapshot, currentTurnId });
+          },
+        },
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+      restorePrefs();
+    }
+
+    assert.lengthOf(snapshots, 2);
+    assert.deepInclude(snapshots[0].snapshot as object, {
+      threadId: "thread-shared",
+      name: "Renamed in Codex App",
+    });
+    assert.equal(snapshots[0].currentTurnId, undefined);
+    assert.equal(snapshots[1].currentTurnId, "turn-lifecycle-1");
+    assert.isBelow(
+      requests.findIndex((request) => request.method === "thread/read"),
+      requests.findIndex((request) => request.method === "turn/start"),
+    );
+  });
+
   it("renders exact original PDF paths and identities in selection order", function () {
     const first = createDirectPdfSelection({
       itemId: 10,
@@ -359,7 +634,7 @@ describe("Codex app-server native client", function () {
     );
     assert.lengthOf(threadStarts, 2);
     assert.equal(threadStarts[0].params.ephemeral, true);
-    assert.equal(threadStarts[0].params.sandbox, "read-only");
+    assert.equal(threadStarts[0].params.sandbox, "danger-full-access");
     assert.equal(threadStarts[0].params.config?.features?.shell_tool, true);
     assert.notProperty(threadStarts[0].params, "runtimeWorkspaceRoots");
     assert.include(
@@ -387,8 +662,8 @@ describe("Codex app-server native client", function () {
       "raw_pdf_read",
     );
     assert.equal(threadStarts[1].params.ephemeral, false);
-    assert.equal(threadStarts[1].params.sandbox, "read-only");
-    assert.equal(threadStarts[1].params.config?.features?.shell_tool, false);
+    assert.equal(threadStarts[1].params.sandbox, "danger-full-access");
+    assert.equal(threadStarts[1].params.config?.features?.shell_tool, true);
     assert.notInclude(
       threadStarts[1].params.developerInstructions,
       first.document.absolutePath,
@@ -428,10 +703,7 @@ describe("Codex app-server native client", function () {
       requests
         .filter((request) => request.method === "turn/start")
         .map((request) => request.params.sandboxPolicy),
-      [
-        { type: "readOnly", networkAccess: false },
-        { type: "readOnly", networkAccess: false },
-      ],
+      [{ type: "dangerFullAccess" }, { type: "dangerFullAccess" }],
     );
     assert.isTrue(
       requests.some(
@@ -554,7 +826,7 @@ describe("Codex app-server native client", function () {
   });
 
   it("keeps automatic skill routing off on a PDF turn without an explicit skill", async function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"])]);
+    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["analyze-figures.md"])]);
     const processKey = "native-direct-pdf-no-automatic-skill";
     const requests: Array<{
       method: string;
@@ -629,7 +901,7 @@ describe("Codex app-server native client", function () {
   it("activates only an explicitly selected skill on a PDF turn", async function () {
     setUserSkills([
       parseSkill(BUILTIN_SKILL_FILES["write-note.md"]),
-      parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"]),
+      parseSkill(BUILTIN_SKILL_FILES["analyze-figures.md"]),
     ]);
     const processKey = "native-direct-pdf-explicit-skill";
     const requests: Array<{
@@ -644,7 +916,7 @@ describe("Codex app-server native client", function () {
       process.platform === "darwin"
         ? writeNoteSkillPath.replace(/^\/tmp\//, "/private/tmp/")
         : writeNoteSkillPath;
-    const simplePaperQaSkillPath = `${expectedCwd}/.agents/skills/simple-paper-qa/SKILL.md`;
+    const analyzeFiguresSkillPath = `${expectedCwd}/.agents/skills/analyze-figures/SKILL.md`;
     const proc = createNativeLifecycleTestProcess({
       newThreadIds: ["thread-pdf-explicit-skill"],
       requests,
@@ -665,8 +937,8 @@ describe("Codex app-server native client", function () {
                 enabled: true,
               },
               {
-                name: "simple-paper-qa",
-                path: simplePaperQaSkillPath,
+                name: "analyze-figures",
+                path: analyzeFiguresSkillPath,
                 enabled: true,
               },
             ],
@@ -746,7 +1018,7 @@ describe("Codex app-server native client", function () {
     });
     assert.isFalse(
       turnInput.some(
-        (input) => input.type === "skill" && input.name === "simple-paper-qa",
+        (input) => input.type === "skill" && input.name === "analyze-figures",
       ),
     );
     assert.deepEqual(activatedSkills, ["write-note"]);
@@ -1146,7 +1418,10 @@ describe("Codex app-server native client", function () {
     CodexAppServerProcess.spawn = async () => proc;
     (globalThis as { Zotero?: unknown }).Zotero = {
       Prefs: {
-        get: (key: string) => prefStore.get(key),
+        get: (key: string) =>
+          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
+            ? true
+            : prefStore.get(key),
         set: (key: string, value: unknown) => prefStore.set(key, value),
       },
       Profile: { dir: "/tmp/lfz-fork-scope-profile" },
@@ -1640,6 +1915,27 @@ describe("Codex app-server native client", function () {
     assert.notInclude(manifest, "use shell creatively");
   });
 
+  it("routes MCP-disabled Zotero lookups through the normal Codex shell", function () {
+    const manifest = buildZoteroEnvironmentManifest({
+      scope: {
+        conversationKey: 1,
+        libraryID: 1,
+        kind: "paper",
+        paperItemID: 42,
+        activeItemId: 42,
+        activeContextItemId: 43,
+        paperTitle: "Native Paper",
+      },
+      mcpEnabled: false,
+      mcpReady: false,
+    });
+
+    assert.include(manifest, "use zcli through normal Codex shell tools");
+    assert.include(manifest, "llm-for-zotero MCP workflows are not part");
+    assert.notInclude(manifest, "paper_read overview");
+    assert.notInclude(manifest, "library_search/library_read");
+  });
+
   it("replaces ordinary paper retrieval guidance for raw PDF turns", function () {
     const manifest = buildZoteroEnvironmentManifest({
       scope: {
@@ -1933,13 +2229,12 @@ describe("Codex app-server native client", function () {
     }
 
     assert.isOk(turnStartParams);
-    assert.equal(threadResumeParams?.sandbox, "read-only");
+    assert.equal(threadResumeParams?.sandbox, "danger-full-access");
     assert.notProperty(threadResumeParams || {}, "persistExtendedHistory");
     assert.notProperty(threadResumeParams || {}, "permissions");
     assert.notProperty(threadResumeParams || {}, "runtimeWorkspaceRoots");
     assert.deepEqual(turnStartParams?.sandboxPolicy, {
-      type: "readOnly",
-      networkAccess: false,
+      type: "dangerFullAccess",
     });
     assert.notProperty(turnStartParams || {}, "persistExtendedHistory");
     assert.notProperty(turnStartParams || {}, "permissions");
@@ -2222,10 +2517,10 @@ describe("Codex app-server native client", function () {
     assert.equal(turnStartParams?.approvalsReviewer, "auto_review");
   });
 
-  it("submits automatic skill matches as structured native Codex skill inputs", async function () {
+  it("does not submit retained manual skills as automatic native inputs", async function () {
     setUserSkills([
-      parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"]),
-      parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]),
+      parseSkill(BUILTIN_SKILL_FILES["analyze-figures.md"]),
+      parseSkill(BUILTIN_SKILL_FILES["write-note.md"]),
     ]);
     const processKey = "native-auto-skill-input-test";
     const originalSpawn = CodexAppServerProcess.spawn;
@@ -2239,14 +2534,17 @@ describe("Codex app-server native client", function () {
       DataDirectory: { dir: "/tmp/lfz-native-auto-skill-data" },
       Profile: { dir: "/tmp/lfz-native-auto-skill-profile" },
       Prefs: {
-        get: (key: string) =>
-          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
-            ? false
-            : undefined,
+        get: (key: string) => {
+          if (key.endsWith(".codexAppServerZoteroMcpToolsEnabled")) {
+            return false;
+          }
+          if (key.endsWith(".codexNativeSkillMode")) return "native";
+          return undefined;
+        },
       },
     };
     const expectedCwd = getUserSkillsRuntimeRootDir();
-    const skillPath = `${expectedCwd}/.agents/skills/evidence-based-qa/SKILL.md`;
+    const skillPath = `${expectedCwd}/.agents/skills/analyze-figures/SKILL.md`;
 
     const proc = CodexAppServerProcess.forTest({
       stdin: {
@@ -2274,7 +2572,7 @@ describe("Codex app-server native client", function () {
                         errors: [],
                         skills: [
                           {
-                            name: "evidence-based-qa",
+                            name: "analyze-figures",
                             path: skillPath,
                             enabled: true,
                             description: "",
@@ -2350,7 +2648,7 @@ describe("Codex app-server native client", function () {
         messages: [
           {
             role: "user",
-            content: "what method did they use in this paper",
+            content: "analyze figure 2 in this paper",
           },
         ],
         hooks: {
@@ -2367,17 +2665,12 @@ describe("Codex app-server native client", function () {
       destroyCachedCodexAppServerProcess(processKey, proc);
     }
 
-    assert.deepEqual(skillsListParams?.cwds, [expectedCwd]);
+    assert.isUndefined(skillsListParams);
     const input = turnStartParams?.input as Record<string, unknown>[];
-    assert.deepEqual(input[0], {
-      type: "skill",
-      name: "evidence-based-qa",
-      path: skillPath,
-    });
+    assert.isFalse(input.some((entry) => entry.type === "skill"));
     const turnStartText = JSON.stringify(turnStartParams);
-    assert.include(turnStartText, "what method did they use in this paper");
-    assert.notInclude(turnStartText, "$evidence-based-qa");
-    assert.notInclude(turnStartText, "$simple-paper-qa");
+    assert.include(turnStartText, "analyze figure 2 in this paper");
+    assert.notInclude(turnStartText, "$analyze-figures");
     assert.notInclude(
       JSON.stringify(threadStartParams),
       "LLM-for-Zotero skills active for this turn",
@@ -2386,7 +2679,7 @@ describe("Codex app-server native client", function () {
       turnStartText,
       "LLM-for-Zotero skills active for this turn",
     );
-    assert.deepEqual(activatedSkills, ["evidence-based-qa"]);
+    assert.deepEqual(activatedSkills, []);
   });
 
   it("preserves explicit native skill text alongside structured skill input", async function () {
@@ -2400,10 +2693,13 @@ describe("Codex app-server native client", function () {
       DataDirectory: { dir: "/tmp/lfz-native-explicit-skill-data" },
       Profile: { dir: "/tmp/lfz-native-explicit-skill-profile" },
       Prefs: {
-        get: (key: string) =>
-          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
-            ? false
-            : undefined,
+        get: (key: string) => {
+          if (key.endsWith(".codexAppServerZoteroMcpToolsEnabled")) {
+            return false;
+          }
+          if (key.endsWith(".codexNativeSkillMode")) return "native";
+          return undefined;
+        },
       },
     };
     const expectedCwd = getUserSkillsRuntimeRootDir();
@@ -2631,6 +2927,108 @@ describe("Codex app-server native client", function () {
     assert.equal(currentUserInput.split("$write-note").length - 1, 1);
   });
 
+  it("starts new native sessions in the configured Codex App project folder", async function () {
+    const processKey = "native-session-folder-new-thread-test";
+    const requests: Array<{
+      method: string;
+      params: Record<string, any>;
+    }> = [];
+    const proc = createNativeLifecycleTestProcess({
+      newThreadIds: ["thread-session-folder"],
+      requests,
+    });
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const expectedCwd = "/Users/example/Documents/cccodex/codex-cli/papers/";
+    const restorePrefs = installDirectPathTestPrefs("off", expectedCwd);
+    CodexAppServerProcess.spawn = async () => proc;
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-session-folder-test",
+          conversationKey: 6_000_000_032,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "Start a paper session." }],
+        hooks: {
+          loadProviderSessionId: async () => undefined,
+          persistProviderSessionId: async () => undefined,
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      restorePrefs();
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    const threadStart = requests.find(
+      (request) => request.method === "thread/start",
+    );
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    );
+    assert.equal(threadStart?.params.cwd, expectedCwd);
+    assert.equal(turnStart?.params.cwd, expectedCwd);
+  });
+
+  it("does not move an existing native session when the default folder changes", async function () {
+    const processKey = "native-session-folder-existing-thread-test";
+    const requests: Array<{
+      method: string;
+      params: Record<string, any>;
+    }> = [];
+    const proc = createNativeLifecycleTestProcess({
+      newThreadIds: [],
+      requests,
+    });
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const restorePrefs = installDirectPathTestPrefs(
+      "off",
+      "/Users/example/Documents/cccodex/codex-cli/papers/",
+    );
+    CodexAppServerProcess.spawn = async () => proc;
+    let visibilityRefreshes = 0;
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-existing-session-folder-test",
+          conversationKey: 6_000_000_033,
+          libraryID: 1,
+          kind: "global",
+        },
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "Continue this session." }],
+        hooks: {
+          loadProviderSessionId: async () => "thread-existing-folder",
+          persistProviderSessionId: async () => undefined,
+          notifyCodexAppTasksChanged: async () => {
+            visibilityRefreshes += 1;
+            return true;
+          },
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      restorePrefs();
+      destroyCachedCodexAppServerProcess(processKey, proc);
+    }
+
+    const threadResume = requests.find(
+      (request) => request.method === "thread/resume",
+    );
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    );
+    assert.notProperty(threadResume?.params || {}, "cwd");
+    assert.notProperty(turnStart?.params || {}, "cwd");
+    assert.equal(visibilityRefreshes, 0);
+  });
+
   it("starts native Codex turns from the profile-scoped skills workspace and omits legacy skill injection", async function () {
     const processKey = "native-skills-cwd-turn-test";
     const originalSpawn = CodexAppServerProcess.spawn;
@@ -2642,10 +3040,13 @@ describe("Codex app-server native client", function () {
       DataDirectory: { dir: "/tmp/lfz-native-skills-data" },
       Profile: { dir: "/tmp/lfz-native-skills-profile" },
       Prefs: {
-        get: (key: string) =>
-          key.endsWith(".codexAppServerZoteroMcpToolsEnabled")
-            ? false
-            : undefined,
+        get: (key: string) => {
+          if (key.endsWith(".codexAppServerZoteroMcpToolsEnabled")) {
+            return false;
+          }
+          if (key.endsWith(".codexNativeSkillMode")) return "native";
+          return undefined;
+        },
       },
     };
     const expectedCwd = getUserSkillsRuntimeRootDir();

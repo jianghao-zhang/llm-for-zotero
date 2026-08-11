@@ -58,9 +58,18 @@ import {
   getCodexConversationSummary,
   upsertCodexConversationSummary,
 } from "./store";
+import type {
+  CodexNativeThreadSnapshot,
+  CodexNativeThreadSnapshotTurn,
+} from "./threadSync";
+export type {
+  CodexNativeThreadSnapshot,
+  CodexNativeThreadSnapshotTurn,
+} from "./threadSync";
 import {
   getCodexAppServerApprovalsReviewerPref,
   getCodexNativeSkillModePref,
+  getCodexSessionFolderPref,
   isCodexZoteroMcpToolsEnabled,
   type CodexAppServerApprovalsReviewer,
 } from "./prefs";
@@ -93,6 +102,7 @@ import {
 } from "../agent/privacy/localDocumentPathRedaction";
 import { validateLocalPdfDocumentBatch } from "../agent/context/localDocumentBatch";
 import { RAW_PDF_TRANSPORT_POLICY_BLOCK } from "../agent/context/rawPdfTransportPolicy";
+import { notifyCodexAppTasksChanged } from "./appVisibility";
 
 export const CODEX_APP_SERVER_NATIVE_PROCESS_KEY = "codex_app_server_native";
 const CODEX_APP_SERVER_SERVICE_NAME = "llm_for_zotero";
@@ -126,13 +136,25 @@ export type CodexNativeConversationScope = {
 };
 
 export type CodexNativeStoreHooks = {
+  loadProviderSession?: () => Promise<{
+    threadId?: string;
+    cwd?: string;
+    model?: string;
+  }>;
   loadProviderSessionId?: () => Promise<string | undefined>;
   persistProviderSessionId?: (threadId: string) => Promise<void>;
   clearProviderSessionId?: () => Promise<void>;
+  notifyCodexAppTasksChanged?: () => Promise<boolean>;
+  onExternalThreadSnapshot?: (
+    snapshot: CodexNativeThreadSnapshot,
+    currentTurnId?: string,
+  ) => Promise<void>;
 };
 
 type StoredCodexProviderSession = Readonly<{
   threadId: string;
+  cwd?: string;
+  model?: string;
 }>;
 
 export function resetCodexNativePathSafetyStateForTests(
@@ -143,6 +165,7 @@ export function resetCodexNativePathSafetyStateForTests(
 
 export type CodexNativeTurnResult = {
   text: string;
+  turnId: string;
   threadId: string;
   resumed: boolean;
   diagnostics?: CodexNativeDiagnostics;
@@ -165,6 +188,7 @@ type NativeThreadResolution = {
   resumed: boolean;
   developerInstructionsAccepted: boolean;
   threadSource?: string;
+  cwd?: string;
 };
 
 type NativeContextPlacement =
@@ -238,6 +262,7 @@ const CODEX_APP_SERVER_BUILT_IN_APPROVAL_REQUEST_METHODS = [
   "applyPatchApproval",
 ];
 const CODEX_APP_SERVER_NATIVE_APPROVAL_POLICY = "on-request";
+const CODEX_APP_SERVER_NATIVE_SANDBOX = "danger-full-access";
 
 function buildCodexAppServerNativeApprovalParams(): {
   approvalPolicy: typeof CODEX_APP_SERVER_NATIVE_APPROVAL_POLICY;
@@ -1395,7 +1420,7 @@ export function buildZoteroEnvironmentManifest(params: {
 
   if (!params.mcpEnabled) {
     lines.push(
-      "- Zotero MCP tools: disabled for this turn. Do not claim access to Zotero library or PDF tools unless another tool source is available.",
+      "- Zotero integration: use the supplied context first. When more Zotero library or paper data is needed, use zcli through normal Codex shell tools. llm-for-zotero MCP workflows are not part of this session.",
     );
     return [
       lines.join("\n"),
@@ -1567,6 +1592,14 @@ async function loadStoredProviderSession(params: {
   conversationKey: number;
   hooks?: CodexNativeStoreHooks;
 }): Promise<StoredCodexProviderSession> {
+  if (params.hooks?.loadProviderSession) {
+    const session = await params.hooks.loadProviderSession();
+    return {
+      threadId: normalizeNonEmptyString(session.threadId),
+      cwd: normalizeNonEmptyString(session.cwd) || undefined,
+      model: normalizeNonEmptyString(session.model) || undefined,
+    };
+  }
   if (params.hooks?.loadProviderSessionId) {
     return {
       threadId: normalizeNonEmptyString(
@@ -1577,7 +1610,18 @@ async function loadStoredProviderSession(params: {
   const summary = await getCodexConversationSummary(params.conversationKey);
   return {
     threadId: normalizeNonEmptyString(summary?.providerSessionId),
+    cwd: normalizeNonEmptyString(summary?.cwd) || undefined,
+    model: normalizeNonEmptyString(summary?.model) || undefined,
   };
+}
+
+export function shouldStartNewNativeThreadForModel(
+  storedModel: string | undefined,
+  requestedModel: string,
+): boolean {
+  const previous = normalizeNonEmptyString(storedModel).toLowerCase();
+  const next = normalizeNonEmptyString(requestedModel).toLowerCase();
+  return Boolean(previous && next && previous !== next);
 }
 
 async function clearStoredProviderSession(params: {
@@ -1608,6 +1652,7 @@ async function persistProviderSessionId(params: {
   threadId: string;
   model: string;
   effort?: string;
+  cwd?: string;
   hooks?: CodexNativeStoreHooks;
 }): Promise<void> {
   await params.hooks?.persistProviderSessionId?.(params.threadId);
@@ -1621,6 +1666,7 @@ async function persistProviderSessionId(params: {
     providerSessionId: params.threadId,
     model: params.model,
     effort: params.effort,
+    cwd: params.cwd,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
@@ -1643,7 +1689,7 @@ async function startNativeThread(params: {
     ephemeral: Boolean(params.ephemeral),
     ...buildCodexAppServerNativeApprovalParams(),
     serviceName: CODEX_APP_SERVER_SERVICE_NAME,
-    sandbox: "read-only",
+    sandbox: CODEX_APP_SERVER_NATIVE_SANDBOX,
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.developerInstructions
@@ -1701,7 +1747,7 @@ async function resumeNativeThread(params: {
   const threadResumeParams: Record<string, unknown> = {
     threadId: params.threadId,
     model: params.model,
-    sandbox: "read-only",
+    sandbox: CODEX_APP_SERVER_NATIVE_SANDBOX,
     ...buildCodexAppServerNativeApprovalParams(),
     ...(params.cwd ? { cwd: params.cwd } : {}),
     ...(params.config ? { config: params.config } : {}),
@@ -1753,21 +1799,27 @@ async function resolveNativeThread(params: {
   developerInstructions?: string;
   newThreadDeveloperInstructions?: string;
   config?: Record<string, unknown>;
+  /** Applied only when thread/start creates a new persistent session. */
   cwd?: string;
+  /** Preserves the historical skills workspace when no session folder is configured. */
+  resumeFallbackCwd?: string;
   hooks?: CodexNativeStoreHooks;
-  storedThreadId?: string | null;
+  storedSession?: StoredCodexProviderSession | null;
 }): Promise<NativeThreadResolution> {
   const storedSession =
-    params.storedThreadId !== undefined
-      ? {
-          threadId: normalizeNonEmptyString(params.storedThreadId),
-        }
+    params.storedSession !== undefined
+      ? params.storedSession || { threadId: "" }
       : await loadResumableProviderSession({
           conversationKey: params.scope.conversationKey,
           hooks: params.hooks,
         });
   const storedThreadId = storedSession.threadId;
-  if (storedThreadId) {
+  const modelChanged = shouldStartNewNativeThreadForModel(
+    storedSession.model,
+    params.model,
+  );
+  if (storedThreadId && !modelChanged) {
+    const resumeCwd = storedSession.cwd || params.resumeFallbackCwd;
     try {
       const resumedThread = await resumeNativeThread({
         proc: params.proc,
@@ -1775,7 +1827,7 @@ async function resolveNativeThread(params: {
         model: params.model,
         developerInstructions: params.developerInstructions,
         config: params.config,
-        cwd: params.cwd,
+        cwd: resumeCwd,
       });
       if (resumedThread.threadId !== storedThreadId) {
         await persistProviderSessionId({
@@ -1783,16 +1835,23 @@ async function resolveNativeThread(params: {
           threadId: resumedThread.threadId,
           model: params.model,
           effort: params.effort,
+          cwd: resumeCwd,
           hooks: params.hooks,
         });
       }
-      return { ...resumedThread, resumed: true };
+      return { ...resumedThread, resumed: true, cwd: resumeCwd };
     } catch (error) {
       ztoolkit.log(
         "Codex app-server native: thread/resume failed; starting a new persistent thread",
         error,
       );
     }
+  } else if (storedThreadId && modelChanged) {
+    ztoolkit.log(
+      "Codex app-server native: model changed; starting a clean thread and reinjecting visible history",
+      storedSession.model,
+      params.model,
+    );
   }
 
   const thread = await startNativeThread({
@@ -1808,9 +1867,10 @@ async function resolveNativeThread(params: {
     threadId: thread.threadId,
     model: params.model,
     effort: params.effort,
+    cwd: params.cwd,
     hooks: params.hooks,
   });
-  return { ...thread, resumed: false };
+  return { ...thread, resumed: false, cwd: params.cwd };
 }
 
 async function setNativeThreadName(params: {
@@ -1828,6 +1888,31 @@ async function setNativeThreadName(params: {
   } catch (error) {
     ztoolkit.log("Codex app-server native: failed to sync thread title", error);
   }
+}
+
+export function resolveCodexNativeThreadTitle(params: {
+  requestedTitle?: string;
+  userText?: string;
+  paperTitle?: string;
+}): string {
+  const userText = normalizeNonEmptyString(params.userText);
+  const commentMatch = userText.match(
+    /User comment for this context:\s*\n([\s\S]*?)(?=\n\n(?:Selected text context|User question:)|$)/i,
+  );
+  const comment = normalizeNonEmptyString(commentMatch?.[1]);
+  if (comment) return comment.slice(0, 120);
+  const requestedTitle = normalizeNonEmptyString(params.requestedTitle);
+  if (
+    requestedTitle &&
+    !/^please explain this selected text\.?$/i.test(requestedTitle)
+  ) {
+    return requestedTitle.slice(0, 120);
+  }
+  const paperTitle = normalizeNonEmptyString(params.paperTitle);
+  if (requestedTitle && paperTitle) {
+    return `${paperTitle} — selected text`.slice(0, 120);
+  }
+  return requestedTitle.slice(0, 120);
 }
 
 function registerNativeApprovalRequestHandlers(params: {
@@ -2012,7 +2097,6 @@ export async function setCodexAppServerThreadName(params: {
   processKey?: string;
 }): Promise<void> {
   const name = params.name.trim();
-  if (!name) return;
   const codexPath = resolveCodexAppServerBinaryPath(params.codexPath);
   const proc = await getOrCreateCodexAppServerProcess(
     params.processKey || CODEX_APP_SERVER_NATIVE_PROCESS_KEY,
@@ -2095,9 +2179,9 @@ async function verifyCodexAppServerThreadHistory(params: {
   threadId: string;
 }): Promise<boolean> {
   try {
-    await params.proc.sendRequest("thread/read", {
+    await readCodexAppServerThreadSnapshotWithProcess({
+      proc: params.proc,
       threadId: params.threadId,
-      includeTurns: true,
     });
     return true;
   } catch (error) {
@@ -2107,6 +2191,109 @@ async function verifyCodexAppServerThreadHistory(params: {
     );
     return false;
   }
+}
+
+function extractUserMessageText(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return "";
+      const value = entry as { type?: unknown; text?: unknown };
+      return value.type === "text" && typeof value.text === "string"
+        ? value.text.trim()
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function parseCodexAppServerThreadSnapshot(
+  value: unknown,
+): CodexNativeThreadSnapshot | null {
+  const root = value && typeof value === "object" ? (value as any) : null;
+  const thread = root?.thread && typeof root.thread === "object"
+    ? root.thread
+    : null;
+  const threadId = normalizeNonEmptyString(thread?.id);
+  if (!threadId) return null;
+  const turns = (Array.isArray(thread.turns) ? thread.turns : [])
+    .map((rawTurn: unknown): CodexNativeThreadSnapshotTurn | null => {
+      if (!rawTurn || typeof rawTurn !== "object") return null;
+      const turn = rawTurn as any;
+      const id = normalizeNonEmptyString(turn.id);
+      if (!id) return null;
+      const items = Array.isArray(turn.items) ? turn.items : [];
+      const userText = items
+        .filter((item: any) => item?.type === "userMessage")
+        .map((item: any) => extractUserMessageText(item.content))
+        .filter(Boolean)
+        .join("\n\n");
+      const agentMessages = items
+        .filter(
+          (item: any) =>
+            item?.type === "agentMessage" &&
+            typeof item.text === "string" &&
+            item.text.trim(),
+        )
+        .map((item: any) => ({
+          text: item.text.trim() as string,
+          phase: normalizeNonEmptyString(item.phase),
+        }));
+      const finalAgentMessage =
+        [...agentMessages]
+          .reverse()
+          .find((message) => message.phase === "final_answer") ||
+        agentMessages.at(-1);
+      const startedAt = Number(turn.startedAt);
+      const completedAt = Number(turn.completedAt);
+      return {
+        id,
+        status: normalizeNonEmptyString(turn.status),
+        ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+        ...(Number.isFinite(completedAt) ? { completedAt } : {}),
+        ...(userText ? { userText } : {}),
+        ...(finalAgentMessage?.text
+          ? { assistantText: finalAgentMessage.text }
+          : {}),
+      };
+    })
+    .filter(
+      (turn: CodexNativeThreadSnapshotTurn | null): turn is CodexNativeThreadSnapshotTurn =>
+        Boolean(turn),
+    );
+  const name = normalizeNonEmptyString(thread.name);
+  return {
+    threadId,
+    ...(name ? { name } : {}),
+    turns,
+  };
+}
+
+async function readCodexAppServerThreadSnapshotWithProcess(params: {
+  proc: CodexAppServerProcess;
+  threadId: string;
+}): Promise<CodexNativeThreadSnapshot | null> {
+  const value = await params.proc.sendRequest("thread/read", {
+    threadId: params.threadId,
+    includeTurns: true,
+  });
+  return parseCodexAppServerThreadSnapshot(value);
+}
+
+export async function readCodexAppServerThreadSnapshot(params: {
+  threadId: string;
+  codexPath?: string;
+  processKey?: string;
+}): Promise<CodexNativeThreadSnapshot | null> {
+  const codexPath = resolveCodexAppServerBinaryPath(params.codexPath);
+  const proc = await getOrCreateCodexAppServerProcess(
+    params.processKey || CODEX_APP_SERVER_NATIVE_PROCESS_KEY,
+    { codexPath },
+  );
+  return readCodexAppServerThreadSnapshotWithProcess({
+    proc,
+    threadId: params.threadId,
+  });
 }
 
 async function verifyCodexAppServerThreadHistoryIfDue(params: {
@@ -2267,7 +2454,7 @@ export async function runCodexAppServerNativeTurn(params: {
       const threadConfig = {
         ...(mcpThreadConfig?.config || {}),
         features: {
-          shell_tool: currentTurnHasLocalPdfs,
+          shell_tool: true,
         },
       };
       const configuredCodexNativeSkillMode = getCodexNativeSkillModePref();
@@ -2290,9 +2477,12 @@ export async function runCodexAppServerNativeTurn(params: {
       const codexNativeSkillLookupCwd = useNativeSkillInputs
         ? resolveCodexNativeRuntimeCwd()
         : undefined;
-      const codexNativeRuntimeCwd = useNativeSkillInputs
-        ? codexNativeSkillLookupCwd
-        : undefined;
+      const configuredSessionCwd = getCodexSessionFolderPref();
+      const codexNativeNewThreadCwd =
+        configuredSessionCwd || codexNativeSkillLookupCwd;
+      const codexNativeResumeFallbackCwd = configuredSessionCwd
+        ? undefined
+        : codexNativeSkillLookupCwd;
       const unavailableExplicitPdfSkillIds = Array.from(
         new Set([
           ...staleExplicitPdfSkillIds,
@@ -2322,6 +2512,26 @@ export async function runCodexAppServerNativeTurn(params: {
           input: unknown;
           skillIds: string[];
         }): Promise<CodexNativeTurnResult> => {
+          if (
+            args.thread.resumed &&
+            !currentTurnHasLocalPdfs &&
+            params.hooks?.onExternalThreadSnapshot
+          ) {
+            try {
+              const snapshot = await readCodexAppServerThreadSnapshotWithProcess({
+                proc,
+                threadId: args.thread.threadId,
+              });
+              if (snapshot) {
+                await params.hooks.onExternalThreadSnapshot(snapshot);
+              }
+            } catch (error) {
+              ztoolkit.log(
+                "Codex app-server native: failed to refresh shared thread history",
+                error,
+              );
+            }
+          }
           unregisterGuardianReviews = registerNativeGuardianReviewHandlers({
             proc,
             threadId: args.thread.threadId,
@@ -2381,17 +2591,18 @@ export async function runCodexAppServerNativeTurn(params: {
             }
             streamFlushers.clear();
           };
+          let turnId = "";
           try {
             const turnResult = await proc.sendRequest("turn/start", {
               threadId: args.thread.threadId,
               input: args.input,
               model: params.model,
-              ...(codexNativeRuntimeCwd ? { cwd: codexNativeRuntimeCwd } : {}),
+              ...(args.thread.cwd ? { cwd: args.thread.cwd } : {}),
               ...buildCodexAppServerNativeApprovalParams(),
-              sandboxPolicy: { type: "readOnly", networkAccess: false },
+              sandboxPolicy: { type: "dangerFullAccess" },
               ...reasoningParams,
             });
-            const turnId = extractCodexAppServerTurnId(turnResult);
+            turnId = extractCodexAppServerTurnId(turnResult);
             if (!turnId) {
               throw new Error("Codex app-server did not return a turn ID");
             }
@@ -2461,6 +2672,26 @@ export async function runCodexAppServerNativeTurn(params: {
               cacheKey: processKey,
               processOptions: { codexPath },
             });
+            if (params.hooks?.onExternalThreadSnapshot) {
+              try {
+                const snapshot =
+                  await readCodexAppServerThreadSnapshotWithProcess({
+                    proc,
+                    threadId: args.thread.threadId,
+                  });
+                if (snapshot) {
+                  await params.hooks.onExternalThreadSnapshot(
+                    snapshot,
+                    turnId,
+                  );
+                }
+              } catch (error) {
+                ztoolkit.log(
+                  "Codex app-server native: failed to persist shared thread history",
+                  error,
+                );
+              }
+            }
             flushStreamText();
           } finally {
             unregisterMcpToolActivity();
@@ -2485,6 +2716,7 @@ export async function runCodexAppServerNativeTurn(params: {
           params.onDiagnostics?.(redactedDiagnostics);
           return {
             text: redactTerminalText(text),
+            turnId,
             threadId: args.thread.threadId,
             resumed: args.thread.resumed,
             diagnostics: redactedDiagnostics,
@@ -2625,10 +2857,11 @@ export async function runCodexAppServerNativeTurn(params: {
                 developerInstructions:
                   developerPreparedTurn.developerInstructions,
                 config: threadConfig,
-                cwd: codexNativeRuntimeCwd,
+                cwd: codexNativeNewThreadCwd,
                 ephemeral: true,
               })),
               resumed: false,
+              cwd: codexNativeNewThreadCwd,
             }
           : await resolveNativeThread({
               proc,
@@ -2638,15 +2871,20 @@ export async function runCodexAppServerNativeTurn(params: {
               developerInstructions:
                 developerPreparedTurn.developerInstructions,
               config: threadConfig,
-              cwd: codexNativeRuntimeCwd,
+              cwd: codexNativeNewThreadCwd,
+              resumeFallbackCwd: codexNativeResumeFallbackCwd,
               hooks: params.hooks,
-              storedThreadId: storedThreadId || null,
+              storedSession,
             });
         if (!rawPdfMode && !thread.resumed) {
           await setNativeThreadName({
             proc,
             threadId: thread.threadId,
-            name: params.scope.title,
+            name: resolveCodexNativeThreadTitle({
+              requestedTitle: params.scope.title,
+              userText: latestUserText,
+              paperTitle: params.scope.paperTitle,
+            }),
           });
         }
         const contextPlacement = resolveNativeContextPlacement(thread);
@@ -2701,11 +2939,28 @@ export async function runCodexAppServerNativeTurn(params: {
               resolution: nativeSkillInputResolution,
             })
           : input;
-        const result = await executePreparedThread({
-          thread,
-          input: nativeInput,
-          skillIds: activatedSkillIds,
-        });
+        let result: CodexNativeTurnResult;
+        try {
+          result = await executePreparedThread({
+            thread,
+            input: nativeInput,
+            skillIds: activatedSkillIds,
+          });
+        } finally {
+          if (!rawPdfMode && !thread.resumed && configuredSessionCwd) {
+            try {
+              await (
+                params.hooks?.notifyCodexAppTasksChanged ||
+                notifyCodexAppTasksChanged
+              )();
+            } catch (error) {
+              ztoolkit.log(
+                "Codex app-server native: failed to refresh the Codex App task catalog",
+                error,
+              );
+            }
+          }
+        }
         if (rawPdfMode && storedThreadId) {
           try {
             await proc.sendRequest("thread/archive", {

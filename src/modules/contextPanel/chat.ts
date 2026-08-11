@@ -21,7 +21,11 @@ import { pendingDeletionStore } from "../../core/conversations/pendingDeletionSt
 import { filterMessagesInPendingTurns } from "./turnMessageUtils";
 import {
   appendCodexMessage,
+  getCodexConversationSummary,
+  markCodexProviderTurnSynced,
   pruneCodexConversation,
+  setCodexConversationTitle,
+  syncCodexExternalThreadSnapshot as persistCodexExternalThreadSnapshot,
   updateLatestCodexAssistantMessage,
   updateLatestCodexUserMessage,
 } from "../../codexAppServer/store";
@@ -50,6 +54,7 @@ import {
 } from "../../codexAppServer/prefs";
 import { getEffectiveCodexAppServerBinaryPath } from "../../codexAppServer/binaryPath";
 import { buildCodexAppServerReasoningConfig } from "../../codexAppServer/reasoning";
+import { ensureCodexAppServerModelCapabilities } from "../../codexAppServer/modelCatalog";
 import {
   buildCodexNativeApprovalPendingAction,
   buildCodexNativeApprovalResponseFromResolution,
@@ -57,10 +62,12 @@ import {
   isCodexNativeBuiltInApprovalRequest,
   NO_CODEX_APP_SERVER_THREAD_TO_COMPACT_MESSAGE,
   resolveCodexNativeApprovalRequest,
+  readCodexAppServerThreadSnapshot,
   runCodexAppServerNativeTurn,
   type CodexNativeApprovalRequest,
   type CodexNativeConversationScope,
   type CodexNativeDiagnostics,
+  type CodexNativeThreadSnapshot,
 } from "../../codexAppServer/nativeClient";
 import type { CodexNativeSkillContext } from "../../codexAppServer/nativeSkills";
 import { preflightClaudeBridgeLocalPdfCapability } from "../../agent/externalBackendBridge";
@@ -78,6 +85,7 @@ import {
   UsageStats,
   checkEmbeddingAvailability,
 } from "../../utils/llmClient";
+import { CODEX_NATIVE_SYSTEM_PROMPT } from "../../utils/llmDefaults";
 import {
   getModelCapabilities,
   getRuntimeReasoningOptions as getCatalogReasoningOptions,
@@ -1724,6 +1732,63 @@ async function persistConversationMessage(
   }
 }
 
+async function syncExternalCodexThreadSnapshot(params: {
+  conversationKey: number;
+  snapshot: CodexNativeThreadSnapshot;
+  history: Message[];
+  insertBefore?: Message;
+  refresh: () => void;
+  ignoredTurnId?: string;
+}): Promise<void> {
+  if (params.snapshot.name) {
+    await setCodexConversationTitle(
+      params.conversationKey,
+      params.snapshot.name,
+    );
+  }
+  const externalMessages = (await persistCodexExternalThreadSnapshot({
+    conversationKey: params.conversationKey,
+    snapshot: params.snapshot,
+    ignoredTurnId: params.ignoredTurnId,
+  })) as Message[];
+  if (!externalMessages.length) return;
+  const insertionIndex = params.insertBefore
+    ? params.history.indexOf(params.insertBefore)
+    : -1;
+  params.history.splice(
+    insertionIndex >= 0 ? insertionIndex : params.history.length,
+    0,
+    ...externalMessages,
+  );
+  params.refresh();
+}
+
+async function refreshSharedCodexConversation(params: {
+  conversationKey: number;
+  history: Message[];
+}): Promise<void> {
+  try {
+    const summary = await getCodexConversationSummary(params.conversationKey);
+    if (!summary?.providerSessionId) return;
+    const snapshot = await readCodexAppServerThreadSnapshot({
+      threadId: summary.providerSessionId,
+      codexPath: getEffectiveCodexAppServerBinaryPath(),
+    });
+    if (!snapshot) return;
+    await syncExternalCodexThreadSnapshot({
+      conversationKey: params.conversationKey,
+      snapshot,
+      history: params.history,
+      refresh: () => undefined,
+    });
+  } catch (error) {
+    ztoolkit.log(
+      "LLM: Failed to refresh the shared Codex conversation",
+      error,
+    );
+  }
+}
+
 function normalizeStoredPaperContextRoutes(params: {
   paperContexts?: PaperContextRef[];
   pdfPaperContexts?: PaperContextRef[];
@@ -1901,6 +1966,12 @@ export async function ensureConversationLoaded(
   }
 
   if (loadedConversationKeys.has(conversationKey)) {
+    if (conversationSystem === "codex") {
+      await refreshSharedCodexConversation({
+        conversationKey,
+        history: chatHistory.get(conversationKey) || [],
+      });
+    }
     await loadConversationForkLinkCache(conversationKey);
     return;
   }
@@ -1980,6 +2051,12 @@ export async function ensureConversationLoaded(
       }
       blockedConversationLoadKeys.delete(conversationKey);
       chatHistory.set(conversationKey, panelMessages);
+      if (conversationSystem === "codex") {
+        await refreshSharedCodexConversation({
+          conversationKey,
+          history: panelMessages,
+        });
+      }
       validateLoadedConversationQuoteMessages(panelMessages, conversationKey);
       await loadConversationForkLinkCache(conversationKey);
       shouldMarkLoaded = true;
@@ -3054,7 +3131,11 @@ function resolveEffectiveRequestConfig(params: {
       params.reasoning || buildCodexAppServerReasoningConfig(reasoningMode);
     return {
       model,
-      apiBase: (params.apiBase ?? "").trim(),
+      // Keep all planner, request-cap, and native-process callers on the same
+      // concrete runtime identity. A blank optional path would otherwise
+      // create a separate model-capability snapshot from the binary actually
+      // running the turn.
+      apiBase: getEffectiveCodexAppServerBinaryPath(params.apiBase),
       apiKey: "",
       authMode: "codex_app_server",
       providerProtocol: "codex_responses",
@@ -7379,6 +7460,15 @@ export async function retryLatestAssistantResponse(
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
 
+    if (isCodexNativeTurn) {
+      await ensureCodexAppServerModelCapabilities({
+        model: effectiveRequestConfig.model,
+        codexPath: getEffectiveCodexAppServerBinaryPath(
+          effectiveRequestConfig.apiBase,
+        ),
+      });
+    }
+
     const contextPlan = shouldUseCodexNativeLightContext({ isCodexNativeTurn })
       ? buildLightCodexNativeMcpContextPlan({
           paperContexts: retryPaperContexts,
@@ -7475,6 +7565,9 @@ export async function retryLatestAssistantResponse(
       inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
       inputMode: effectiveRequestConfig.advanced?.inputMode,
       contextCache: contextPlan.contextCache,
+      baseSystemPrompt: isCodexNativeTurn
+        ? CODEX_NATIVE_SYSTEM_PROMPT
+        : undefined,
     };
     const { finalPrepared, systemMessages, workflowTestIntercepted } =
       await prepareFinalContextPlanChatRequest({
@@ -7524,9 +7617,10 @@ export async function retryLatestAssistantResponse(
       contextCache: contextPlan.contextCache,
       fallbackContextWindow: finalPrepared.inputCap.limitTokens,
     });
+    let codexProviderTurnId: string | undefined;
     const answer = isCodexNativeTurn
-      ? (
-          await runCodexAppServerNativeTurn({
+      ? await (async () => {
+          const result = await runCodexAppServerNativeTurn({
             scope: await enrichCodexNativeConversationScopeWithMineruCache(
               resolveCodexNativeConversationScope({
                 item,
@@ -7541,6 +7635,17 @@ export async function retryLatestAssistantResponse(
             codexPath: getEffectiveCodexAppServerBinaryPath(
               effectiveRequestConfig.apiBase,
             ),
+            hooks: {
+              onExternalThreadSnapshot: async (snapshot, currentTurnId) =>
+                syncExternalCodexThreadSnapshot({
+                  conversationKey,
+                  snapshot,
+                  history: chatHistory.get(conversationKey) || [],
+                  insertBefore: retryPair.userMessage,
+                  refresh: refreshChatSafely,
+                  ignoredTurnId: currentTurnId,
+                }),
+            },
             skillContext: buildCodexNativeSkillContext({
               forcedSkillIds: retryPair.userMessage.forcedSkillIds,
               selectedTextContexts: retrySelectedTextContexts,
@@ -7571,8 +7676,10 @@ export async function retryLatestAssistantResponse(
               handleReasoning,
               handleUsage,
             }),
-          })
-        ).text
+          });
+          codexProviderTurnId = result.turnId;
+          return result.text;
+        })()
       : await callLLMStream(
           {
             ...requestParams,
@@ -7645,6 +7752,12 @@ export async function retryLatestAssistantResponse(
       },
       effectiveStorageSystem,
     );
+    if (codexProviderTurnId) {
+      await markCodexProviderTurnSynced(
+        conversationKey,
+        codexProviderTurnId,
+      );
+    }
 
     setStatusSafely("Ready", "ready");
     return true;
@@ -9354,38 +9467,38 @@ export async function sendQuestion(
   } else {
     history.push(userMessage);
   }
-  if (shouldPersistTurn) {
-    void persistConversationMessage(
-      conversationKey,
-      {
-        role: "user",
-        text: userMessage.text,
-        timestamp: userMessage.timestamp,
-        runMode: userMessage.runMode,
-        agentRunId: userMessage.agentRunId,
-        selectedText: userMessage.selectedText,
-        selectedTextContexts: userMessage.selectedTextContexts,
-        selectedTexts: userMessage.selectedTexts,
-        selectedTextSources: userMessage.selectedTextSources,
-        selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
-        selectedTextNoteContexts: userMessage.selectedTextNoteContexts,
-        forcedSkillIds: userMessage.forcedSkillIds,
-        paperContexts: userMessage.paperContexts,
-        pdfPaperContexts: userMessage.pdfPaperContexts,
-        fullTextPaperContexts: userMessage.fullTextPaperContexts,
-        citationPaperContexts: userMessage.citationPaperContexts,
-        selectedCollectionContexts: userMessage.selectedCollectionContexts,
-        selectedTagContexts: userMessage.selectedTagContexts,
-        screenshotImages: userMessage.screenshotImages,
-        attachments: userMessage.attachments,
-        modelAttachments: userMessage.modelAttachments,
-        modelName: userMessage.modelName,
-        modelEntryId: userMessage.modelEntryId,
-        modelProviderLabel: userMessage.modelProviderLabel,
-      },
-      effectiveStorageSystem,
-    );
-  }
+  const userPersistenceTask = shouldPersistTurn
+    ? persistConversationMessage(
+        conversationKey,
+        {
+          role: "user",
+          text: userMessage.text,
+          timestamp: userMessage.timestamp,
+          runMode: userMessage.runMode,
+          agentRunId: userMessage.agentRunId,
+          selectedText: userMessage.selectedText,
+          selectedTextContexts: userMessage.selectedTextContexts,
+          selectedTexts: userMessage.selectedTexts,
+          selectedTextSources: userMessage.selectedTextSources,
+          selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
+          selectedTextNoteContexts: userMessage.selectedTextNoteContexts,
+          forcedSkillIds: userMessage.forcedSkillIds,
+          paperContexts: userMessage.paperContexts,
+          pdfPaperContexts: userMessage.pdfPaperContexts,
+          fullTextPaperContexts: userMessage.fullTextPaperContexts,
+          citationPaperContexts: userMessage.citationPaperContexts,
+          selectedCollectionContexts: userMessage.selectedCollectionContexts,
+          selectedTagContexts: userMessage.selectedTagContexts,
+          screenshotImages: userMessage.screenshotImages,
+          attachments: userMessage.attachments,
+          modelAttachments: userMessage.modelAttachments,
+          modelName: userMessage.modelName,
+          modelEntryId: userMessage.modelEntryId,
+          modelProviderLabel: userMessage.modelProviderLabel,
+        },
+        effectiveStorageSystem,
+      )
+    : Promise.resolve();
 
   const assistantMessage: Message = {
     ...optimisticAssistantMessage,
@@ -9419,6 +9532,7 @@ export async function sendQuestion(
     if (assistantPersisted) return;
     assistantPersisted = true;
     if (!shouldPersistTurn) return;
+    await userPersistenceTask;
     await persistConversationMessage(
       conversationKey,
       {
@@ -9604,6 +9718,15 @@ export async function sendQuestion(
       AbortControllerCtor ? new AbortControllerCtor() : null,
     );
 
+    if (isCodexNativeTurn) {
+      await ensureCodexAppServerModelCapabilities({
+        model: effectiveRequestConfig.model,
+        codexPath: getEffectiveCodexAppServerBinaryPath(
+          effectiveRequestConfig.apiBase,
+        ),
+      });
+    }
+
     const contextPlan = shouldUseCodexNativeLightContext({ isCodexNativeTurn })
       ? buildLightCodexNativeMcpContextPlan({
           paperContexts: paperContextsForMessage,
@@ -9728,6 +9851,9 @@ export async function sendQuestion(
       inputTokenCap: effectiveRequestConfig.advanced?.inputTokenCap,
       inputMode: effectiveRequestConfig.advanced?.inputMode,
       contextCache: contextPlan.contextCache,
+      baseSystemPrompt: isCodexNativeTurn
+        ? CODEX_NATIVE_SYSTEM_PROMPT
+        : undefined,
     };
     const { finalPrepared, systemMessages, workflowTestIntercepted } =
       await prepareFinalContextPlanChatRequest({
@@ -9767,9 +9893,10 @@ export async function sendQuestion(
       contextCache: contextPlan.contextCache,
       fallbackContextWindow: finalPrepared.inputCap.limitTokens,
     });
+    let codexProviderTurnId: string | undefined;
     const answer = isCodexNativeTurn
-      ? (
-          await runCodexAppServerNativeTurn({
+      ? await (async () => {
+          const result = await runCodexAppServerNativeTurn({
             scope: await enrichCodexNativeConversationScopeWithMineruCache(
               resolveCodexNativeConversationScope({
                 item,
@@ -9785,6 +9912,17 @@ export async function sendQuestion(
             codexPath: getEffectiveCodexAppServerBinaryPath(
               effectiveRequestConfig.apiBase,
             ),
+            hooks: {
+              onExternalThreadSnapshot: async (snapshot, currentTurnId) =>
+                syncExternalCodexThreadSnapshot({
+                  conversationKey,
+                  snapshot,
+                  history,
+                  insertBefore: userMessage,
+                  refresh: refreshChatSafely,
+                  ignoredTurnId: currentTurnId,
+                }),
+            },
             skillContext: buildCodexNativeSkillContext({
               forcedSkillIds: opts.forcedSkillIds,
               selectedTextContexts: selectedTextContextsForMessage,
@@ -9813,8 +9951,10 @@ export async function sendQuestion(
               handleReasoning,
               handleUsage,
             }),
-          })
-        ).text
+          });
+          codexProviderTurnId = result.turnId;
+          return result.text;
+        })()
       : await callLLMStream(
           {
             ...requestParams,
@@ -9861,6 +10001,12 @@ export async function sendQuestion(
     assistantMessage.streaming = false;
     refreshChatSafely();
     await persistAssistantOnce();
+    if (codexProviderTurnId) {
+      await markCodexProviderTurnSynced(
+        conversationKey,
+        codexProviderTurnId,
+      );
+    }
     if (resolveConversationSystemForItem(item) === "claude_code") {
       const activeNoteSession = resolveActiveNoteSession(item);
       const conversationKind =

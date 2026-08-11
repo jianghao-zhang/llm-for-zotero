@@ -159,7 +159,7 @@ describe("webchat isolation", function () {
       'const shouldPersistTurn =\n    effectiveRequestConfig.providerProtocol !== "web_sync";',
     );
     const userPersist = source.indexOf(
-      "if (shouldPersistTurn) {\n    void persistConversationMessage(",
+      "const userPersistenceTask = shouldPersistTurn",
       flag,
     );
     const assistantPersist = source.indexOf(

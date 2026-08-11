@@ -2,6 +2,7 @@ import { t } from "../../utils/i18n";
 import {
   appendSelectedTextContextForItem,
   applySelectedTextPreview,
+  updateSelectedTextContextCommentForItem,
   updateSelectedTextContextLocationForItem,
   type SelectedTextPageLocation,
 } from "./contextResolution";
@@ -33,6 +34,7 @@ export type IncludeReaderSelectedTextInput = {
   reader?: any | null;
   paperContext?: PaperContextRef | null;
   initialLocation?: SelectedTextPageLocation | null;
+  focusPanelInput?: boolean;
   log?: (message: string, ...args: unknown[]) => void;
 };
 
@@ -153,7 +155,7 @@ export async function includeReaderSelectedText(
   );
   if (!added) {
     if (status) {
-      setStatus(status, t("Text Context up to 5"), "error");
+      setStatus(status, t("Text context already included"), "ready");
     }
     input.log?.("LLM addText: selected text was not added");
     return {
@@ -170,10 +172,12 @@ export async function includeReaderSelectedText(
   if (status) {
     setStatus(status, t("Selected text included"), "ready");
   }
-  const inputEl = input.body.querySelector(
-    "#llm-input",
-  ) as HTMLTextAreaElement | null;
-  inputEl?.focus({ preventScroll: true });
+  if (input.focusPanelInput !== false) {
+    const inputEl = input.body.querySelector(
+      "#llm-input",
+    ) as HTMLTextAreaElement | null;
+    inputEl?.focus({ preventScroll: true });
+  }
 
   if (hasPageLocation(initialLocation) || !input.reader) {
     return {
@@ -222,4 +226,24 @@ export async function includeReaderSelectedText(
       locationEnriched: false,
     };
   }
+}
+
+export function updateReaderSelectedTextComment(input: {
+  body: Element;
+  conversationKey: number;
+  selectedText: string;
+  comment: string;
+}): boolean {
+  const conversationKey = Math.floor(Number(input.conversationKey || 0));
+  if (!Number.isFinite(conversationKey) || conversationKey <= 0) return false;
+  const updated = updateSelectedTextContextCommentForItem(
+    conversationKey,
+    input.selectedText,
+    input.comment,
+    "pdf",
+  );
+  if (updated) {
+    refreshSelectedTextPanels(input.body, conversationKey);
+  }
+  return updated;
 }

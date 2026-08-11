@@ -510,8 +510,8 @@ import { getConfiguredCodexAppServerBinaryPath } from "../../codexAppServer/bina
 import { buildCodexAppServerReasoningConfig } from "../../codexAppServer/reasoning";
 import {
   buildCodexRuntimeModelEntries,
+  ensureCodexAppServerModelCapabilities,
   getCodexAppServerReasoningChoices,
-  loadCodexAppServerModelCatalog,
   resolveCodexAppServerReasoningSelection,
   type CodexAppServerModelCatalogEntry,
 } from "../../codexAppServer/modelCatalog";
@@ -1098,12 +1098,19 @@ export function setupHandlers(
     codexModelCatalogError = "";
     codexModelCatalogPath = codexPath;
     refreshOpenCodexModelMenu();
-    codexModelCatalogInFlight = loadCodexAppServerModelCatalog({ codexPath })
+    codexModelCatalogInFlight = ensureCodexAppServerModelCapabilities({
+      model: getCodexRuntimeModelPref(),
+      codexPath,
+    })
       .then((catalog) => {
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";
         reconcileSelectedCodexReasoningMode();
+        // Recompute persisted/history-only gauges immediately. This makes the
+        // corrected native context window visible without requiring another
+        // model turn just to refresh the footer.
+        if (item) refreshChat(body, item);
       })
       .catch((error: unknown) => {
         codexModelCatalogModels = [];
@@ -7929,5 +7936,8 @@ export function setupHandlers(
     body,
     cleanupSetupHandlers,
   );
+  if (isCodexConversationSystem()) {
+    void ensureCodexModelCatalogLoaded();
+  }
   panelRoot.dataset.handlersInitialized = thisGen;
 }

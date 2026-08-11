@@ -163,6 +163,12 @@ function notify(): void {
 function providerFromIdentity(
   identity: ModelCapabilityIdentity,
 ): ModelCapabilityProvider {
+  // Codex app-server communicates over a local binary path. Treat it as the
+  // customized provider regardless of whether a caller supplied a preset so
+  // every native request resolves the same capability snapshot.
+  if (normalize(identity.authMode) === "codex_app_server") {
+    return "customized";
+  }
   const explicit = normalize(identity.provider);
   if (explicit && explicit !== "customized" && explicit !== "unknown") {
     return explicit as ModelCapabilityProvider;
@@ -301,6 +307,40 @@ function getLiveModel(
   return getCatalogSnapshot(identity)?.models.find(
     (model) => model.id === identity.model,
   );
+}
+
+/**
+ * Registers capabilities obtained through a transport that is not an HTTP
+ * `/models` endpoint (for example Codex app-server's native `model/list`).
+ * Callers must provide the exact request identity they will later use for
+ * token budgeting; this deliberately does no model-name aliasing.
+ */
+export function setDiscoveredModelCatalogForIdentity(
+  identity: ModelCapabilityIdentity,
+  models: DiscoveredModel[],
+): void {
+  const bounded = models.slice(0, 4096).map((model) => clone(model));
+  catalogSnapshots.set(buildCatalogKey(identity), {
+    models: bounded,
+    fetchedAt: now(),
+    stale: false,
+  });
+  notify();
+}
+
+/**
+ * Adds fresh native-catalog metadata without discarding models omitted by a
+ * partial page or a transient local-catalog read failure.
+ */
+export function mergeDiscoveredModelCatalogForIdentity(
+  identity: ModelCapabilityIdentity,
+  models: DiscoveredModel[],
+): void {
+  const existing = getCatalogSnapshot(identity)?.models || [];
+  const merged = new Map<string, DiscoveredModel>();
+  for (const model of existing) merged.set(model.id, model);
+  for (const model of models) merged.set(model.id, model);
+  setDiscoveredModelCatalogForIdentity(identity, [...merged.values()]);
 }
 
 function mergeLimits(

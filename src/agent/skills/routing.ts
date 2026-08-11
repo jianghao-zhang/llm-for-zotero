@@ -4,20 +4,9 @@ import {
 } from "../../utils/notesDirectoryConfig";
 import type { AgentRuntimeRequest } from "../types";
 import {
-  resolveSkillRequestContext,
   type SkillRoutingRequest,
 } from "./contextEligibility";
 import { matchesSkill, type AgentSkill } from "./skillLoader";
-
-const SIMPLE_PAPER_QA_SKILL_ID = "simple-paper-qa";
-const EVIDENCE_BASED_QA_SKILL_ID = "evidence-based-qa";
-const LIBRARY_ANALYSIS_SKILL_ID = "library-analysis";
-const SIMPLE_PAPER_QA_INTENT_PATTERN =
-  /\b(understand|explain|walk me through|help me understand)\b.*\b(paper|ppaer|article|study)\b/i;
-const COLLECTION_ANALYSIS_INTENT_PATTERN =
-  /\b(summarize|summarise|summary|overview|statistics|stats|analy[sz]e|breakdown|survey|audit)\b/i;
-const LIBRARY_SCOPE_TARGET_PATTERN =
-  /\b(?:my|the|whole|entire|current|selected)\s+(?:library|collection|tag)\b|\b(?:this|the|current|selected)\s+(?:collection|tag)\b|\ball\s+(?:papers?|items?)\b|\b(?:library|collection|tag)\s+(?:summary|overview|statistics|stats|analysis|breakdown)\b/i;
 
 export type SkillRoutingResolution = {
   matchedSkillIds: string[];
@@ -248,23 +237,6 @@ function hasSkill(skills: ReadonlyArray<AgentSkill>, skillId: string): boolean {
   return skills.some((skill) => skill.id === skillId);
 }
 
-function hasPaperTarget(request: SkillRoutingRequest): boolean {
-  const context = resolveSkillRequestContext(request);
-  return Boolean(
-    context.hasSinglePaper ||
-    context.hasPaperSet ||
-    context.singlePaperTargetedByText,
-  );
-}
-
-function hasLibraryScopeTarget(request: SkillRoutingRequest): boolean {
-  return Boolean(
-    request.selectedCollectionContexts?.length ||
-    request.selectedTagContexts?.length ||
-    LIBRARY_SCOPE_TARGET_PATTERN.test(request.userText || ""),
-  );
-}
-
 function computeContextForcedSkillIds(
   request: SkillRoutingRequest,
 ): Set<string> {
@@ -280,36 +252,7 @@ function computeContextForcedSkillIds(
       forced.add("write-note");
     }
   }
-  if (
-    SIMPLE_PAPER_QA_INTENT_PATTERN.test(request.userText || "") &&
-    hasPaperTarget(request) &&
-    !hasLibraryScopeTarget(request)
-  ) {
-    forced.add(SIMPLE_PAPER_QA_SKILL_ID);
-  }
-  if (
-    (request.selectedCollectionContexts?.length ||
-      request.selectedTagContexts?.length) &&
-    COLLECTION_ANALYSIS_INTENT_PATTERN.test(request.userText || "")
-  ) {
-    forced.add(LIBRARY_ANALYSIS_SKILL_ID);
-  }
   return forced;
-}
-
-function shouldSuppressAutomaticSkill(params: {
-  skillId: string;
-  request: SkillRoutingRequest;
-  forcedIds: ReadonlySet<string>;
-}): boolean {
-  const { skillId, request, forcedIds } = params;
-  if (forcedIds.has(skillId)) return false;
-  if (skillId !== SIMPLE_PAPER_QA_SKILL_ID) return false;
-  if (!hasPaperTarget(request)) return true;
-  return (
-    hasLibraryScopeTarget(request) &&
-    !resolveSkillRequestContext(request).singlePaperTargetedByText
-  );
 }
 
 export function resolveSkillRouting(
@@ -335,24 +278,12 @@ export function resolveSkillRouting(
       const isAutoMatched =
         contextForced.has(skill.id) || baseMatched.has(skill.id);
       if (!isAutoMatched || skill.activation === "manual") return false;
-      return !shouldSuppressAutomaticSkill({
-        skillId: skill.id,
-        request,
-        forcedIds,
-      });
+      return true;
     })
     .map((skill) => skill.id);
 
-  const withoutRedundantSimplePaperQa =
-    matchedSkillIds.includes(EVIDENCE_BASED_QA_SKILL_ID) &&
-    matchedSkillIds.includes(SIMPLE_PAPER_QA_SKILL_ID) &&
-    !forcedIds.has(SIMPLE_PAPER_QA_SKILL_ID) &&
-    !forcedIds.has(EVIDENCE_BASED_QA_SKILL_ID)
-      ? matchedSkillIds.filter((id) => id !== SIMPLE_PAPER_QA_SKILL_ID)
-      : matchedSkillIds;
-
   return {
-    matchedSkillIds: withoutRedundantSimplePaperQa,
+    matchedSkillIds,
     explicitSkillIds: Array.from(forcedIds).filter((skillId) =>
       hasSkill(skills, skillId),
     ),

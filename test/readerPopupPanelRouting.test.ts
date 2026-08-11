@@ -52,10 +52,18 @@ class FakeElement {
 }
 
 class FakeDocument {
+  independentPanel: FakeElement | null = null;
+
   constructor(private readonly deck: FakeElement) {}
 
   getElementById(id: string): FakeElement | null {
     return id === "zotero-context-pane-item-deck" ? this.deck : null;
+  }
+
+  querySelector(selector: string): FakeElement | null {
+    return selector === '[data-llm-reader-context-pane="true"]'
+      ? this.independentPanel
+      : null;
   }
 }
 
@@ -101,6 +109,24 @@ function buildStandalonePanel() {
   };
 }
 
+function buildIndependentReaderPanel() {
+  const deck = new FakeElement();
+  const doc = new FakeDocument(deck);
+  deck.ownerDocument = doc;
+  const panel = new FakeElement();
+  const root = new FakeElement();
+  panel.ownerDocument = doc;
+  panel.setAttribute("data-reader-tab-id", "tab-active");
+  root.setAttribute("id", "llm-main");
+  panel.append(root);
+  doc.independentPanel = panel;
+  return {
+    doc: doc as unknown as Document,
+    panel: panel as unknown as Element,
+    root: root as unknown as Element,
+  };
+}
+
 describe("reader popup panel routing", function () {
   it("selects the context pane owned by the reader tab", function () {
     const { doc, activePanel, activeRoot, staleRoot } = buildReaderDeck();
@@ -117,6 +143,19 @@ describe("reader popup panel routing", function () {
     const { doc, activePanel } = buildReaderDeck();
 
     assert.strictEqual(getReaderContextPanelForTab(doc, null), activePanel);
+  });
+
+  it("routes reader popups to the dedicated third ContextPane view", function () {
+    const { doc, panel, root } = buildIndependentReaderPanel();
+
+    assert.strictEqual(getReaderContextPanelForTab(doc, "tab-active"), panel);
+    const target = resolveReaderPopupPanelTarget({
+      preferredDocument: doc,
+      documents: [doc],
+      tabID: "tab-active",
+    });
+    assert.strictEqual(target?.body, panel);
+    assert.strictEqual(target?.root, root);
   });
 
   it("does not fall back to another window's selected panel for a known tab ID", function () {

@@ -2,9 +2,11 @@ import { assert } from "chai";
 import {
   appendSelectedTextContextForItem,
   getSelectedTextContextEntries,
+  updateSelectedTextContextCommentForItem,
 } from "../src/modules/contextPanel/contextResolution";
 import {
   includeReaderSelectedText,
+  updateReaderSelectedTextComment,
   type ReaderTextInclusionDependencies,
 } from "../src/modules/contextPanel/readerTextInclusion";
 import {
@@ -158,6 +160,69 @@ describe("reader text inclusion", function () {
     });
   });
 
+  it("keeps focus in the popup and attaches an optional comment", async function () {
+    const conversationKey = 8107;
+    const panel = fakePanelBody(conversationKey);
+    let syncCount = 0;
+    activeContextPanelStateSync.set(panel.body, () => {
+      syncCount += 1;
+    });
+
+    const result = await includeReaderSelectedText({
+      body: panel.body,
+      conversationKey,
+      selectedText: "The interaction should stay fluid.",
+      initialLocation: { contextItemId: 47, pageIndex: 4 },
+      focusPanelInput: false,
+    });
+    const updated = updateReaderSelectedTextComment({
+      body: panel.body,
+      conversationKey,
+      selectedText: "The interaction should stay fluid.",
+      comment: "How does this support the central claim?",
+    });
+
+    assert.isTrue(result.added);
+    assert.isFalse(panel.input.focused);
+    assert.isTrue(updated);
+    assert.equal(syncCount, 2);
+    assert.deepInclude(getSelectedTextContextEntries(conversationKey)[0], {
+      text: "The interaction should stay fluid.",
+      comment: "How does this support the central claim?",
+    });
+  });
+
+  it("attaches a comment to the matching quoted model response", function () {
+    const conversationKey = 8108;
+    appendSelectedTextContextForItem(
+      conversationKey,
+      "Quoted assistant response",
+      "model",
+    );
+    appendSelectedTextContextForItem(
+      conversationKey,
+      "Quoted assistant response",
+      "pdf",
+    );
+
+    const updated = updateSelectedTextContextCommentForItem(
+      conversationKey,
+      "Quoted assistant response",
+      "Compare this claim with the source evidence.",
+      "model",
+    );
+
+    assert.isTrue(updated);
+    assert.deepInclude(getSelectedTextContextEntries(conversationKey)[0], {
+      source: "model",
+      comment: "Compare this claim with the source evidence.",
+    });
+    assert.notProperty(
+      getSelectedTextContextEntries(conversationKey)[1] || {},
+      "comment",
+    );
+  });
+
   it("keeps captured text when asynchronous page lookup fails", async function () {
     const conversationKey = 8103;
     const panel = fakePanelBody(conversationKey);
@@ -239,7 +304,7 @@ describe("reader text inclusion", function () {
     assert.deepEqual(getSelectedTextContextEntries(8105), []);
   });
 
-  it("rejects duplicate and over-limit selections", async function () {
+  it("rejects duplicates while allowing unlimited distinct selections", async function () {
     const conversationKey = 8106;
     const panel = fakePanelBody(conversationKey);
     activeContextPanelStateSync.set(panel.body, () => undefined);
@@ -257,7 +322,9 @@ describe("reader text inclusion", function () {
       selectedText: "duplicate selection",
       initialLocation: { contextItemId: 46, pageIndex: 0 },
     });
-    for (let index = 1; index < 5; index++) {
+    assert.equal(duplicate.outcome, "not-added");
+    assert.equal(panel.status.textContent, "Text context already included");
+    for (let index = 1; index <= 8; index++) {
       appendSelectedTextContextForItem(
         conversationKey,
         `selection ${index}`,
@@ -266,16 +333,15 @@ describe("reader text inclusion", function () {
         { contextItemId: 46, pageIndex: index },
       );
     }
-    const overLimit = await includeReaderSelectedText({
+    const tenthSelection = await includeReaderSelectedText({
       body: panel.body,
       conversationKey,
-      selectedText: "sixth selection",
-      initialLocation: { contextItemId: 46, pageIndex: 5 },
+      selectedText: "selection 9",
+      initialLocation: { contextItemId: 46, pageIndex: 9 },
     });
 
-    assert.equal(duplicate.outcome, "not-added");
-    assert.equal(overLimit.outcome, "not-added");
-    assert.equal(panel.status.textContent, "Text Context up to 5");
-    assert.lengthOf(getSelectedTextContextEntries(conversationKey), 5);
+    assert.equal(tenthSelection.outcome, "added");
+    assert.equal(panel.status.textContent, "Selected text included");
+    assert.lengthOf(getSelectedTextContextEntries(conversationKey), 10);
   });
 });

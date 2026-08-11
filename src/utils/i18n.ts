@@ -644,6 +644,11 @@ const zhCN: Record<string, string> = {
     "。请使用已安装的 Codex CLI 接受的模型名称。",
   "Codex CLI Path": "Codex CLI 路径",
   "Codex CLI Path (optional)": "Codex CLI 路径（可选）",
+  "Default session folder (optional)": "默认 session 文件夹（可选）",
+  "Absolute folder for new Codex sessions":
+    "新建 Codex session 使用的绝对文件夹路径",
+  "New Codex sessions start in this folder and appear under its project in Codex App. Existing sessions keep their original folder. Leave blank to use llm-for-zotero's runtime workspace.":
+    "新建 Codex session 会从此文件夹启动，并显示在 Codex App 对应的 project 下。现有 session 保持原文件夹不变。留空则使用 llm-for-zotero 的运行时工作区。",
   "Optional absolute path to codex executable":
     "Codex 可执行文件的可选绝对路径",
   "Optional. Leave blank to auto-detect native Windows Codex. WSL Codex is not supported because Zotero MCP uses Windows-local loopback. Or enter a native path such as C:\\nvm4w\\nodejs\\codex.cmd or C:\\Users\\<user>\\AppData\\Roaming\\npm\\codex.cmd.":

@@ -17,7 +17,7 @@ describe("Codex native compact send path", function () {
       sendQuestion,
     );
     const userPersistCall = source.indexOf(
-      "void persistConversationMessage(",
+      "const userPersistenceTask = shouldPersistTurn",
       compactBranch,
     );
     const userPersist = source.indexOf('role: "user",', userPersistCall);

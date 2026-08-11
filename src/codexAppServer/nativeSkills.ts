@@ -18,7 +18,6 @@ import {
   type CodexNativeSkillRoutingMode,
 } from "./prefs";
 
-const WRITE_NOTE_SKILL_ID = "write-note";
 const CLASSIFIER_CACHE_MAX_ENTRIES = 200;
 
 const classifierCache = new Map<string, string[]>();
@@ -160,12 +159,6 @@ export function resolveDeterministicCodexNativeSkillIds(params: {
   const allSkills = params.allSkills || getAllSkills();
   if (!allSkills.length) return [];
   const matched = new Set(getMatchedSkillIds(params.request));
-  if (
-    inferCodexNativeNoteIntent(params.request) &&
-    allSkills.some((skill) => skill.id === WRITE_NOTE_SKILL_ID)
-  ) {
-    matched.add(WRITE_NOTE_SKILL_ID);
-  }
   return uniqueInSkillOrder(matched, allSkills);
 }
 

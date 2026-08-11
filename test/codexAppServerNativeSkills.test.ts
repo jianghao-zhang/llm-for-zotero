@@ -159,13 +159,12 @@ describe("Codex native skills", function () {
     assert.equal(resolved.instructionBlock, "");
   });
 
-  it("uses the same context-count eligibility for native paper and library turns", async function () {
-    setUserSkills([
-      parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"]),
-      parseSkill(BUILTIN_SKILL_FILES["library-analysis.md"]),
-    ]);
+  it("does not auto-route retained capability skills in native turns", async function () {
+    setUserSkills(
+      Object.values(BUILTIN_SKILL_FILES).map((raw) => parseSkill(raw)),
+    );
 
-    const paperTurn = await resolveCodexNativeSkills({
+    const resolved = await resolveCodexNativeSkills({
       scope: {
         conversationKey: 1,
         libraryID: 7,
@@ -174,83 +173,13 @@ describe("Codex native skills", function () {
         activeContextItemId: 99,
         paperTitle: "Paper",
       },
-      userText: "summarize this paper",
+      userText: "analyze figure 2 and save it as a note",
       model: "",
       apiBase: "",
     });
-    assert.deepEqual(paperTurn.matchedSkillIds, ["simple-paper-qa"]);
 
-    const libraryTurn = await resolveCodexNativeSkills({
-      scope: {
-        conversationKey: 1,
-        libraryID: 7,
-        kind: "global",
-      },
-      userText: "summarize my library",
-      model: "",
-      apiBase: "",
-    });
-    assert.deepEqual(libraryTurn.matchedSkillIds, ["library-analysis"]);
-  });
-
-  it("activates compare-papers for native collection-scoped comparison turns", async function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"])]);
-
-    const resolved = await resolveCodexNativeSkills({
-      scope: {
-        conversationKey: 1,
-        libraryID: 7,
-        kind: "global",
-      },
-      userText: "compare the methods of all papers in this folder",
-      model: "",
-      apiBase: "",
-      skillContext: {
-        selectedCollectionContexts: [
-          {
-            collectionId: 4,
-            name: "Computational_Psychiatry",
-            libraryID: 7,
-          },
-        ],
-      },
-    });
-
-    assert.deepEqual(resolved.matchedSkillIds, ["compare-papers"]);
-    assert.include(
-      resolved.instructionBlock,
-      "A selected Zotero collection/folder is also a valid comparison corpus",
-    );
-  });
-
-  it("activates evidence-based-qa for native collection-scoped evidence turns", async function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"])]);
-
-    const resolved = await resolveCodexNativeSkills({
-      scope: {
-        conversationKey: 1,
-        libraryID: 7,
-        kind: "global",
-      },
-      userText: "find evidence in these papers for this claim",
-      model: "",
-      apiBase: "",
-      skillContext: {
-        selectedCollectionContexts: [
-          {
-            collectionId: 4,
-            name: "Computational_Psychiatry",
-            libraryID: 7,
-          },
-        ],
-      },
-    });
-
-    assert.deepEqual(resolved.matchedSkillIds, ["evidence-based-qa"]);
-    assert.include(
-      resolved.instructionBlock,
-      "a particular claim in a paper or selected collection",
-    );
+    assert.deepEqual(resolved.matchedSkillIds, []);
+    assert.equal(resolved.instructionBlock, "");
   });
 
   it("builds native request context from scope and UI context", function () {

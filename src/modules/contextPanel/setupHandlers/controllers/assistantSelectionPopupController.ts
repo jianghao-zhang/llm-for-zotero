@@ -1,6 +1,10 @@
 import { createElement } from "../../../../utils/domHelpers";
 import { t } from "../../../../utils/i18n";
-import { addSelectedTextContext } from "../../contextResolution";
+import {
+  addSelectedTextContext,
+  getSelectedTextContextEntries,
+  updateSelectedTextContextCommentForItem,
+} from "../../contextResolution";
 import {
   clampNumber,
   getSelectedTextWithinBubble,
@@ -52,16 +56,56 @@ export function attachAssistantSelectionPopup(
   }
   const selectionPopup = createElement(
     panelDoc,
+    "div",
+    "llm-assistant-selection-action",
+  ) as HTMLDivElement;
+  const quoteButton = createElement(
+    panelDoc,
     "button",
-    "llm-shortcut-btn llm-assistant-selection-action",
+    "llm-shortcut-btn llm-assistant-selection-quote-btn",
     {
       type: "button",
       textContent: "❞ Quote",
       title: "Quote selected text",
     },
   ) as HTMLButtonElement;
+  const commentComposer = createElement(
+    panelDoc,
+    "form",
+    "llm-assistant-selection-comment-composer",
+  ) as HTMLFormElement;
+  const commentInput = createElement(
+    panelDoc,
+    "textarea",
+    "llm-assistant-selection-comment-input",
+    {
+      placeholder: "Add an optional comment…",
+      title: "Optional comment for quoted response text",
+    },
+  ) as HTMLTextAreaElement;
+  commentInput.rows = 1;
+  commentInput.setAttribute(
+    "aria-label",
+    "Optional comment for quoted response text",
+  );
+  const commentSubmit = createElement(
+    panelDoc,
+    "button",
+    "llm-assistant-selection-comment-submit",
+    {
+      type: "submit",
+      textContent: "↑",
+      title: "Save comment",
+    },
+  ) as HTMLButtonElement;
+  commentSubmit.disabled = true;
+  commentSubmit.setAttribute("aria-label", "Save optional quote comment");
+  commentComposer.append(commentInput, commentSubmit);
+  selectionPopup.append(quoteButton, commentComposer);
   panelRoot.appendChild(selectionPopup);
   let selectionPopupText = "";
+  let commentModeActive = false;
+  let commentTarget: { itemId: number; text: string } | null = null;
   let selectionDragStartBubble: HTMLElement | null = null;
   let disposeSelectionPopup: () => void = () => {};
 
@@ -71,8 +115,73 @@ export function attachAssistantSelectionPopup(
     }
   };
   const hideSelectionPopup = () => {
-    selectionPopup.classList.remove("is-visible");
+    selectionPopup.classList.remove("is-visible", "is-comment-mode");
     selectionPopupText = "";
+    commentModeActive = false;
+    commentTarget = null;
+    commentInput.value = "";
+    commentInput.style.height = "";
+    commentInput.style.overflowY = "hidden";
+    commentSubmit.disabled = true;
+  };
+
+  const syncCommentSubmit = () => {
+    commentSubmit.disabled = !commentInput.value.trim();
+  };
+
+  const resizeCommentInput = () => {
+    const minimumHeight = 32;
+    const maximumHeight = 88;
+    commentInput.style.height = `${minimumHeight}px`;
+    const nextHeight = clampNumber(
+      commentInput.scrollHeight,
+      minimumHeight,
+      maximumHeight,
+    );
+    commentInput.style.height = `${Math.round(nextHeight)}px`;
+    commentInput.style.overflowY =
+      commentInput.scrollHeight > maximumHeight ? "auto" : "hidden";
+  };
+
+  const fitCommentPopupWithinChat = () => {
+    if (!chatBox) return;
+    const panelRect = panelRoot.getBoundingClientRect();
+    const chatRect = chatBox.getBoundingClientRect();
+    const popupRect = selectionPopup.getBoundingClientRect();
+    const margin = 8;
+    const hostLeft = chatRect.left - panelRect.left;
+    const hostTop = chatRect.top - panelRect.top;
+    const hostRight = hostLeft + chatRect.width;
+    const hostBottom = hostTop + chatRect.height;
+    const currentLeft = Number.parseFloat(selectionPopup.style.left || "0");
+    const currentTop = Number.parseFloat(selectionPopup.style.top || "0");
+    selectionPopup.style.left = `${Math.round(
+      clampNumber(
+        currentLeft,
+        hostLeft + margin,
+        hostRight - popupRect.width - margin,
+      ),
+    )}px`;
+    selectionPopup.style.top = `${Math.round(
+      clampNumber(
+        currentTop,
+        hostTop + margin,
+        hostBottom - popupRect.height - margin,
+      ),
+    )}px`;
+  };
+
+  const showCommentComposer = (itemId: number, text: string) => {
+    commentModeActive = true;
+    commentTarget = { itemId, text };
+    commentInput.value = "";
+    resizeCommentInput();
+    syncCommentSubmit();
+    selectionPopup.classList.add("is-comment-mode", "is-visible");
+    panelWin?.requestAnimationFrame(() => {
+      fitCommentPopupWithinChat();
+      commentInput.focus({ preventScroll: true });
+    });
   };
 
   const findAssistantBubbleFromSelection = (): HTMLElement | null => {
@@ -96,6 +205,7 @@ export function attachAssistantSelectionPopup(
   };
 
   const updateSelectionPopup = (bubble?: HTMLElement | null) => {
+    if (commentModeActive) return;
     if (
       !panelWin ||
       !chatBox ||
@@ -220,6 +330,16 @@ export function attachAssistantSelectionPopup(
       hideSelectionPopup();
       return;
     }
+    const alreadyIncluded = getSelectedTextContextEntries(activeItemId).some(
+      (context) => context.source === "model" && context.text === selected,
+    );
+    if (alreadyIncluded) {
+      if (status) {
+        setStatus(status, "Selected response text already included", "ready");
+      }
+      showCommentComposer(activeItemId, selected);
+      return;
+    }
     runWithChatScrollGuard(() => {
       added = addSelectedTextContext(body, activeItemId, selected, {
         successStatusText: "Selected response text included",
@@ -229,10 +349,46 @@ export function attachAssistantSelectionPopup(
     });
     if (added) {
       updateSelectedTextPreviewPreservingScroll();
+      showCommentComposer(activeItemId, selected);
+      return;
     }
     hideSelectionPopup();
-    if (added) {
+  };
+
+  const submitQuoteComment = (event?: Event) => {
+    event?.preventDefault();
+    event?.stopPropagation();
+    const target = commentTarget;
+    const comment = commentInput.value.trim();
+    if (!target || !comment) return;
+    let updated = false;
+    runWithChatScrollGuard(() => {
+      updated = updateSelectedTextContextCommentForItem(
+        target.itemId,
+        target.text,
+        comment,
+        "model",
+      );
+    });
+    if (!updated) {
+      if (status) setStatus(status, "Unable to save quote comment", "error");
+      return;
+    }
+    updateSelectedTextPreviewPreservingScroll();
+    hideSelectionPopup();
+    inputBox.focus({ preventScroll: true });
+  };
+
+  const onCommentKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hideSelectionPopup();
       inputBox.focus({ preventScroll: true });
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      submitQuoteComment(event);
     }
   };
 
@@ -249,6 +405,7 @@ export function attachAssistantSelectionPopup(
       return;
     }
     const target = e.target as Element | null;
+    if (target && selectionPopup.contains(target)) return;
     const targetInsidePanel = Boolean(target && panelRoot.contains(target));
     if (!targetInsidePanel && !selectionDragStartBubble) {
       hideSelectionPopup();
@@ -270,6 +427,7 @@ export function attachAssistantSelectionPopup(
       disposeSelectionPopup();
       return;
     }
+    if (commentModeActive && panelDoc.activeElement === commentInput) return;
     panelWin?.setTimeout(() => updateSelectionPopup(), 0);
   };
   const onPanelPointerDown = (e: Event) => {
@@ -281,39 +439,47 @@ export function attachAssistantSelectionPopup(
       null;
     hideSelectionPopup();
   };
-  const onChatScrollHide = () => hideSelectionPopup();
+  const onChatScrollHide = () => {
+    if (commentModeActive) {
+      panelWin?.requestAnimationFrame(fitCommentPopupWithinChat);
+      return;
+    }
+    hideSelectionPopup();
+  };
   const onChatContextMenu = () => hideSelectionPopup();
 
-  let selectionPopupHandled = false;
   const triggerSelectionPopupAction = (e: Event) => {
-    if (selectionPopupHandled) return;
-    selectionPopupHandled = true;
     e.preventDefault();
     e.stopPropagation();
     quoteSelectedAssistantText();
-    panelWin?.setTimeout(() => {
-      selectionPopupHandled = false;
-    }, 0);
   };
   const isPrimarySelectionPopupEvent = (e: Event): boolean => {
     const maybeMouse = e as MouseEvent;
     return typeof maybeMouse.button !== "number" || maybeMouse.button === 0;
   };
-  selectionPopup.addEventListener("pointerdown", (e: Event) => {
+  const preserveQuoteSelection = (e: Event) => {
     if (!isPrimarySelectionPopupEvent(e)) return;
-    triggerSelectionPopupAction(e);
-  });
-  selectionPopup.addEventListener("mousedown", (e: Event) => {
-    if (!isPrimarySelectionPopupEvent(e)) return;
-    triggerSelectionPopupAction(e);
-  });
-  selectionPopup.addEventListener("click", triggerSelectionPopupAction);
-  selectionPopup.addEventListener("command", triggerSelectionPopupAction);
+    // Keep the browser selection intact until the button's one semantic
+    // activation (`click`). Pointer/mouse compatibility events must never
+    // submit the quote themselves or one gesture becomes several additions.
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  quoteButton.addEventListener("pointerdown", preserveQuoteSelection);
+  quoteButton.addEventListener("mousedown", preserveQuoteSelection);
+  quoteButton.addEventListener("click", triggerSelectionPopupAction);
   selectionPopup.addEventListener("contextmenu", (e: Event) => {
     e.preventDefault();
     e.stopPropagation();
     hideSelectionPopup();
   });
+  commentInput.addEventListener("input", () => {
+    syncCommentSubmit();
+    resizeCommentInput();
+    panelWin?.requestAnimationFrame(fitCommentPopupWithinChat);
+  });
+  commentInput.addEventListener("keydown", onCommentKeyDown);
+  commentComposer.addEventListener("submit", submitQuoteComment);
 
   panelDoc.addEventListener("mouseup", onPanelMouseUp, true);
   panelDoc.addEventListener("keyup", onDocKeyUp, true);

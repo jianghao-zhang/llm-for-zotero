@@ -203,6 +203,62 @@ describe("conversationRepository", function () {
     assert.deepEqual(update?.params, ["Renamed Codex chat", conversationKey]);
   });
 
+  it("propagates Zotero rename and clear operations to the shared Codex thread", async function () {
+    const conversationKey = CODEX_GLOBAL_CONVERSATION_KEY_BASE + 22;
+    const originalSetThreadName = codexAppServerForkService.setThreadName;
+    const renamed: Array<{ threadId: string; name: string }> = [];
+    globalScope.Zotero = {
+      ...(originalZotero || {}),
+      DB: {
+        queryAsync: async (sql: string) => {
+          if (sql.includes("FROM llm_for_zotero_codex_conversations c")) {
+            return [
+              {
+                conversationKey,
+                conversationID: buildConversationID({
+                  conversationKey,
+                  system: "codex",
+                  kind: "global",
+                  libraryID: 1,
+                }),
+                libraryID: 1,
+                kind: "global",
+                createdAt: 100,
+                updatedAt: 200,
+                providerSessionId: "thread-shared",
+                userTurnCount: 1,
+              },
+            ];
+          }
+          return [];
+        },
+      },
+    };
+    codexAppServerForkService.setThreadName = async ({ threadId, name }) => {
+      renamed.push({ threadId, name });
+    };
+    try {
+      await conversationRepository.setCatalogTitle({
+        system: "codex",
+        kind: "global",
+        conversationKey,
+        title: "Shared title",
+      });
+      await conversationRepository.clearCatalogTitle({
+        system: "codex",
+        kind: "global",
+        conversationKey,
+      });
+    } finally {
+      codexAppServerForkService.setThreadName = originalSetThreadName;
+    }
+
+    assert.deepEqual(renamed, [
+      { threadId: "thread-shared", name: "Shared title" },
+      { threadId: "thread-shared", name: "" },
+    ]);
+  });
+
   it("routes catalog deletion by system and kind", async function () {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     globalScope.Zotero = {

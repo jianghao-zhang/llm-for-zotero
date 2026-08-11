@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { readFileSync } from "node:fs";
 import { config } from "../package.json";
 import {
   getConfiguredCodexAppServerBinaryPath,
@@ -31,6 +32,17 @@ function makeCodexProviderGroup(path: string): ModelProviderGroup {
 }
 
 describe("codexAppServer binary path", function () {
+  it("ships without a machine-specific Codex CLI path", function () {
+    const prefs = readFileSync(
+      new URL("../addon/prefs.js", import.meta.url),
+      "utf8",
+    );
+    assert.include(
+      prefs,
+      'pref("codexAppServerPath", "")',
+    );
+  });
+
   before(function () {
     originalZotero = globalThis.Zotero;
   });

@@ -193,6 +193,7 @@ import {
 import {
   getCodexAppServerApprovalsReviewerPref,
   getCodexBinaryPathPref,
+  getCodexSessionFolderPref,
   getCodexReasoningModePref,
   getCodexRuntimeModelPref,
   isCodexAppServerNativeApprovalsEnabled,
@@ -201,6 +202,7 @@ import {
   setCodexAppServerApprovalsReviewerPref,
   setCodexAppServerNativeApprovalsEnabled,
   setCodexBinaryPathPref,
+  setCodexSessionFolderPref,
   setNativeZoteroMcpToolsEnabled,
   setCodexReasoningModePref,
   setCodexRuntimeModelPref,
@@ -1082,6 +1084,9 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
   const codexAppServerPathHelper = doc.querySelector(
     `#${config.addonRef}-codex-app-server-path-helper`,
   ) as HTMLSpanElement | null;
+  const codexAppServerSessionFolderInput = doc.querySelector(
+    `#${config.addonRef}-codex-app-server-session-folder`,
+  ) as HTMLInputElement | null;
   const codexAppServerTestBtn = doc.querySelector(
     `#${config.addonRef}-codex-app-server-test`,
   ) as HTMLButtonElement | null;
@@ -2829,6 +2834,25 @@ export async function registerPrefsScripts(_window: Window | undefined | null) {
 
   if (codexAppServerPathHelper) {
     codexAppServerPathHelper.textContent = t(getCodexAppServerPathHelperText());
+  }
+
+  if (codexAppServerSessionFolderInput) {
+    codexAppServerSessionFolderInput.value = getCodexSessionFolderPref();
+    const commitCodexSessionFolder = () => {
+      setCodexSessionFolderPref(codexAppServerSessionFolderInput.value);
+      codexAppServerSessionFolderInput.value = getCodexSessionFolderPref();
+    };
+    codexAppServerSessionFolderInput.addEventListener(
+      "change",
+      commitCodexSessionFolder,
+    );
+    codexAppServerSessionFolderInput.addEventListener(
+      "blur",
+      commitCodexSessionFolder,
+    );
+    codexAppServerSessionFolderInput.addEventListener("input", () => {
+      setCodexSessionFolderPref(codexAppServerSessionFolderInput.value);
+    });
   }
 
   if (codexAppServerTestBtn && codexAppServerStatus) {

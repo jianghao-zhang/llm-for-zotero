@@ -2,6 +2,7 @@ import { assert } from "chai";
 import {
   CodexAppServerProcess,
   destroyCachedCodexAppServerProcess,
+  extractCodexAppServerTurnFailureMessage,
   extractCodexAppServerThreadId,
   extractCodexAppServerTurnId,
   getOrCreateCodexAppServerProcess,
@@ -536,6 +537,57 @@ describe("codexAppServerProcess", function () {
       (caught as Error).message,
       /Timed out waiting for codex app-server turn completion after 10ms/,
     );
+  });
+
+  it("surfaces the provider error from a failed turn", async function () {
+    const rawFailure = {
+      threadId: "thread-failed",
+      turn: {
+        id: "turn-failed",
+        status: "failed",
+        error: {
+          message: JSON.stringify({
+            error: {
+              message:
+                "Unsupported value: reasoning.context only accepts auto or current_turn.",
+              type: "invalid_request_error",
+            },
+          }),
+          additionalDetails: null,
+        },
+      },
+    };
+    assert.equal(
+      extractCodexAppServerTurnFailureMessage(rawFailure),
+      "Unsupported value: reasoning.context only accepts auto or current_turn.",
+    );
+
+    const proc = createProcess();
+    const completed: Array<{ error?: string }> = [];
+    const waitPromise = waitForCodexAppServerTurnCompletion({
+      proc,
+      turnId: "turn-failed",
+      timeoutMs: 50,
+      onTurnCompleted: (event) => completed.push(event),
+    });
+    (
+      proc as unknown as {
+        handleMessage: (msg: Record<string, unknown>) => void;
+      }
+    ).handleMessage({ method: "turn/completed", params: rawFailure });
+
+    let caught: unknown;
+    try {
+      await waitPromise;
+    } catch (error) {
+      caught = error;
+    }
+    assert.instanceOf(caught, Error);
+    assert.equal(
+      (caught as Error).message,
+      "Unsupported value: reasoning.context only accepts auto or current_turn.",
+    );
+    assert.equal(completed[0]?.error, (caught as Error).message);
   });
 
   it("resolves when the matching thread compacted notification arrives", async function () {

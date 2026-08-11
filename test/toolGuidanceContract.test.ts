@@ -130,31 +130,36 @@ describe("tool guidance contracts", function () {
     assert.deepEqual(failures, []);
   });
 
-  it("keeps direct chat and agent guidance selective about Mermaid overviews and local SVG", function () {
-    for (const prompt of [
+  it("keeps direct chat visual guidance minimal", function () {
+    assert.include(
       DEFAULT_SYSTEM_PROMPT,
-      AGENT_PERSONA_INSTRUCTIONS.join("\n"),
-    ]) {
-      assert.include(prompt, "Use diagrams selectively");
-      assert.include(prompt, "when visual structure materially improves");
-      assert.include(
-        prompt,
-        "For whole-paper overview diagrams, use fenced Mermaid flowcharts by default",
-      );
-      assert.include(prompt, "Use fenced SVG for local mechanism");
-      assert.include(
-        prompt,
-        "keep SVG focused on one mechanism, step, or module",
-      );
-      assert.include(prompt, "not a poster-style whole-paper map");
-      assert.include(prompt, "Do not add diagrams to every answer");
-      assert.include(prompt, "Do not invent visual structure unsupported");
-      assert.notInclude(prompt, "Use fenced SVG diagrams as the default");
-      assert.notInclude(
-        prompt,
-        "Use fenced Mermaid only when the user explicitly asks for Mermaid",
-      );
-    }
+      "diagrams, and equations only when they materially improve understanding",
+    );
+    assert.notInclude(DEFAULT_SYSTEM_PROMPT, "poster-style whole-paper map");
+    assert.notInclude(DEFAULT_SYSTEM_PROMPT, "semantic color groups");
+  });
+
+  it("keeps agent guidance selective about Mermaid overviews and local SVG", function () {
+    const prompt = AGENT_PERSONA_INSTRUCTIONS.join("\n");
+    assert.include(prompt, "Use diagrams selectively");
+    assert.include(prompt, "when visual structure materially improves");
+    assert.include(
+      prompt,
+      "For whole-paper overview diagrams, use fenced Mermaid flowcharts by default",
+    );
+    assert.include(prompt, "Use fenced SVG for local mechanism");
+    assert.include(
+      prompt,
+      "keep SVG focused on one mechanism, step, or module",
+    );
+    assert.include(prompt, "not a poster-style whole-paper map");
+    assert.include(prompt, "Do not add diagrams to every answer");
+    assert.include(prompt, "Do not invent visual structure unsupported");
+    assert.notInclude(prompt, "Use fenced SVG diagrams as the default");
+    assert.notInclude(
+      prompt,
+      "Use fenced Mermaid only when the user explicitly asks for Mermaid",
+    );
   });
 
   it("keeps the Diagram shortcut ID and makes its prompt Mermaid and compact", function () {
@@ -243,7 +248,7 @@ describe("tool guidance contracts", function () {
     assert.include(agentPersona, "use paper_read mode:'figures'");
   });
 
-  it("requires extracted PDF crop inspection and note embedding", function () {
+  it("keeps retained Zotero skills capability-focused instead of workflow-heavy", function () {
     const sources = readSourceFiles();
     const byPath = new Map(
       sources.map((source) => [source.path, source.content] as const),
@@ -271,21 +276,18 @@ describe("tool guidance contracts", function () {
       assert.isString(content);
     }
 
-    assert.include(analyzeFigures!, "paper_read({ mode:'figures'");
-    assert.include(messageBuilder!, "precise PDF crops");
+    assert.include(analyzeFigures!, "activation: manual");
+    assert.include(analyzeFigures!, "available PDF/image tools");
+    assert.notInclude(messageBuilder!, "TURN RULE: This is a figure/table");
     assert.include(paperRead!, "mode:'figures'");
     assert.include(agentPersona!, "embed extracted PDF crop paths");
-    assert.include(writeNote!, "Embed extracted PDF crop paths");
+    assert.include(writeNote!, "Do not force a template");
     assert.include(noteTools!, "embed the extracted PDF crop path");
     assert.include(noteTools!, "returns no_figures");
     assert.include(noteTools!, "switch to text-only mode");
-    assert.include(writeNote!, "switch to text-only mode");
-    assert.include(analyzeFigures!, "switch to text-only mode");
+    assert.notInclude(writeNote!, "Template for paper notes");
+    assert.notInclude(analyzeFigures!, "Step 1");
     assert.include(agentPersona!, "user manually attached or pasted");
-    assert.include(
-      messageBuilder!,
-      "user-provided image inputs are unaffected",
-    );
     assert.include(currentNoteTool!, "Do not embed MinerU source image paths");
   });
 

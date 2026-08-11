@@ -9,6 +9,7 @@ describe("selected text context normalization", function () {
     const contexts = normalizeSelectedTextContexts([
       {
         text: " Selected quote ",
+        comment: " Why does this matter? ",
         source: "pdf",
         contextItemId: -5,
         pageIndex: -1,
@@ -24,6 +25,7 @@ describe("selected text context normalization", function () {
 
     assert.deepEqual(contexts[0], {
       text: "Selected quote",
+      comment: "Why does this matter?",
       source: "pdf",
       paperContext: undefined,
       noteContext: undefined,

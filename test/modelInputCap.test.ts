@@ -3,12 +3,19 @@ import {
   applyModelInputTokenCap,
   estimateContextMessagesTokens,
   estimateConversationTokens,
+  estimateTextTokens,
   getModelInputTokenLimit,
   resolveContextWindowTokens,
   type InputCapMessage,
 } from "../src/utils/modelInputCap";
 
 describe("modelInputCap", function () {
+  it("counts CJK text densely instead of underestimating it as Latin text", function () {
+    assert.equal(estimateTextTokens("A".repeat(400)), 100);
+    assert.equal(estimateTextTokens("汉".repeat(400)), 400);
+    assert.equal(estimateTextTokens(`${"A".repeat(40)}${"汉".repeat(40)}`), 50);
+  });
+
   describe("getModelInputTokenLimit", function () {
     it("should resolve model-specific input limits", function () {
       assert.equal(getModelInputTokenLimit("gpt-4o-mini"), 128000);

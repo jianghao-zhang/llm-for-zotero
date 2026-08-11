@@ -114,6 +114,23 @@ describe("workflow: Add Text lifecycle", function () {
     );
     assert.isTrue(diagnostics.standaloneConversationHasText, message);
     assert.isTrue(diagnostics.standalonePreviewHasText, message);
+    assert.equal(
+      diagnostics.selectedContextComment,
+      "Explain why this selected result matters.",
+      message,
+    );
+    assert.equal(
+      diagnostics.standalonePreviewComment,
+      diagnostics.selectedContextComment,
+      message,
+    );
+    assert.deepEqual(
+      diagnostics.standalonePreviewLabels,
+      ["Selected text:", "User comment:"],
+      message,
+    );
+    assert.isFalse(diagnostics.selectionPopupOpenAfterComment, message);
+    assert.equal(diagnostics.saveButtonLabel, "↑", message);
   });
 
   for (const trigger of ["popup", "action-bar"] as const) {

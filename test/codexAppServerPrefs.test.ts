@@ -1,8 +1,10 @@
 import { assert } from "chai";
 import {
   getCodexAppServerApprovalsReviewerPref,
+  getCodexNativeSkillModePref,
   getCodexReasoningModePref,
   getCodexRuntimeModelPref,
+  getCodexSessionFolderPref,
   isCodexZoteroMcpToolsEnabled,
   isCodexAppServerNativeApprovalsEnabled,
   isNativeZoteroMcpToolsEnabled,
@@ -10,10 +12,40 @@ import {
   setCodexAppServerNativeApprovalsEnabled,
   setCodexReasoningModePref,
   setCodexRuntimeModelPref,
+  setCodexSessionFolderPref,
   setNativeZoteroMcpToolsEnabled,
 } from "../src/codexAppServer/prefs";
 
 describe("codexAppServer prefs", function () {
+  it("persists the default folder for new native sessions", function () {
+    const globalScope = globalThis as typeof globalThis & {
+      Zotero?: unknown;
+    };
+    const originalZotero = globalScope.Zotero;
+    const prefs = new Map<string, unknown>();
+    try {
+      globalScope.Zotero = {
+        Prefs: {
+          get: (key: string) => prefs.get(key),
+          set: (key: string, value: unknown) => prefs.set(key, value),
+        },
+      };
+
+      setCodexSessionFolderPref("  /Users/example/papers/  ");
+
+      assert.equal(getCodexSessionFolderPref(), "/Users/example/papers/");
+      assert.equal(
+        prefs.get(
+          "extensions.zotero.llmforzotero.codexAppServerSessionFolder",
+        ),
+        "/Users/example/papers/",
+      );
+    } finally {
+      if (originalZotero) globalScope.Zotero = originalZotero;
+      else delete globalScope.Zotero;
+    }
+  });
+
   it("allows arbitrary non-empty Codex app-server model names", function () {
     const globalScope = globalThis as typeof globalThis & {
       Zotero?: unknown;
@@ -74,7 +106,7 @@ describe("codexAppServer prefs", function () {
     }
   });
 
-  it("enables Zotero MCP tools for native Codex by default", function () {
+  it("keeps llm-for-zotero MCP tools and preset skills off by default", function () {
     const globalScope = globalThis as typeof globalThis & {
       Zotero?: unknown;
     };
@@ -86,8 +118,9 @@ describe("codexAppServer prefs", function () {
         },
       };
 
-      assert.equal(isCodexZoteroMcpToolsEnabled(), true);
-      assert.equal(isNativeZoteroMcpToolsEnabled(), true);
+      assert.equal(isCodexZoteroMcpToolsEnabled(), false);
+      assert.equal(isNativeZoteroMcpToolsEnabled(), false);
+      assert.equal(getCodexNativeSkillModePref(), "off");
     } finally {
       if (originalZotero) {
         globalScope.Zotero = originalZotero;

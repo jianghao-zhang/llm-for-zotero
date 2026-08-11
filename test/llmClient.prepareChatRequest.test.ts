@@ -6,6 +6,9 @@ import {
   getResolvedEmbeddingConfig,
   prepareChatRequest,
 } from "../src/utils/llmClient";
+import { loadCodexAppServerModelCapabilities } from "../src/codexAppServer/modelCatalog";
+import { resetModelCapabilityStateForTests } from "../src/modelCapabilities";
+import { CODEX_NATIVE_SYSTEM_PROMPT } from "../src/utils/llmDefaults";
 
 describe("llmClient prepareChatRequest", function () {
   const originalZotero = globalThis.Zotero;
@@ -102,6 +105,35 @@ describe("llmClient prepareChatRequest", function () {
     );
   });
 
+  it("uses the compact native Codex base prompt without the direct-chat workflow", function () {
+    const prepared = prepareChatRequest({
+      prompt: "Explain the selected passage.",
+      model: "gpt-5.6",
+      apiBase: "",
+      authMode: "codex_app_server",
+      providerProtocol: "codex_responses",
+      baseSystemPrompt: CODEX_NATIVE_SYSTEM_PROMPT,
+    });
+
+    assert.equal(prepared.systemPrompt, CODEX_NATIVE_SYSTEM_PROMPT);
+    assert.equal(prepared.messages[0]?.content, CODEX_NATIVE_SYSTEM_PROMPT);
+    assert.include(
+      prepared.systemPrompt,
+      "installed zotero-cli skill and zcli",
+    );
+    assert.include(prepared.systemPrompt, "Preserve normal Codex tools");
+    assert.include(
+      prepared.systemPrompt,
+      "Do not use llm-for-zotero Zotero MCP workflows",
+    );
+    assert.notInclude(
+      prepared.systemPrompt,
+      "You are an intelligent research assistant integrated into Zotero",
+    );
+    assert.notInclude(prepared.systemPrompt, "fenced Mermaid flowcharts");
+    assert.notInclude(prepared.systemPrompt, "paper_read");
+  });
+
   it("keeps system prompts inside input messages for Grok responses requests", async function () {
     let capturedBody: Record<string, unknown> | null = null;
     (
@@ -145,7 +177,7 @@ describe("llmClient prepareChatRequest", function () {
     assert.equal(input[0]?.role, "system");
     assert.include(
       String(input[0]?.content || ""),
-      "You are an intelligent research assistant",
+      "You are a research assistant integrated into Zotero",
     );
     assert.equal(input[input.length - 1]?.role, "user");
   });
@@ -244,6 +276,38 @@ describe("llmClient prepareChatRequest", function () {
     });
 
     assert.equal(prepared.authMode, "codex_auth");
+  });
+
+  it("budgets an empty-path native Codex request against its exact catalog identity", async function () {
+    await loadCodexAppServerModelCapabilities({
+      model: "deepseek-v4-flash:0731",
+      codexPath: "",
+      configPath: "/tmp/config.toml",
+      readTextFile: async (path) =>
+        path.endsWith("config.toml")
+          ? 'model_catalog_json = "/tmp/models.json"'
+          : JSON.stringify({
+              models: [
+                {
+                  slug: "deepseek-v4-flash:0731",
+                  context_window: 1_048_576,
+                },
+              ],
+            }),
+    });
+    try {
+      const prepared = prepareChatRequest({
+        prompt: "ok",
+        model: "deepseek-v4-flash:0731",
+        apiBase: "",
+        apiKey: "",
+        authMode: "codex_app_server",
+        providerProtocol: "codex_responses",
+      });
+      assert.equal(prepared.inputCap.limitTokens, 1_048_576);
+    } finally {
+      resetModelCapabilityStateForTests();
+    }
   });
 
   it("strips image content from DeepSeek V4 chat requests", function () {

@@ -68,7 +68,7 @@ function setBodyHashes(hashes: Record<string, string>): void {
 }
 
 // ---------------------------------------------------------------------------
-// Obsolete skill files (consolidated into write-note.md)
+// Obsolete and retired skill files
 // ---------------------------------------------------------------------------
 
 // Each entry carries the filename plus hashes of the exact raw file contents we
@@ -125,6 +125,53 @@ const OBSOLETE_SKILL_FILES: ReadonlyArray<{
     filename: "note-template.md",
     bootstrapRawHashes: ["128vd1c", "m675pz", "v55hyg"],
   },
+  // Reasoning workflows retired in favor of the model's native capabilities.
+  // Current and historical unmodified copies are removed once and never
+  // seeded again. Customized copies stay on disk but are excluded from the
+  // active skill set below.
+  {
+    filename: "simple-paper-qa.md",
+    bootstrapRawHashes: ["1181x3a", "1jdqul0", "1r2ban6"],
+  },
+  {
+    filename: "evidence-based-qa.md",
+    bootstrapRawHashes: [
+      "qdqcm0",
+      "nmwpc3",
+      "vyeyap",
+      "1vhakii",
+      "dxw5b3",
+      "11cbpv7",
+      "1er2ubr",
+      "13esvqx",
+      "1k39b46",
+      "1xglfq0",
+    ],
+  },
+  {
+    filename: "compare-papers.md",
+    bootstrapRawHashes: [
+      "6upxur",
+      "1ircw2j",
+      "i0j6yq",
+      "1yreksb",
+      "7os2qk",
+      "1frgnyh",
+      "1jvl4lu",
+      "cp9zod",
+      "w9wsrp",
+      "1w3ytrp",
+      "1krlubq",
+    ],
+  },
+  {
+    filename: "library-analysis.md",
+    bootstrapRawHashes: ["1c3awl3", "1bw9ks8", "ftq8b2"],
+  },
+  {
+    filename: "literature-review.md",
+    bootstrapRawHashes: ["nxpr5d", "4mdw1v", "kbrknh"],
+  },
 ];
 
 const OBSOLETE_SKILL_FILENAMES = new Set(
@@ -137,6 +184,11 @@ const OBSOLETE_SKILL_IDS = new Set([
   "note-from-paper",
   "note-editing",
   "note-template",
+  "simple-paper-qa",
+  "evidence-based-qa",
+  "compare-papers",
+  "library-analysis",
+  "literature-review",
 ]);
 
 // Exact raw-content hashes for prior shipped versions of built-ins whose
@@ -146,68 +198,18 @@ const OBSOLETE_SKILL_IDS = new Set([
 const BUILTIN_BOOTSTRAP_RAW_HASHES: Partial<
   Record<string, ReadonlyArray<string>>
 > = {
-  "library-analysis.md": ["ftq8b2"],
-  "compare-papers.md": [
-    "i0j6yq",
-    "1yreksb",
-    "7os2qk",
-    "1frgnyh",
-    "1jvl4lu",
-    "cp9zod",
-    "w9wsrp",
-    "1w3ytrp",
-    "1krlubq",
-  ],
   "analyze-figures.md": ["msvqtf", "17o1bpl"],
-  "simple-paper-qa.md": ["1r2ban6"],
-  "evidence-based-qa.md": [
-    "vyeyap",
-    "1vhakii",
-    "dxw5b3",
-    "11cbpv7",
-    "1er2ubr",
-    "13esvqx",
-    "1k39b46",
-    "1xglfq0",
-  ],
   "write-note.md": ["172xn8t"],
-  "literature-review.md": ["kbrknh"],
   "import-cited-reference.md": ["19bomz1"],
 };
 
 const BUILTIN_BOOTSTRAP_BODY_HASHES: Partial<
   Record<string, ReadonlyArray<string>>
-> = {
-  "compare-papers.md": [
-    "x00ci1",
-    "1au58pu",
-    "13ppssj",
-    "19kyxys",
-    "spgyhq",
-    "17c7wx5",
-    "6r67g8",
-    "1j5fq18",
-  ],
-  "evidence-based-qa.md": [
-    "1aby95d",
-    "1g0a76y",
-    "4gj0dx",
-    "12qgkrq",
-    "bgr2hf",
-    "zjwar9",
-  ],
-};
+> = {};
 
 const BUILTIN_FRONTMATTER_PATCH_OPTIONS: Partial<
   Record<string, Parameters<typeof patchSkillFrontmatter>[2]>
-> = {
-  "compare-papers.md": {
-    historicalContexts: ["paper-set"],
-  },
-  "evidence-based-qa.md": {
-    historicalContexts: ["single-paper,paper-set"],
-  },
-};
+> = {};
 
 // ---------------------------------------------------------------------------
 // Gecko runtime helpers (mirrors patterns from mineruCache.ts)
@@ -404,6 +406,32 @@ async function migrateLegacyFlatSkills(
 // ---------------------------------------------------------------------------
 
 const SEEDED_PREF_KEY = "extensions.zotero.llmForZotero.seededBuiltinSkills";
+const SKILL_CATALOG_REDUCTION_PREF_KEY =
+  "extensions.zotero.llmForZotero.skillCatalogReductionV1";
+
+const RETIRED_REASONING_SKILLS = [
+  { filename: "simple-paper-qa.md", id: "simple-paper-qa" },
+  { filename: "evidence-based-qa.md", id: "evidence-based-qa" },
+  { filename: "compare-papers.md", id: "compare-papers" },
+  { filename: "library-analysis.md", id: "library-analysis" },
+  { filename: "literature-review.md", id: "literature-review" },
+] as const;
+
+function hasAppliedSkillCatalogReduction(): boolean {
+  try {
+    return Zotero.Prefs?.get(SKILL_CATALOG_REDUCTION_PREF_KEY, true) === true;
+  } catch {
+    return false;
+  }
+}
+
+function markSkillCatalogReductionApplied(): void {
+  try {
+    Zotero.Prefs?.set(SKILL_CATALOG_REDUCTION_PREF_KEY, true, true);
+  } catch {
+    /* */
+  }
+}
 
 function getSeededSkills(): Set<string> {
   try {
@@ -487,6 +515,42 @@ export async function initUserSkills(): Promise<void> {
 
   await migrateLegacyFlatSkills(io, seeded);
 
+  // One-time, explicitly requested catalog reduction. Previous releases can
+  // leave built-ins in a hash-drifted state that looks customized even when
+  // they are still plugin-owned. Retire the five reasoning workflows and
+  // replace the three retained capability helpers with their concise manual
+  // versions exactly once. Later user edits regain the normal preservation
+  // behavior in Step 2.
+  if (!hasAppliedSkillCatalogReduction() && io.remove) {
+    for (const retired of RETIRED_REASONING_SKILLS) {
+      await io.remove(getCanonicalSkillDir(retired.id), {
+        recursive: true,
+        ignoreAbsent: true,
+      });
+      delete bodyHashes[retired.filename];
+      seeded.delete(retired.filename);
+    }
+    for (const [filename, shippedContent] of Object.entries(
+      BUILTIN_SKILL_FILES,
+    )) {
+      const shippedSkill = parseSkill(shippedContent);
+      await io.makeDirectory(getCanonicalSkillDir(shippedSkill.id), {
+        createAncestors: true,
+        ignoreExisting: true,
+      });
+      await io.write(
+        getCanonicalSkillFilePath(shippedSkill.id),
+        encoder.encode(shippedContent),
+      );
+      bodyHashes[filename] = hashSkillForUpgrade(
+        shippedContent,
+        shippedSkill.instruction,
+      );
+      seeded.add(filename);
+    }
+    markSkillCatalogReductionApplied();
+  }
+
   // ── Step 1: Remove obsolete canonical skill files ───────────────────────
   // Old note skills were consolidated into write-note.md. Delete only if:
   //   (a) we have a stored hash proving the file is unmodified, OR
@@ -528,7 +592,10 @@ export async function initUserSkills(): Promise<void> {
           !storedHash && matchesKnownRawHash(content, bootstrapRawHashes);
 
         if (unmodifiedByHash || unmodifiedByBootstrap) {
-          await io.remove(filePath);
+          await io.remove(getCanonicalSkillDir(obsoleteSkillId), {
+            recursive: true,
+            ignoreAbsent: true,
+          });
           delete bodyHashes[file];
           seeded.delete(file);
           Zotero.debug?.(

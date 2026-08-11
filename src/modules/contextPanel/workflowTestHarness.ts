@@ -2423,6 +2423,58 @@ async function exerciseReaderPopupStandaloneRouting(input: {
       pageIndex: input.pageIndex,
     });
     await Zotero.Promise.delay(25);
+    const commentInput = popupHost.querySelector(
+      'textarea[aria-label="Optional comment for selected text"]',
+    ) as HTMLTextAreaElement | null;
+    const saveButton = popupHost.querySelector(
+      'button[aria-label="Save optional comment"]',
+    ) as HTMLButtonElement | null;
+    if (!commentInput || !saveButton) {
+      throw new Error("Add Text optional comment composer was not rendered");
+    }
+    const expectedComment = "Explain why this selected result matters.";
+    commentInput.value = expectedComment;
+    commentInput.dispatchEvent(
+      new selectionDoc.defaultView!.Event("input", { bubbles: true }),
+    );
+    commentInput.dispatchEvent(
+      new selectionDoc.defaultView!.KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    commentInput.dispatchEvent(
+      new selectionDoc.defaultView!.KeyboardEvent("keyup", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    if (
+      !getSelectedTextContextEntries(standaloneConversationKey).find(
+        (context) => context.text === input.selectedText,
+      )?.comment
+    ) {
+      saveButton.dispatchEvent(
+        new selectionDoc.defaultView!.MouseEvent("mousedown", {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+        }),
+      );
+    }
+    const commentStartedAt = Date.now();
+    let selectedContextComment = "";
+    while (Date.now() - commentStartedAt < 2000) {
+      selectedContextComment =
+        getSelectedTextContextEntries(standaloneConversationKey).find(
+          (context) => context.text === input.selectedText,
+        )?.comment || "";
+      if (selectedContextComment === expectedComment) break;
+      await Zotero.Promise.delay(25);
+    }
+    const internalState = (reader as any)?._internalReader?._state;
 
     return {
       readerTabId: `${reader.tabID || ""}`,
@@ -2434,6 +2486,19 @@ async function exerciseReaderPopupStandaloneRouting(input: {
       standalonePreviewHasText: Array.from(
         standaloneBody.querySelectorAll(".llm-selected-context-text"),
       ).some((node) => node?.textContent?.trim() === input.selectedText),
+      standalonePreviewComment:
+        standaloneBody
+          .querySelector(".llm-selected-context-comment")
+          ?.textContent?.trim() || "",
+      standalonePreviewLabels: Array.from(
+        standaloneBody.querySelectorAll(".llm-selected-context-field-label"),
+      ).map((node) => node?.textContent?.trim() || ""),
+      selectedContextComment,
+      selectionPopupOpenAfterComment: Boolean(
+        internalState?.primaryViewSelectionPopup ||
+        internalState?.secondaryViewSelectionPopup,
+      ),
+      saveButtonLabel: saveButton.textContent?.trim() || "",
     };
   } finally {
     selectionDoc?.defaultView?.getSelection?.()?.removeAllRanges();

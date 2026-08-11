@@ -158,9 +158,14 @@ export function isLikelyCorruptedSelectedText(text: string): boolean {
 export function buildQuestionWithSelectedText(
   selectedText: string,
   userPrompt: string,
+  comment?: string,
 ): string {
   const normalizedPrompt = userPrompt.trim() || DEFAULT_SELECTED_TEXT_PROMPT;
-  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""\n\nUser question:\n${normalizedPrompt}`;
+  const normalizedComment = sanitizeText(comment || "").trim();
+  const commentBlock = normalizedComment
+    ? `\n\nUser comment on this selected text:\n${normalizedComment}`
+    : "";
+  return `Selected text from the PDF reader:\n"""\n${selectedText}\n"""${commentBlock}\n\nUser question:\n${normalizedPrompt}`;
 }
 
 export function buildQuestionWithSelectedTextContexts(
@@ -206,7 +211,11 @@ export function buildQuestionWithSelectedTextContexts(
     !includePaperAttribution &&
     !formatSelectedTextLocator(contexts[0], anchorsByContextIndex.get(0))
   ) {
-    return buildQuestionWithSelectedText(normalizedTexts[0], normalizedPrompt);
+    return buildQuestionWithSelectedText(
+      normalizedTexts[0],
+      normalizedPrompt,
+      contexts[0].comment,
+    );
   }
   if (normalizedTexts.length === 1 && normalizedSources[0] === "note-edit") {
     return buildQuestionWithNoteEditingText(
@@ -247,7 +256,11 @@ export function buildQuestionWithSelectedTextContexts(
       anchorsByContextIndex.get(index),
     );
     const locatorPart = locator ? ` ${locator}` : "";
-    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}${citationPart}${locatorPart}:\n"""\n${text}\n"""`;
+    const comment = sanitizeText(contexts[index].comment || "").trim();
+    const commentPart = comment
+      ? `\nUser comment for this context:\n${comment}`
+      : "";
+    return `Text Context ${index + 1} [source=${sourceLabel}]${paperPart}${citationPart}${locatorPart}:\n"""\n${text}\n"""${commentPart}`;
   });
   const selectedTextQuoteCitations = includePaperAttribution
     ? buildSelectedTextQuoteCitations(

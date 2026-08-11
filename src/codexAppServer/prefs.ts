@@ -144,10 +144,18 @@ export function setCodexBinaryPathPref(path: string): void {
   setPref("codexAppServerPath", String(path || "").trim());
 }
 
+export function getCodexSessionFolderPref(): string {
+  return getStringPref("codexAppServerSessionFolder").trim();
+}
+
+export function setCodexSessionFolderPref(path: string): void {
+  setPref("codexAppServerSessionFolder", String(path || "").trim());
+}
+
 export function isCodexZoteroMcpToolsEnabled(): boolean {
   const value = getZoteroPrefs()?.get?.(
     prefKey("codexAppServerZoteroMcpToolsEnabled"),
-    true,
+    false,
   );
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -155,7 +163,7 @@ export function isCodexZoteroMcpToolsEnabled(): boolean {
     if (normalized === "true") return true;
     if (normalized === "false") return false;
   }
-  return true;
+  return false;
 }
 
 export function setCodexZoteroMcpToolsEnabled(enabled: boolean): void {
@@ -223,8 +231,8 @@ export function setCodexNativeSkillRoutingModePref(
 
 export function getCodexNativeSkillModePref(): CodexNativeSkillMode {
   const raw = getStringPref("codexNativeSkillMode").trim().toLowerCase();
-  if (raw === "legacy" || raw === "off") return raw;
-  return "native";
+  if (raw === "native" || raw === "legacy" || raw === "off") return raw;
+  return "off";
 }
 
 export function setCodexNativeSkillModePref(mode: CodexNativeSkillMode): void {

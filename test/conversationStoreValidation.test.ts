@@ -26,6 +26,7 @@ import {
   listCodexPaperConversations,
   repairCodexConversationIdentityRegistry,
   repairMisroutedCodexConversationRows,
+  syncCodexExternalThreadSnapshot,
   upsertCodexConversationSummary,
 } from "../src/codexAppServer/store";
 import { buildConversationID } from "../src/shared/conversationRegistry";
@@ -121,6 +122,55 @@ describe("strict Zotero DB row test fixture", function () {
 });
 
 describe("conversation store key validation", function () {
+  it("does not mark an external Codex turn when either message insert fails", async function () {
+    const conversationKey = CODEX_GLOBAL_CONVERSATION_KEY_BASE + 77;
+    let messageInsertCount = 0;
+    const { queries, restore } = installQueryRecorder(async (sql) => {
+      if (sql.includes("FROM llm_for_zotero_codex_synced_turns")) return [];
+      if (
+        sql.includes("SELECT role, text, timestamp") &&
+        sql.includes("FROM llm_for_zotero_codex_messages")
+      ) {
+        return [];
+      }
+      if (sql.includes("INSERT INTO llm_for_zotero_codex_messages")) {
+        messageInsertCount += 1;
+        if (messageInsertCount === 2) throw new Error("insert failed");
+      }
+      return [];
+    });
+    let error: unknown;
+    try {
+      await syncCodexExternalThreadSnapshot({
+        conversationKey,
+        snapshot: {
+          threadId: "thread-shared",
+          turns: [
+            {
+              id: "turn-external",
+              status: "completed",
+              startedAt: 100,
+              completedAt: 101,
+              userText: "External question",
+              assistantText: "External answer",
+            },
+          ],
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    } finally {
+      restore();
+    }
+
+    assert.instanceOf(error, Error);
+    assert.isFalse(
+      queries.some((query) =>
+        query.sql.includes("INSERT OR IGNORE INTO llm_for_zotero_codex_synced_turns"),
+      ),
+    );
+  });
+
   it("rejects Codex-range keys at Claude store boundaries", async function () {
     const { queries, restore } = installQueryRecorder();
     try {

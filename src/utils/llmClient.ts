@@ -148,6 +148,8 @@ export type ChatParams = {
   attachments?: ChatFileAttachment[];
   /** Extra system-only guidance added to the same request */
   systemMessages?: string[];
+  /** Replace the shipped direct-chat base prompt for a specialized transport. */
+  baseSystemPrompt?: string;
   /** Override provider protocol for this request */
   providerProtocol?: ProviderProtocol;
   /** Provider-side prompt/context cache plan resolved by the context planner. */
@@ -238,6 +240,7 @@ function getApiConfig(overrides?: {
   authMode?: ModelProviderAuthMode;
   model?: string;
   providerProtocol?: ProviderProtocol;
+  baseSystemPrompt?: string;
 }) {
   const defaultEntry = getDefaultModelEntry();
   const defaultProviderGroup = getDefaultProviderGroup();
@@ -276,6 +279,8 @@ function getApiConfig(overrides?: {
   const model = (overrides?.model || modelPrimary).trim();
   const embeddingModel = getPref("embeddingModel") || DEFAULT_EMBEDDING_MODEL;
   const customSystemPrompt = getPref("systemPrompt") || "";
+  const baseSystemPrompt =
+    overrides?.baseSystemPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
   const providerProtocol: ProviderProtocol = (() => {
     if (overrides?.providerProtocol) return overrides.providerProtocol;
     // Only inherit the configured group protocol when we are actually using that
@@ -302,8 +307,8 @@ function getApiConfig(overrides?: {
     model,
     embeddingModel,
     systemPrompt: customSystemPrompt
-      ? `${DEFAULT_SYSTEM_PROMPT}\n\n${customSystemPrompt}`
-      : DEFAULT_SYSTEM_PROMPT,
+      ? `${baseSystemPrompt}\n\n${customSystemPrompt}`
+      : baseSystemPrompt,
     providerProtocol,
   };
 }
@@ -1401,6 +1406,7 @@ export function prepareChatRequest(params: ChatParams): PreparedChatRequest {
       authMode: params.authMode,
       model: params.model,
       providerProtocol: params.providerProtocol,
+      baseSystemPrompt: params.baseSystemPrompt,
     });
   const rawMessages = stripUnsupportedImageContent(
     buildMessages(params, systemPrompt),
@@ -1418,7 +1424,14 @@ export function prepareChatRequest(params: ChatParams): PreparedChatRequest {
     params.inputTokenCap,
     {
       provider: detectProviderPreset(apiBase).toString(),
-      apiBase,
+      // The native transport's empty apiBase is an intentional local-runtime
+      // identity. getApiConfig still resolves a harmless HTTP placeholder for
+      // the generic-client rejection path, but token budgeting must stay on
+      // the exact identity populated by the Codex capability preflight.
+      apiBase:
+        authMode === "codex_app_server" && typeof params.apiBase === "string"
+          ? params.apiBase.trim().replace(/\/$/, "")
+          : apiBase,
       protocol: providerProtocol,
       authMode,
     },

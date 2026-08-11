@@ -11,6 +11,23 @@ function source(path: string): string {
 }
 
 describe("runtime preference UI", function () {
+  it("exposes a persistent default folder for new Codex sessions", function () {
+    const preferenceScript = source("src/modules/preferenceScript.ts");
+    const preferences = source("addon/content/preferences.xhtml");
+
+    assert.include(
+      preferences,
+      'id="__addonRef__-codex-app-server-session-folder"',
+    );
+    assert.include(preferences, "Default session folder (optional)");
+    assert.include(preferences, "Existing sessions keep their");
+    assert.include(preferenceScript, "getCodexSessionFolderPref()");
+    assert.include(
+      preferenceScript,
+      "setCodexSessionFolderPref(codexAppServerSessionFolderInput.value)",
+    );
+  });
+
   it("allows Codex and Claude Code availability to coexist", function () {
     const preferenceScript = source("src/modules/preferenceScript.ts");
     const preferences = source("addon/content/preferences.xhtml");

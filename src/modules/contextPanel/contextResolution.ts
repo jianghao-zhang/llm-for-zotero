@@ -12,7 +12,6 @@ import {
   normalizeSelectedTextContexts,
   normalizeSelectedTextSource,
 } from "./normalizers";
-import { MAX_SELECTED_TEXT_CONTEXTS } from "./constants";
 import {
   selectedTextCache,
   selectedTextPreviewExpandedCache,
@@ -1082,6 +1081,7 @@ function areSelectedTextContextsEquivalent(
     : "";
   return (
     left.text === right.text &&
+    (left.comment || "") === (right.comment || "") &&
     left.source === right.source &&
     leftPaperKey === rightPaperKey &&
     buildNoteContextIdentityKey(left.noteContext) ===
@@ -1189,9 +1189,44 @@ export function appendSelectedTextContextForItem(
   if (existingContexts.some((entry) => dedupeKey(entry) === incomingKey)) {
     return false;
   }
-  if (existingContexts.length >= MAX_SELECTED_TEXT_CONTEXTS) return false;
   setSelectedTextContextEntries(itemId, [...existingContexts, incomingEntry]);
   selectedTextPreviewExpandedCache.delete(itemId);
+  return true;
+}
+
+export function updateSelectedTextContextCommentForItem(
+  itemId: number,
+  text: string,
+  comment: string,
+  source: SelectedTextSource = "pdf",
+): boolean {
+  const normalizedText = normalizeSelectedText(text || "");
+  if (!normalizedText) return false;
+  const normalizedSource = normalizeSelectedTextSource(source);
+  const normalizedComment = sanitizeText(comment || "").trim();
+  const contexts = getSelectedTextContextEntries(itemId);
+  let index = -1;
+  for (let cursor = contexts.length - 1; cursor >= 0; cursor -= 1) {
+    const entry = contexts[cursor];
+    if (entry.text === normalizedText && entry.source === normalizedSource) {
+      index = cursor;
+      break;
+    }
+  }
+  if (index < 0) return false;
+  const existing = contexts[index];
+  if ((existing.comment || "") === normalizedComment) return false;
+  const next = { ...existing };
+  if (normalizedComment) {
+    next.comment = normalizedComment;
+  } else {
+    delete next.comment;
+  }
+  setSelectedTextContextEntries(itemId, [
+    ...contexts.slice(0, index),
+    next,
+    ...contexts.slice(index + 1),
+  ]);
   return true;
 }
 
@@ -1327,7 +1362,7 @@ export function addSelectedTextContext(
     options.noteContext,
   );
   if (!appended) {
-    if (status) setStatus(status, "Text Context up to 5", "error");
+    if (status) setStatus(status, "Text context already included", "ready");
     return false;
   }
   applySelectedTextPreview(body, itemId);
@@ -1712,13 +1747,38 @@ export function applySelectedTextPreview(body: Element, itemId: number) {
     previewText.className = "llm-selected-context-text";
     previewText.textContent = selectedText;
 
+    const selectedTextField = ownerDoc.createElement("div");
+    selectedTextField.className = "llm-selected-context-field";
+    const selectedTextLabel = ownerDoc.createElement("div");
+    selectedTextLabel.className = "llm-selected-context-field-label";
+    selectedTextLabel.textContent = "Selected text:";
+    selectedTextField.append(selectedTextLabel, previewText);
+
+    const commentField = (() => {
+      const comment = `${selectedContext.comment || ""}`.trim();
+      if (!comment) return null;
+      const field = ownerDoc.createElement("div");
+      field.className =
+        "llm-selected-context-field llm-selected-context-comment-field";
+      const label = ownerDoc.createElement("div");
+      label.className = "llm-selected-context-field-label";
+      label.textContent = "User comment:";
+      const value = ownerDoc.createElement("div");
+      value.className = "llm-selected-context-comment";
+      value.textContent = comment;
+      field.append(label, value);
+      return field;
+    })();
+
     const previewWarning = ownerDoc.createElement("div");
     previewWarning.className = "llm-selected-context-warning";
     previewWarning.textContent =
       "Recommend to use screenshots option for corrupted text";
     previewWarning.style.display = isCorrupted ? "block" : "none";
 
-    previewExpanded.append(previewText, previewWarning);
+    previewExpanded.append(selectedTextField);
+    if (commentField) previewExpanded.append(commentField);
+    previewExpanded.append(previewWarning);
     previewBox.append(previewHeader, previewExpanded);
     previewList.appendChild(previewBox);
   }

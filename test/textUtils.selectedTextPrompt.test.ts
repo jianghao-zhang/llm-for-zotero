@@ -42,6 +42,60 @@ describe("textUtils selected text prompt composition", function () {
     assert.notInclude(prompt, "[paper=");
   });
 
+  it("keeps an optional comment attached to its selected text", function () {
+    const prompt = buildQuestionWithSelectedTextContexts(
+      ["A selected text snippet."],
+      ["pdf"],
+      "What does this mean?",
+      {
+        selectedTextContexts: [
+          {
+            text: "A selected text snippet.",
+            source: "pdf",
+            comment: "Check whether the evidence really supports this.",
+          },
+        ],
+      },
+    );
+
+    assert.include(
+      prompt,
+      "User comment on this selected text:\nCheck whether the evidence really supports this.",
+    );
+    assert.include(prompt, "User question:\nWhat does this mean?");
+  });
+
+  it("keeps comments paired with the right context", function () {
+    const prompt = buildQuestionWithSelectedTextContexts(
+      ["First quote.", "Second quote."],
+      ["pdf", "pdf"],
+      "Compare them.",
+      {
+        selectedTextContexts: [
+          {
+            text: "First quote.",
+            source: "pdf",
+            comment: "Question about the first quote.",
+          },
+          {
+            text: "Second quote.",
+            source: "pdf",
+            comment: "Question about the second quote.",
+          },
+        ],
+      },
+    );
+
+    assert.match(
+      prompt,
+      /First quote\.\n"""\nUser comment for this context:\nQuestion about the first quote\./,
+    );
+    assert.match(
+      prompt,
+      /Second quote\.\n"""\nUser comment for this context:\nQuestion about the second quote\./,
+    );
+  });
+
   it("uses note-edit wording for active note editing focus", function () {
     const prompt = buildQuestionWithSelectedTextContexts(
       ["Revise this paragraph."],

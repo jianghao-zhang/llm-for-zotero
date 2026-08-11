@@ -221,6 +221,11 @@ export type WorkflowTestReaderPopupStandaloneRoutingDiagnostics = {
   standaloneConversationKey: number;
   standaloneConversationHasText: boolean;
   standalonePreviewHasText: boolean;
+  standalonePreviewComment: string;
+  standalonePreviewLabels: string[];
+  selectedContextComment: string;
+  selectionPopupOpenAfterComment: boolean;
+  saveButtonLabel: string;
 };
 
 export type WorkflowTestHighlightAwareRetrievalDiagnostics = {

@@ -980,6 +980,15 @@ export const conversationRepository = {
     }
     if (target.system === "codex") {
       await setCodexConversationTitle(conversationKey, target.title);
+      const summary = await getCodexConversationSummary(conversationKey);
+      if (summary?.providerSessionId) {
+        await codexAppServerForkService
+          .setThreadName({
+            threadId: summary.providerSessionId,
+            name: target.title,
+          })
+          .catch(() => undefined);
+      }
       return;
     }
     if (
@@ -1002,7 +1011,16 @@ export const conversationRepository = {
       return;
     }
     if (target.system === "codex") {
+      const summary = await getCodexConversationSummary(conversationKey);
       await setCodexConversationTitle(conversationKey, "");
+      if (summary?.providerSessionId) {
+        await codexAppServerForkService
+          .setThreadName({
+            threadId: summary.providerSessionId,
+            name: "",
+          })
+          .catch(() => undefined);
+      }
       return;
     }
     await clearConversationTitle(conversationKey);

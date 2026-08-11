@@ -5,32 +5,6 @@ import {
   parseSkill,
   setUserSkills,
 } from "../src/agent/skills";
-import type {
-  CollectionContextRef,
-  PaperContextRef,
-  TagContextRef,
-} from "../src/shared/types";
-
-const paperA: PaperContextRef = {
-  itemId: 10,
-  contextItemId: 100,
-  title: "Paper A",
-};
-const paperB: PaperContextRef = {
-  itemId: 11,
-  contextItemId: 101,
-  title: "Paper B",
-};
-const collection: CollectionContextRef = {
-  collectionId: 5,
-  libraryID: 1,
-  name: "Collection",
-};
-const tag: TagContextRef = {
-  name: "Stable",
-  normalizedName: "stable",
-  libraryID: 1,
-};
 
 function loadBuiltInSkills(): void {
   setUserSkills(
@@ -43,97 +17,61 @@ describe("skill context eligibility", function () {
     setUserSkills([]);
   });
 
-  it("activates simple-paper-qa only for paper-targeted auto routes", function () {
+  it("keeps every shipped Zotero capability skill manual-only", function () {
+    const skills = Object.values(BUILTIN_SKILL_FILES).map((raw) =>
+      parseSkill(raw),
+    );
+    assert.deepEqual(
+      skills.map((skill) => skill.id).sort(),
+      ["analyze-figures", "import-to-library", "write-note"],
+    );
+    assert.isTrue(skills.every((skill) => skill.activation === "manual"));
+  });
+
+  it("does not activate shipped skills from ordinary paper questions", function () {
     loadBuiltInSkills();
 
-    assert.include(
+    for (const userText of [
+      "summarize this paper",
+      "compare these papers",
+      "write a literature review",
+      "analyze figure 2",
+      "save this as a note",
+      "import this paper into Zotero",
+    ]) {
+      assert.deepEqual(getMatchedSkillIds({ userText }), []);
+    }
+  });
+
+  it("honors an explicitly selected retained skill", function () {
+    loadBuiltInSkills();
+
+    assert.deepEqual(
       getMatchedSkillIds({
-        userText: "summarize this paper",
-        selectedPaperContexts: [paperA],
+        userText: "inspect the current figure",
+        forcedSkillIds: ["analyze-figures"],
       }),
-      "simple-paper-qa",
-    );
-    assert.notInclude(
-      getMatchedSkillIds({ userText: "summarize my library" }),
-      "simple-paper-qa",
-    );
-    assert.include(
-      getMatchedSkillIds({
-        userText: "summarize these papers",
-        selectedPaperContexts: [paperA, paperB],
-      }),
-      "simple-paper-qa",
+      ["analyze-figures"],
     );
   });
 
-  it("prefers library skills for collection and tag summary routes", function () {
-    loadBuiltInSkills();
-
-    const paperTargeted = getMatchedSkillIds({
-      userText: "summarize this paper",
-      selectedPaperContexts: [paperA],
-      selectedCollectionContexts: [collection],
-    });
-    assert.include(paperTargeted, "simple-paper-qa");
-
-    const collectionTargeted = getMatchedSkillIds({
-      userText: "summarize this collection",
-      selectedPaperContexts: [paperA],
-      selectedCollectionContexts: [collection],
-    });
-    assert.include(collectionTargeted, "library-analysis");
-    assert.notInclude(collectionTargeted, "simple-paper-qa");
-
-    const tagTargeted = getMatchedSkillIds({
-      userText: "summarize this tag",
-      selectedPaperContexts: [paperA],
-      selectedTagContexts: [tag],
-    });
-    assert.include(tagTargeted, "library-analysis");
-    assert.notInclude(tagTargeted, "simple-paper-qa");
+  it("does not expose retired reasoning workflow skills", function () {
+    assert.deepEqual(
+      Object.keys(BUILTIN_SKILL_FILES).sort(),
+      ["analyze-figures.md", "import-cited-reference.md", "write-note.md"],
+    );
+    for (const filename of [
+      "simple-paper-qa.md",
+      "evidence-based-qa.md",
+      "compare-papers.md",
+      "library-analysis.md",
+      "literature-review.md",
+    ]) {
+      assert.notProperty(BUILTIN_SKILL_FILES, filename);
+    }
   });
 
-  it("routes paper sets and library corpora to their matching skills", function () {
-    loadBuiltInSkills();
-
-    assert.include(
-      getMatchedSkillIds({
-        userText: "compare these papers",
-        selectedPaperContexts: [paperA, paperB],
-      }),
-      "compare-papers",
-    );
-    assert.include(
-      getMatchedSkillIds({
-        userText: "write a literature review",
-        selectedPaperContexts: [paperA, paperB],
-      }),
-      "literature-review",
-    );
-    assert.include(
-      getMatchedSkillIds({
-        userText: "conduct a literature review on drift",
-        selectedCollectionContexts: [collection],
-      }),
-      "literature-review",
-    );
-    assert.include(
-      getMatchedSkillIds({
-        userText: "give me statistics",
-        selectedCollectionContexts: [collection],
-      }),
-      "library-analysis",
-    );
-    assert.include(
-      getMatchedSkillIds({
-        userText: "give me statistics",
-        selectedTagContexts: [tag],
-      }),
-      "library-analysis",
-    );
-  });
-
-  it("keeps custom skills without contexts backward compatible", function () {
+  it("keeps personal auto skills backward compatible", function () {
     setUserSkills([
       parseSkill(
         [
@@ -141,6 +79,7 @@ describe("skill context eligibility", function () {
           "id: custom-summary",
           "description: Custom summary",
           "version: 1",
+          "activation: auto",
           "match: /summarize/i",
           "---",
           "Custom instructions.",
@@ -148,59 +87,9 @@ describe("skill context eligibility", function () {
       ),
     ]);
 
-    assert.include(
+    assert.deepEqual(
       getMatchedSkillIds({ userText: "summarize anything" }),
-      "custom-summary",
-    );
-  });
-
-  it("always honors explicitly forced slash skills", function () {
-    loadBuiltInSkills();
-
-    assert.deepEqual(
-      getMatchedSkillIds({
-        userText: "answer this without any attached paper context",
-        forcedSkillIds: ["evidence-based-qa"],
-      }),
-      ["evidence-based-qa"],
-    );
-  });
-
-  it("prefers evidence-based paper QA over simple paper QA for automatic overlaps", function () {
-    loadBuiltInSkills();
-
-    assert.deepEqual(
-      getMatchedSkillIds({
-        userText: "what method did they use in this paper",
-        selectedPaperContexts: [paperA],
-      }),
-      ["evidence-based-qa"],
-    );
-  });
-
-  it("does not suppress explicitly selected simple paper QA", function () {
-    loadBuiltInSkills();
-
-    assert.deepEqual(
-      getMatchedSkillIds({
-        userText: "what method did they use in this paper",
-        selectedPaperContexts: [paperA],
-        forcedSkillIds: ["simple-paper-qa"],
-      }),
-      ["simple-paper-qa", "evidence-based-qa"],
-    );
-  });
-
-  it("preserves automatic simple paper QA when evidence QA is explicit", function () {
-    loadBuiltInSkills();
-
-    assert.deepEqual(
-      getMatchedSkillIds({
-        userText: "summarize this paper",
-        selectedPaperContexts: [paperA],
-        forcedSkillIds: ["evidence-based-qa"],
-      }),
-      ["simple-paper-qa", "evidence-based-qa"],
+      ["custom-summary"],
     );
   });
 });

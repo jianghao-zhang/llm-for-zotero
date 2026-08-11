@@ -22,8 +22,7 @@
  * - textUtils.ts   – text sanitization, formatting
  */
 
-import { getLocaleID } from "../../utils/locale";
-import { config, PANE_ID } from "./constants";
+import { config } from "./constants";
 import type { Message } from "./types";
 import type { ConversationSystem } from "../../shared/types";
 import {
@@ -44,7 +43,7 @@ import {
 } from "../../utils/attachmentRefStore";
 import { normalizeSelectedText, setStatus } from "./textUtils";
 import { buildUI } from "./buildUI";
-import { setupHandlers } from "./setupHandlers";
+import { disposeSetupHandlers, setupHandlers } from "./setupHandlers";
 import { ensureConversationLoaded, getConversationKey } from "./chat";
 import { renderShortcuts } from "./shortcuts";
 import { refreshChat } from "./chat";
@@ -60,7 +59,6 @@ import { persistPendingChatScrollRestoreFromBody } from "./chatScrollSnapshots";
 import {
   getActiveContextAttachmentFromTabs,
   getActiveReaderForSelectedTab,
-  refreshLastKnownSelectedTabId,
   getItemSelectionCacheKeys,
   resolvePanelContextLifecycleState,
   applySelectedTextPreview,
@@ -95,6 +93,7 @@ import {
 } from "./readerPopupPanelRouting";
 import {
   includeReaderSelectedText,
+  updateReaderSelectedTextComment,
   type IncludeReaderSelectedTextResult,
 } from "./readerTextInclusion";
 import {
@@ -127,6 +126,11 @@ import {
   notifyStandaloneItemChanged,
   renderStandalonePlaceholder,
 } from "./standaloneWindow";
+import {
+  registerIndependentReaderContextPane,
+  unregisterAllIndependentReaderContextPanes,
+  unregisterIndependentReaderContextPane,
+} from "./readerContextPane";
 
 // =============================================================================
 // Public API
@@ -240,52 +244,30 @@ function isPanelConversationLoaded(
   );
 }
 
-export function registerReaderContextPanel() {
-  if (readerContextPanelRegistered) return;
-  setReaderContextPanelRegistered(true);
+export function registerReaderContextPanel(win: _ZoteroTypes.MainWindow) {
+  if (!readerContextPanelRegistered) setReaderContextPanelRegistered(true);
   // Generation counter: incremented on every onAsyncRender call so stale
   // (superseded) renders can bail out at each await point.
   let renderGeneration = 0;
-  let lastItemChangeSignature = "";
   const setupEmbeddedPanelHandlers = (
     body: Element,
     rawItem: Zotero.Item | null | undefined,
   ) => {
     setupHandlers(body, rawItem);
   };
-  Zotero.ItemPaneManager.registerSection({
-    paneID: PANE_ID,
-    pluginID: config.addonID,
-    header: {
-      l10nID: getLocaleID("llm-panel-head"),
-      icon: `chrome://${config.addonRef}/content/icons/icon-sidebar.svg`,
+  registerIndependentReaderContextPane(win, {
+    onItemChange: (item) => {
+      if (isStandaloneWindowActive()) notifyStandaloneItemChanged(item);
     },
-    sidenav: {
-      l10nID: getLocaleID("llm-panel-sidenav-tooltip"),
-      icon: `chrome://${config.addonRef}/content/icons/icon-sidebar.svg`,
+    dispose: (body) => {
+      disposeSetupHandlers(body);
+      clearCompletedPanelLifecycleSignature(body);
+      void releaseClaudeRuntimeForBody(body);
+      activeContextPanels.delete(body);
+      activeContextPanelRawItems.delete(body);
+      activeContextPanelStateSync.delete(body);
     },
-    onInit: ({ setEnabled, tabType }) => {
-      setEnabled(true);
-      ztoolkit.log(`LLM: panel init tabType=${tabType}`);
-    },
-    onItemChange: ({ setEnabled, tabType, item }) => {
-      setEnabled(true);
-      const selectedTabId = refreshLastKnownSelectedTabId();
-      const itemChangeSignature = [
-        tabType || "",
-        selectedTabId ?? "",
-        getPanelItemIdKey(item || null),
-      ].join("|");
-      if (itemChangeSignature === lastItemChangeSignature) {
-        return true;
-      }
-      lastItemChangeSignature = itemChangeSignature;
-      if (isStandaloneWindowActive()) {
-        notifyStandaloneItemChanged(item || null);
-      }
-      return true;
-    },
-    onRender: ({ body, item }) => {
+    render: (body, item) => {
       // When standalone window is open, show placeholder instead of full UI
       if (isStandaloneWindowActive()) {
         clearCompletedPanelLifecycleSignature(body);
@@ -463,8 +445,7 @@ export function registerReaderContextPanel() {
         /* ignore */
       }
     },
-    onAsyncRender: async ({ body, item, setEnabled }) => {
-      setEnabled(true);
+    renderAsync: async (body, item) => {
       // Skip full render when standalone window is active
       if (isStandaloneWindowActive()) return;
 
@@ -562,6 +543,14 @@ export function registerReaderContextPanel() {
   });
 }
 
+export function unregisterReaderContextPanel(win: Window): void {
+  unregisterIndependentReaderContextPane(win);
+}
+
+export function unregisterAllReaderContextPanels(): void {
+  unregisterAllIndependentReaderContextPanes();
+}
+
 type ReaderTextSelectionPopupHandler =
   _ZoteroTypes.Reader.EventHandler<"renderTextSelectionPopup">;
 
@@ -637,6 +626,26 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
 
     if (selectedText || showAddTextInPopup) {
       let popupSentinelEl: HTMLElement | null = null;
+      let cleanupPopupConfirmListeners = () => undefined;
+      let installPopupCommentCommands = () => undefined;
+      const popupCommentCommandKeys: Element[] = [];
+      let popupButtonPressTimer: number | null = null;
+      let popupPressStyle: HTMLStyleElement | null = null;
+      const systemEventTargets: EventTarget[] = [];
+      let systemEventListener: { handleEvent: (event: Event) => void } | null =
+        null;
+      let popupCommentOverlay: Element | null = null;
+      let chromeSaveCommentBtn: any = null;
+      const closePopupCommentOverlay = () => {
+        popupCommentOverlay?.remove();
+        popupCommentOverlay = null;
+        cleanupPopupConfirmListeners();
+      };
+      let addedCommentTarget: {
+        body: Element;
+        conversationKey: number;
+        selectedText: string;
+      } | null = null;
       const addTextToPanel =
         async (): Promise<IncludeReaderSelectedTextResult | null> => {
           const effectiveSelectedText =
@@ -736,20 +745,40 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                     pageLabel: popupPageLabel,
                   }
                 : null;
-            return await includeReaderSelectedText({
+            addedCommentTarget = {
+              body: panelBody,
+              conversationKey,
+              selectedText: effectiveSelectedText,
+            };
+            const result = await includeReaderSelectedText({
               body: panelBody,
               conversationKey,
               selectedText: effectiveSelectedText,
               reader: event.reader as any,
               paperContext: selectedPaperContext,
               initialLocation: selectedTextLocation,
+              focusPanelInput: false,
               log: (message, ...args) => ztoolkit.log(message, ...args),
             });
+            if (!result.added) addedCommentTarget = null;
+            return result;
           } catch (err) {
             ztoolkit.log("LLM: Add Text popup action failed", err);
             return null;
           }
         };
+      const dismissReaderSelectionPopup = () => {
+        cleanupPopupConfirmListeners();
+        // This is the exact callback Zotero's active PDF view invokes from
+        // its native selectionchange handler. Calling it once lets React
+        // unmount the popup without mutating Reader state or removing DOM.
+        try {
+          const activeView = (event.reader as any)?._internalReader?._lastView;
+          activeView?._options?.onSetSelectionPopup?.(null);
+        } catch (_err) {
+          void _err;
+        }
+      };
       const stripPopupRowChrome = (
         row: HTMLElement | null,
         hideRow: boolean = false,
@@ -780,6 +809,20 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
       };
       if (showAddTextInPopup) {
         try {
+          const popupAction = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "div",
+          ) as HTMLDivElement;
+          popupAction.style.cssText = [
+            "display:block",
+            "width:100%",
+            "min-width:0",
+            "max-height:34px",
+            "overflow:hidden",
+            "box-sizing:border-box",
+            "transition:max-height 180ms ease",
+          ].join(";");
+
           const addTextBtn = event.doc.createElementNS(
             "http://www.w3.org/1999/xhtml",
             "button",
@@ -802,7 +845,577 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             "line-height:1.25",
             "text-align:center",
             "cursor:pointer",
+            "opacity:1",
+            "transform:translateY(0)",
+            "transition:opacity 120ms ease, transform 160ms ease, background 120ms ease",
           ].join(";");
+
+          const commentComposer = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "form",
+          ) as HTMLFormElement;
+          commentComposer.style.cssText = [
+            "display:flex",
+            "align-items:flex-end",
+            "gap:6px",
+            "width:100%",
+            "min-height:52px",
+            "padding:7px 7px 7px 10px",
+            "box-sizing:border-box",
+            "border:1px solid rgba(130,130,130,0.30)",
+            "border-radius:14px",
+            "background:rgba(255,255,255,0.08)",
+            "opacity:0",
+            "transform:translateY(5px)",
+            "pointer-events:none",
+            "transition:opacity 150ms ease, transform 180ms ease",
+          ].join(";");
+
+          const commentInput = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "textarea",
+          ) as HTMLTextAreaElement;
+          commentInput.rows = 2;
+          // Zotero's Reader FocusManager currently exempts [contenteditable]
+          // and input[type="text"] from arrow-key navigation, but omits
+          // textarea. The marker makes its guard treat this native textarea as
+          // text editing without replacing the browser's cursor behavior.
+          commentInput.setAttribute("contenteditable", "true");
+          commentInput.placeholder = "Add an optional comment…";
+          commentInput.setAttribute(
+            "aria-label",
+            "Optional comment for selected text",
+          );
+          commentInput.style.cssText = [
+            "display:block",
+            "flex:1",
+            "min-width:0",
+            "height:46px",
+            "min-height:46px",
+            "max-height:46px",
+            "padding:2px 0",
+            "box-sizing:border-box",
+            "border:0",
+            "outline:none",
+            "resize:none",
+            "overflow-y:auto",
+            "scrollbar-width:thin",
+            "background:transparent",
+            "color:inherit",
+            "font:inherit",
+            "font-size:12px",
+            "line-height:1.35",
+          ].join(";");
+
+          const saveCommentBtn = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "button",
+          ) as HTMLButtonElement;
+          saveCommentBtn.type = "submit";
+          saveCommentBtn.textContent = "↑";
+          saveCommentBtn.dataset.llmCommentSave = "true";
+          saveCommentBtn.title = "Save comment";
+          saveCommentBtn.setAttribute("aria-label", "Save optional comment");
+          saveCommentBtn.disabled = true;
+          saveCommentBtn.style.cssText = [
+            "display:flex",
+            "align-items:center",
+            "justify-content:center",
+            "flex:0 0 28px",
+            "width:28px",
+            "height:28px",
+            "padding:0",
+            "border:0",
+            "border-radius:50%",
+            "background:#1f1f1f",
+            "color:#fff",
+            "font-size:18px",
+            "line-height:1",
+            "cursor:default",
+            "opacity:0.28",
+            "transition:opacity 120ms ease, transform 120ms ease",
+          ].join(";");
+
+          commentComposer.append(commentInput, saveCommentBtn);
+          popupAction.append(addTextBtn, commentComposer);
+
+          const keepPopupOpen = (e: Event) => {
+            e.stopPropagation();
+          };
+          popupAction.addEventListener("pointerdown", keepPopupOpen);
+          popupAction.addEventListener("mousedown", keepPopupOpen);
+          popupAction.addEventListener("click", keepPopupOpen);
+
+          let commentModeActive = false;
+          let addTextScreenPoint: { x: number; y: number } | null = null;
+          const revealCommentComposer = () => {
+            commentModeActive = true;
+            addTextBtn.style.opacity = "0";
+            addTextBtn.style.transform = "translateY(-4px)";
+            const win = event.doc.defaultView;
+            win?.setTimeout(() => {
+              addTextBtn.style.display = "none";
+              popupAction.style.maxHeight = "72px";
+              commentComposer.style.opacity = "1";
+              commentComposer.style.transform = "translateY(0)";
+              commentComposer.style.pointerEvents = "auto";
+              commentInput.focus({ preventScroll: true });
+            }, 90);
+          };
+
+          let commentCommitted = false;
+          const resolveCommentTarget = () => {
+            if (addedCommentTarget) return addedCommentTarget;
+            const effectiveSelectedText =
+              normalizeSelectedText(selectedText) ||
+              resolveSelectedTextForPopupAction();
+            if (!effectiveSelectedText) return null;
+            const candidateBodies = new Set<Element>([
+              ...activeContextPanels.keys(),
+              ...activeContextPanelStateSync.keys(),
+            ]);
+            for (const body of candidateBodies) {
+              if (!body.isConnected) continue;
+              const root = body.querySelector(
+                "#llm-main",
+              ) as HTMLElement | null;
+              const conversationKey = Math.floor(
+                Number(root?.dataset.itemId || 0),
+              );
+              if (!Number.isFinite(conversationKey) || conversationKey <= 0) {
+                continue;
+              }
+              const hasSelection = getSelectedTextContextEntries(
+                conversationKey,
+              ).some(
+                (context) =>
+                  context.source === "pdf" &&
+                  context.text === effectiveSelectedText,
+              );
+              if (hasSelection) {
+                return {
+                  body,
+                  conversationKey,
+                  selectedText: effectiveSelectedText,
+                };
+              }
+            }
+            return null;
+          };
+          const saveComment = (e?: Event) => {
+            e?.preventDefault();
+            e?.stopPropagation();
+            if (commentCommitted) return;
+            const comment = commentInput.value.trim();
+            if (!comment) return;
+            saveCommentBtn.textContent = "…";
+            saveCommentBtn.title = "Saving comment";
+            saveCommentBtn.setAttribute(
+              "aria-label",
+              "Saving optional comment",
+            );
+            addTextBtn.textContent = "…";
+            addTextBtn.title = "Saving comment";
+            addTextBtn.setAttribute("aria-label", "Saving optional comment");
+            if (chromeSaveCommentBtn) {
+              chromeSaveCommentBtn.setAttribute("label", "…");
+              chromeSaveCommentBtn.setAttribute(
+                "aria-label",
+                "Saving optional comment",
+              );
+            }
+            const commentTarget = resolveCommentTarget();
+            if (!commentTarget) {
+              saveCommentBtn.title = "Unable to find the selected text context";
+              saveCommentBtn.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              addTextBtn.title = "Unable to find the selected text context";
+              addTextBtn.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              chromeSaveCommentBtn?.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              ztoolkit.log(
+                "LLM: optional comment target unavailable",
+                normalizeSelectedText(selectedText),
+              );
+              return;
+            }
+            let updated = false;
+            try {
+              updated = updateReaderSelectedTextComment({
+                ...commentTarget,
+                comment,
+              });
+            } catch (error) {
+              // The context update is committed before the panel repaint. A
+              // host-specific repaint failure must not strand the composer in
+              // Zotero's selection popup after the comment was already saved.
+              updated = getSelectedTextContextEntries(
+                commentTarget.conversationKey,
+              ).some(
+                (context) =>
+                  context.source === "pdf" &&
+                  context.text === commentTarget.selectedText &&
+                  context.comment === comment,
+              );
+              ztoolkit.log("LLM: optional comment repaint failed", error);
+            }
+            if (!updated) {
+              saveCommentBtn.title =
+                "Unable to update the selected text context";
+              saveCommentBtn.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              addTextBtn.title = "Unable to update the selected text context";
+              addTextBtn.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              chromeSaveCommentBtn?.setAttribute(
+                "aria-label",
+                "Unable to save optional comment",
+              );
+              ztoolkit.log("LLM: optional comment update failed", {
+                conversationKey: commentTarget.conversationKey,
+                selectedText: commentTarget.selectedText,
+              });
+              return;
+            }
+            commentCommitted = true;
+            closePopupCommentOverlay();
+            dismissReaderSelectionPopup();
+          };
+
+          installPopupCommentCommands = () => {
+            if (popupCommentCommandKeys.length) return;
+            let mainDoc: Document | null = null;
+            try {
+              mainDoc = Zotero.getMainWindow?.()?.document || null;
+            } catch (_err) {
+              void _err;
+            }
+            const keyset = mainDoc?.getElementById("mainKeyset");
+            if (keyset && mainDoc) {
+              const addCommandKey = (
+                id: string,
+                keycode: string,
+                handler: (event: Event) => void,
+              ) => {
+                const key = mainDoc.createXULElement("key");
+                key.id = id;
+                key.setAttribute("keycode", keycode);
+                key.setAttribute("oncommand", "void(0)");
+                key.addEventListener("command", handler);
+                keyset.append(key);
+                popupCommentCommandKeys.push(key);
+              };
+              addCommandKey(
+                "llmforzotero-key-popup-comment-save",
+                "VK_RETURN",
+                saveComment,
+              );
+              addCommandKey(
+                "llmforzotero-key-popup-comment-cancel",
+                "VK_ESCAPE",
+                () => closePopupCommentOverlay(),
+              );
+            }
+            const timerWin = event.doc.defaultView;
+            if (timerWin && popupButtonPressTimer === null) {
+              popupButtonPressTimer = timerWin.setInterval(() => {
+                if (
+                  saveCommentBtn.matches(":active") ||
+                  (commentModeActive && addTextBtn.matches(":active"))
+                ) {
+                  saveComment();
+                }
+              }, 16);
+            }
+          };
+
+          const syncSaveButton = () => {
+            const canSave = Boolean(commentInput.value.trim());
+            saveCommentBtn.disabled = !canSave;
+            saveCommentBtn.style.opacity = canSave ? "1" : "0.28";
+            saveCommentBtn.style.cursor = canSave ? "pointer" : "default";
+            if (commentModeActive) {
+              addTextBtn.disabled = !canSave;
+              addTextBtn.style.opacity = canSave ? "1" : "0.28";
+              addTextBtn.style.cursor = canSave ? "pointer" : "default";
+              if (chromeSaveCommentBtn) {
+                if (canSave) {
+                  chromeSaveCommentBtn.removeAttribute("disabled");
+                } else {
+                  chromeSaveCommentBtn.setAttribute("disabled", "true");
+                }
+                chromeSaveCommentBtn.style.opacity = canSave ? "1" : "0.28";
+                chromeSaveCommentBtn.style.cursor = canSave
+                  ? "pointer"
+                  : "default";
+              }
+            }
+          };
+          commentInput.addEventListener("input", syncSaveButton);
+          commentComposer.addEventListener("submit", saveComment);
+          const handleCommentKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              closePopupCommentOverlay();
+              dismissReaderSelectionPopup();
+              return;
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
+              saveComment(e);
+            }
+          };
+          const handleCommentPointer = (e: Event) => {
+            const target = e.target as Element | null;
+            const overlayFrame =
+              popupCommentOverlay as HTMLIFrameElement | null;
+            if (
+              overlayFrame?.contentDocument &&
+              target?.ownerDocument === overlayFrame.contentDocument
+            ) {
+              return;
+            }
+            const saveTarget = target?.closest?.(
+              "[data-llm-comment-save='true']",
+            );
+            if (
+              target === saveCommentBtn ||
+              target === addTextBtn ||
+              saveTarget === saveCommentBtn ||
+              saveTarget === addTextBtn
+            ) {
+              saveComment(e);
+              return;
+            }
+            if (
+              popupCommentOverlay &&
+              target &&
+              !popupCommentOverlay.contains(target)
+            ) {
+              closePopupCommentOverlay();
+            }
+          };
+          const popupWindows = new Set<Window>();
+          const addPopupWindow = (candidate: unknown) => {
+            if (
+              candidate &&
+              typeof (candidate as Window).addEventListener === "function"
+            ) {
+              popupWindows.add(candidate as Window);
+            }
+          };
+          addPopupWindow(event.doc.defaultView);
+          addPopupWindow((event.reader as any)?._iframeWindow);
+          addPopupWindow((event.reader as any)?._internalReader?._iframeWindow);
+          try {
+            addPopupWindow(Zotero.getMainWindow?.());
+          } catch (_err) {
+            void _err;
+          }
+          if (popupWindows.size) {
+            const systemCaptureOptions = {
+              capture: true,
+              mozSystemGroup: true,
+            } as AddEventListenerOptions;
+            for (const popupWin of popupWindows) {
+              popupWin.addEventListener("keydown", handleCommentKey, true);
+              popupWin.addEventListener("keypress", handleCommentKey, true);
+              popupWin.addEventListener("keyup", handleCommentKey, true);
+              popupWin.addEventListener(
+                "pointerdown",
+                handleCommentPointer,
+                true,
+              );
+              popupWin.addEventListener(
+                "mousedown",
+                handleCommentPointer,
+                true,
+              );
+              (popupWin as any).addEventListener(
+                "keydown",
+                handleCommentKey,
+                systemCaptureOptions,
+              );
+              (popupWin as any).addEventListener(
+                "keypress",
+                handleCommentKey,
+                systemCaptureOptions,
+              );
+              (popupWin as any).addEventListener(
+                "pointerdown",
+                handleCommentPointer,
+                systemCaptureOptions,
+              );
+              (popupWin as any).addEventListener(
+                "mousedown",
+                handleCommentPointer,
+                systemCaptureOptions,
+              );
+            }
+            cleanupPopupConfirmListeners = () => {
+              popupPressStyle?.remove();
+              popupPressStyle = null;
+              if (systemEventListener) {
+                for (const target of systemEventTargets.splice(0)) {
+                  try {
+                    Services.els.removeListenerForAllEvents(
+                      target,
+                      systemEventListener,
+                      true,
+                      true,
+                    );
+                  } catch (_err) {
+                    void _err;
+                  }
+                }
+                systemEventListener = null;
+              }
+              for (const key of popupCommentCommandKeys.splice(0)) {
+                key.remove();
+              }
+              if (popupButtonPressTimer !== null) {
+                event.doc.defaultView?.clearInterval(popupButtonPressTimer);
+                popupButtonPressTimer = null;
+              }
+              for (const popupWin of popupWindows) {
+                popupWin.removeEventListener("keydown", handleCommentKey, true);
+                popupWin.removeEventListener(
+                  "keypress",
+                  handleCommentKey,
+                  true,
+                );
+                popupWin.removeEventListener("keyup", handleCommentKey, true);
+                popupWin.removeEventListener(
+                  "pointerdown",
+                  handleCommentPointer,
+                  true,
+                );
+                popupWin.removeEventListener(
+                  "mousedown",
+                  handleCommentPointer,
+                  true,
+                );
+                (popupWin as any).removeEventListener(
+                  "keydown",
+                  handleCommentKey,
+                  systemCaptureOptions,
+                );
+                (popupWin as any).removeEventListener(
+                  "keypress",
+                  handleCommentKey,
+                  systemCaptureOptions,
+                );
+                (popupWin as any).removeEventListener(
+                  "pointerdown",
+                  handleCommentPointer,
+                  systemCaptureOptions,
+                );
+                (popupWin as any).removeEventListener(
+                  "mousedown",
+                  handleCommentPointer,
+                  systemCaptureOptions,
+                );
+              }
+              cleanupPopupConfirmListeners = () => undefined;
+            };
+            event.doc.defaultView?.setTimeout(() => {
+              if (!popupAction.isConnected) cleanupPopupConfirmListeners();
+            }, 30_000);
+          }
+          commentInput.addEventListener("keydown", handleCommentKey);
+          // Zotero's reader handles some keydown events at window capture
+          // phase. Keyup still reaches the popup control on those builds.
+          commentInput.addEventListener("keyup", handleCommentKey);
+          const targetSystemCaptureOptions = {
+            capture: true,
+            mozSystemGroup: true,
+          } as AddEventListenerOptions;
+          (commentInput as any).addEventListener(
+            "keydown",
+            handleCommentKey,
+            targetSystemCaptureOptions,
+          );
+          (commentInput as any).addEventListener(
+            "keypress",
+            handleCommentKey,
+            targetSystemCaptureOptions,
+          );
+          (commentInput as any).addEventListener(
+            "keyup",
+            handleCommentKey,
+            targetSystemCaptureOptions,
+          );
+          saveCommentBtn.addEventListener("pointerdown", saveComment);
+          saveCommentBtn.addEventListener("mousedown", saveComment);
+          saveCommentBtn.addEventListener("click", saveComment);
+          saveCommentBtn.addEventListener("command", saveComment);
+          saveCommentBtn.addEventListener("animationstart", (e) => {
+            if (e.animationName === "llm-popup-comment-press") saveComment(e);
+          });
+          addTextBtn.addEventListener("animationstart", (e) => {
+            if (e.animationName === "llm-popup-comment-press") saveComment(e);
+          });
+          (saveCommentBtn as any).addEventListener(
+            "pointerdown",
+            saveComment,
+            targetSystemCaptureOptions,
+          );
+          (saveCommentBtn as any).addEventListener(
+            "mousedown",
+            saveComment,
+            targetSystemCaptureOptions,
+          );
+          try {
+            systemEventListener = {
+              handleEvent: (systemEvent: Event) => {
+                if (
+                  systemEvent.type === "keydown" ||
+                  systemEvent.type === "keypress" ||
+                  systemEvent.type === "keyup"
+                ) {
+                  handleCommentKey(systemEvent as KeyboardEvent);
+                  return;
+                }
+                if (
+                  systemEvent.type === "pointerdown" ||
+                  systemEvent.type === "mousedown" ||
+                  systemEvent.type === "click" ||
+                  systemEvent.type === "command"
+                ) {
+                  handleCommentPointer(systemEvent);
+                }
+              },
+            };
+            const candidates: EventTarget[] = [
+              commentInput,
+              saveCommentBtn,
+              ...popupWindows,
+            ];
+            for (const target of new Set(candidates)) {
+              Services.els.addListenerForAllEvents(
+                target,
+                systemEventListener,
+                true,
+                true,
+                true,
+              );
+              systemEventTargets.push(target);
+            }
+          } catch (error) {
+            ztoolkit.log("LLM: unable to register popup system events", error);
+          }
+
           let addTextHandled = false;
           const showAddTextUnavailable = () => {
             addTextBtn.textContent = "Unable to add text";
@@ -811,18 +1424,30 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             addTextBtn.style.cursor = "not-allowed";
           };
           const handleAddTextAction = (e: Event) => {
+            if (commentModeActive) {
+              saveComment(e);
+              return;
+            }
             if (addTextHandled) return;
+            const pointerEvent = e as MouseEvent;
+            if (
+              Number.isFinite(pointerEvent.screenX) &&
+              Number.isFinite(pointerEvent.screenY)
+            ) {
+              addTextScreenPoint = {
+                x: pointerEvent.screenX,
+                y: pointerEvent.screenY,
+              };
+            }
             addTextHandled = true;
             e.preventDefault();
             e.stopPropagation();
             void addTextToPanel().then((result) => {
-              if (
-                !result ||
-                result.outcome === "no-selection" ||
-                result.outcome === "invalid-target"
-              ) {
+              if (!result?.added) {
                 showAddTextUnavailable();
+                return;
               }
+              revealCommentComposer();
             });
           };
           const isPrimaryButton = (e: Event): boolean => {
@@ -843,9 +1468,9 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           });
           addTextBtn.addEventListener("click", handleAddTextAction);
           addTextBtn.addEventListener("command", handleAddTextAction);
-          event.append(addTextBtn);
-          popupSentinelEl = addTextBtn;
-          stripPopupRowChrome(addTextBtn.parentElement as HTMLElement | null);
+          event.append(popupAction);
+          popupSentinelEl = popupAction;
+          stripPopupRowChrome(popupAction.parentElement as HTMLElement | null);
         } catch (err) {
           ztoolkit.log("LLM: failed to append Add Text popup button", err);
         }

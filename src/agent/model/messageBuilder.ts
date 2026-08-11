@@ -8,14 +8,10 @@ import { AGENT_PERSONA_INSTRUCTIONS } from "./agentPersona";
 import { buildAgentMemoryBlock } from "../store/conversationMemory";
 import { getAllSkills } from "../skills";
 import type { AgentSkill } from "../skills";
-import { classifyWriteNoteDestination } from "../writeNoteDestination";
 
 import { resolveProviderCapabilities } from "../../providers";
 import type { ProviderCapabilities } from "../../providers";
-import {
-  buildNotesDirectoryConfigSection,
-  getNotesDirectoryNickname,
-} from "../../utils/notesDirectoryConfig";
+import { buildNotesDirectoryConfigSection } from "../../utils/notesDirectoryConfig";
 import { NOTE_EDITING_QUOTE_BLOCK_GUIDANCE } from "../../shared/quoteGuidance";
 import { buildRuntimePlatformGuidanceText } from "../../utils/runtimePlatform";
 import { formatPaperSourceLabel } from "../../modules/contextPanel/paperAttribution";
@@ -429,95 +425,6 @@ function buildAutoReadInstruction(request: AgentRuntimeRequest): string {
   );
 }
 
-function getInScopePaperContexts(request: AgentRuntimeRequest) {
-  return [
-    ...(request.selectedPaperContexts || []),
-    ...(request.fullTextPaperContexts || []),
-    ...(request.pinnedPaperContexts || []),
-  ];
-}
-
-function buildFigureMineruInstruction(
-  request: AgentRuntimeRequest,
-  matchedSkillIds: ReadonlyArray<string>,
-): string {
-  const activeSkillIds = new Set([
-    ...matchedSkillIds,
-    ...(request.forcedSkillIds || []),
-  ]);
-  if (!activeSkillIds.has("analyze-figures")) return "";
-  const mineruPapers = getInScopePaperContexts(request).filter((entry) =>
-    Boolean(entry.mineruCacheDir),
-  );
-  if (!mineruPapers.length) return "";
-  const cacheHints = mineruPapers
-    .map((entry, index) => {
-      const label = entry.title?.trim() || `paper ${index + 1}`;
-      return `- ${label}: ${entry.mineruCacheDir}`;
-    })
-    .join("\n");
-  return (
-    "TURN RULE: This is a figure/table interpretation task and MinerU cache is available for at least one in-scope paper. " +
-    "For figure/image questions, call `paper_read({ mode:'figures', query:'<figure label or all figures>' })` first. This returns precise PDF crops plus captions/provenance. Treat that result as the authority for figure crop cache reuse/regeneration; use returned crop paths/artifacts as-is and do not inspect or validate `figure_crops` metadata before analysis or writing. " +
-    "If figure extraction fails or returns no crops, switch to text-only mode for analysis, note taking, and follow-up artifacts: do not include figure images, rendered PDF page screenshots, MinerU source images, or extracted-image placeholders; explicitly state that extraction failed or no extracted crops are available and base explanations on captions, figure legends, and surrounding paper text. Manual user-provided image inputs are unaffected. " +
-    "For table questions, call `paper_read({ mode:'targeted', query:'<table label and surrounding discussion>' })` because MinerU table evidence is text/structure, not figure crops. " +
-    "Use `full.md`/manifest text for captions and surrounding textual evidence, but do not read or embed MinerU image paths for ordinary figure interpretation. " +
-    "For explicit panel requests, inspect the whole extracted figure crop and treat panel suffixes as hints. " +
-    "Use `paper_read({ mode:'visual', query:'<page/layout request>' })` only when the user explicitly asks for rendered/raw PDF pages, page screenshots, page layout, exact pages, or visible-reader inspection.\n" +
-    `Available MinerU cache directories:\n${cacheHints}`
-  );
-}
-
-function buildWriteNoteFileInstruction(
-  request: AgentRuntimeRequest,
-  matchedSkillIds: ReadonlyArray<string>,
-): string {
-  const activeSkillIds = new Set([
-    ...matchedSkillIds,
-    ...(request.forcedSkillIds || []),
-  ]);
-  if (!activeSkillIds.has("write-note")) return "";
-  const destination = classifyWriteNoteDestination(
-    request.userText,
-    getNotesDirectoryNickname(),
-  );
-  if (destination === "zotero") {
-    return (
-      "TURN RULE: The user is asking for a Zotero note workflow. Use `note_write` rather than writing an external Markdown file. " +
-      "After `note_write` succeeds, do not also call `file_io` or `run_command` unless the user explicitly requested a filesystem output."
-    );
-  }
-  if (destination === "file") {
-    return (
-      'TURN RULE: The user is asking for an Obsidian/file-based note. Successful completion requires calling `file_io` with `action: "write"` and Markdown content. ' +
-      "Do not finish by placing the full note body in chat. If the notes directory is not configured or the target path cannot be resolved, give a brief setup error instead of dumping the note body."
-    );
-  }
-  return "";
-}
-
-function buildForcedSkillWholeLibraryInstruction(
-  request: AgentRuntimeRequest,
-): string {
-  if (!request.forcedSkillIds?.length) return "";
-  if (request.conversationKind === "paper") return "";
-  const hasExplicitContext = Boolean(
-    request.selectedPaperContexts?.length ||
-    request.fullTextPaperContexts?.length ||
-    request.pinnedPaperContexts?.length ||
-    request.selectedCollectionContexts?.length ||
-    request.selectedTagContexts?.length ||
-    request.selectedTextSources?.length ||
-    request.attachments?.length ||
-    request.screenshots?.length,
-  );
-  if (hasExplicitContext) return "";
-  return (
-    "TURN RULE: The user explicitly selected a skill in library chat without selecting a narrower context. " +
-    "Treat the intended context as the whole Zotero library, and use library-scoped tools or searches accordingly."
-  );
-}
-
 function buildRuntimePlatformSection(): string {
   return buildRuntimePlatformGuidanceText();
 }
@@ -545,14 +452,8 @@ export async function buildAgentInitialMessages(
 ): Promise<AgentModelMessage[]> {
   const memoryBlock = await buildAgentMemoryBlock(request.conversationKey);
   const autoReadInstruction = buildAutoReadInstruction(request);
-  const workflowParityInstructions = [
-    buildFigureMineruInstruction(request, matchedSkillIds),
-    buildWriteNoteFileInstruction(request, matchedSkillIds),
-    buildForcedSkillWholeLibraryInstruction(request),
-  ].filter(Boolean);
   const turnGuidanceBlock = buildTurnGuidanceBlock([
     autoReadInstruction,
-    ...workflowParityInstructions,
     ...collectToolGuidanceInstructions(request, tools),
     ...collectSkillGuidanceInstructions(request, matchedSkillIds),
   ]);

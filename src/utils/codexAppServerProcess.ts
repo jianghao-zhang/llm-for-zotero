@@ -1088,6 +1088,7 @@ export function waitForCodexAppServerTurnCompletion(params: {
   onTurnCompleted?: (event: {
     turnId: string;
     status?: string;
+    error?: string;
   }) => void | Promise<void>;
   signal?: AbortSignal;
   interruptOnAbort?: boolean;
@@ -1533,8 +1534,13 @@ export function waitForCodexAppServerTurnCompletion(params: {
             : typeof notification.status === "string"
               ? notification.status
               : undefined;
+        const turnError = extractCodexAppServerTurnFailureMessage(rawParams);
         Promise.resolve(
-          onTurnCompleted?.({ turnId: completedTurnId, status }),
+          onTurnCompleted?.({
+            turnId: completedTurnId,
+            status,
+            ...(turnError ? { error: turnError } : {}),
+          }),
         ).catch(() => {
           // Ignore downstream consumer errors so the transport can finish cleanly.
         });
@@ -1543,13 +1549,69 @@ export function waitForCodexAppServerTurnCompletion(params: {
           return;
         }
         settle(() =>
-          reject(new Error(`Turn ended with status: ${status ?? "unknown"}`)),
+          reject(
+            new Error(
+              turnError || `Turn ended with status: ${status ?? "unknown"}`,
+            ),
+          ),
         );
       },
     );
 
     signal?.addEventListener("abort", abortHandler, { once: true });
   });
+}
+
+function readCodexAppServerErrorMessage(
+  value: unknown,
+  depth = 0,
+): string | undefined {
+  if (depth > 5 || value === null || value === undefined) return undefined;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return undefined;
+    if (
+      (text.startsWith("{") || text.startsWith("[")) &&
+      text.length < 32_768
+    ) {
+      try {
+        const nested = readCodexAppServerErrorMessage(
+          JSON.parse(text),
+          depth + 1,
+        );
+        if (nested) return nested;
+      } catch {
+        // Keep the provider's original string when it is not valid JSON.
+      }
+    }
+    return text.slice(0, 4_000);
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const message = readCodexAppServerErrorMessage(entry, depth + 1);
+      if (message) return message;
+    }
+    return undefined;
+  }
+  if (typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["error", "message", "additionalDetails", "detail"]) {
+    const message = readCodexAppServerErrorMessage(record[key], depth + 1);
+    if (message) return message;
+  }
+  return undefined;
+}
+
+export function extractCodexAppServerTurnFailureMessage(
+  rawParams: unknown,
+): string | undefined {
+  if (!rawParams || typeof rawParams !== "object") return undefined;
+  const notification = rawParams as Record<string, unknown>;
+  const turn =
+    notification.turn && typeof notification.turn === "object"
+      ? (notification.turn as Record<string, unknown>)
+      : undefined;
+  return readCodexAppServerErrorMessage(turn?.error ?? notification.error);
 }
 
 export function waitForCodexAppServerThreadCompacted(params: {

@@ -120,6 +120,8 @@ export type NoteContextRef = {
 /** Stable user-selected text state persisted with a conversation turn. */
 export type SelectedTextContext = {
   text: string;
+  /** Optional user guidance attached to this exact selection. */
+  comment?: string;
   source: SelectedTextSource;
   paperContext?: PaperContextRef;
   noteContext?: NoteContextRef;

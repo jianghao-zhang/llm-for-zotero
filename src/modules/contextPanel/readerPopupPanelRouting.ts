@@ -5,6 +5,9 @@ type ZoteroDeckElement = Element & {
   selectedIndex?: number;
 };
 
+const INDEPENDENT_READER_PANEL_SELECTOR =
+  '[data-llm-reader-context-pane="true"]';
+
 export type ReaderPopupPanelTarget = {
   body: Element;
   root: HTMLDivElement;
@@ -36,13 +39,28 @@ export function getReaderContextPanelForTab(
   doc: Document,
   tabID: ReaderTabID,
 ): Element | null {
+  // llm-for-zotero owns one dedicated top-level ContextPane deck child. It
+  // is not an ItemPane section, so it intentionally has no per-tab node in
+  // Zotero's item-details deck. Route Reader popups to it before considering
+  // Zotero's retained item-details bodies.
+  const independentPanel = doc.querySelector?.(
+    INDEPENDENT_READER_PANEL_SELECTOR,
+  );
+  const normalizedTabID = normalizeReaderTabID(tabID);
+  if (
+    independentPanel &&
+    (!normalizedTabID ||
+      independentPanel.getAttribute("data-reader-tab-id") === normalizedTabID)
+  ) {
+    return independentPanel;
+  }
+
   const deck = doc.getElementById(
     "zotero-context-pane-item-deck",
   ) as ZoteroDeckElement | null;
   if (!deck) return null;
 
   const children = getDeckChildren(deck);
-  const normalizedTabID = normalizeReaderTabID(tabID);
   if (normalizedTabID) {
     const matchingTab = children.find(
       (child) => child.getAttribute("data-tab-id") === normalizedTabID,

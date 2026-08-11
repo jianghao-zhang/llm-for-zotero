@@ -2572,115 +2572,26 @@ describe("semantic tool surface", function () {
     );
   });
 
-  it("matches simple-paper-qa for understand-this-paper typo requests", function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["simple-paper-qa.md"])]);
-    assert.include(
-      getMatchedSkillIds({
-        userText: "can you help me understand this ppaer",
-        selectedPaperContexts: [
-          { itemId: 1, contextItemId: 2, title: "Paper" },
-        ],
-      }),
-      "simple-paper-qa",
+  it("keeps retained Zotero capability skills manual and workflow-light", function () {
+    const analyze = parseSkill(BUILTIN_SKILL_FILES["analyze-figures.md"]);
+    const writeNote = parseSkill(BUILTIN_SKILL_FILES["write-note.md"]);
+    const importPaper = parseSkill(
+      BUILTIN_SKILL_FILES["import-cited-reference.md"],
     );
-  });
-
-  it("compare-papers guidance prefers one targeted batched read for method comparisons", function () {
-    const raw = BUILTIN_SKILL_FILES["compare-papers.md"];
-    assert.include(raw, "contexts: paper-set,library-corpus");
-    assert.include(raw, "targeted first when the dimension is known");
-    assert.include(
-      raw,
-      "A selected Zotero collection/folder is also a valid comparison corpus",
-    );
-    assert.include(
-      raw,
-      "library_retrieve({ query:'methods methodology method section'",
-    );
-    assert.include(
-      raw,
-      "paper_read({ mode:'targeted', query:'methods methodology method section', targets:[...] })",
-    );
-    assert.include(
-      raw,
-      "For method-section requests, do not call overview first",
-    );
-    assert.include(raw, "include short direct-source blockquotes");
-    assert.include(
-      raw,
-      "Do not call visual/page tools, `file_io`, or `run_command`",
-    );
-  });
-
-  it("matches compare-papers for collection-scoped comparison requests", function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"])]);
-
-    assert.include(
-      getMatchedSkillIds({
-        userText: "compare the methods of all papers in this folder",
-        selectedCollectionContexts: [
-          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
-        ],
-      }),
-      "compare-papers",
-    );
-  });
-
-  it("allows compare-papers slash selection for selected collections", function () {
-    const skill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
 
     assert.deepEqual(
-      getSkillContextEligibility(skill, {
-        userText: "",
-        selectedCollectionContexts: [
-          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
-        ],
-      }),
-      { eligible: true },
-    );
-  });
-
-  it("matches evidence-based-qa for collection-scoped evidence requests", function () {
-    setUserSkills([parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"])]);
-
-    assert.include(
-      getMatchedSkillIds({
-        userText: "find evidence in these papers for this claim",
-        selectedCollectionContexts: [
-          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
-        ],
-      }),
-      "evidence-based-qa",
-    );
-  });
-
-  it("allows evidence-based-qa slash selection for selected collections", function () {
-    const skill = parseSkill(BUILTIN_SKILL_FILES["evidence-based-qa.md"]);
-
-    assert.deepEqual(
-      getSkillContextEligibility(skill, {
-        userText: "",
-        selectedCollectionContexts: [
-          { collectionId: 4, name: "Computational_Psychiatry", libraryID: 1 },
-        ],
-      }),
-      { eligible: true },
-    );
-  });
-
-  it("keeps multi-context skills selectable without attached context", function () {
-    const evidenceSkill = parseSkill(
-      BUILTIN_SKILL_FILES["evidence-based-qa.md"],
-    );
-    const compareSkill = parseSkill(BUILTIN_SKILL_FILES["compare-papers.md"]);
-
-    assert.deepEqual(
-      getSkillContextEligibility(evidenceSkill, { userText: "" }),
-      { eligible: true },
+      [analyze, writeNote, importPaper].map((skill) => skill.activation),
+      ["manual", "manual", "manual"],
     );
     assert.deepEqual(
-      getSkillContextEligibility(compareSkill, { userText: "" }),
+      getMatchedSkillIds({ userText: "analyze figure 2 and write a note" }),
+      [],
+    );
+    assert.deepEqual(
+      getSkillContextEligibility(analyze, { userText: "" }),
       { eligible: true },
     );
+    assert.notInclude(analyze.instruction, "Recipe");
+    assert.notInclude(writeNote.instruction, "Template for paper notes");
   });
 });

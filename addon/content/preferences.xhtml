@@ -967,6 +967,54 @@
                 </html:details>
 
                 <html:div
+                  style="display: flex; flex-direction: column; gap: 6px"
+                >
+                  <html:label
+                    for="__addonRef__-codex-app-server-session-folder"
+                    style="
+                      display: block;
+                      font-weight: 600;
+                      font-size: 12px;
+                      color: var(--fill-primary, inherit);
+                    "
+                  >
+                    Default session folder (optional)
+                  </html:label>
+                  <html:input
+                    id="__addonRef__-codex-app-server-session-folder"
+                    type="text"
+                    placeholder="Absolute folder for new Codex sessions"
+                    style="
+                      width: 100%;
+                      max-width: none;
+                      height: 28px;
+                      margin: 0;
+                      padding: 4px 8px;
+                      font-size: 12px;
+                      line-height: 18px;
+                      border: 1px solid var(--stroke-secondary, #c8c8c8);
+                      border-radius: 6px;
+                      background: Field;
+                      color: FieldText;
+                      box-sizing: border-box;
+                    "
+                  />
+                  <html:span
+                    style="
+                      font-size: 11px;
+                      color: var(--fill-secondary, #777);
+                      line-height: 1.45;
+                      display: block;
+                    "
+                  >
+                    New Codex sessions start in this folder and appear under
+                    its project in Codex App. Existing sessions keep their
+                    original folder. Leave blank to use llm-for-zotero's
+                    runtime workspace.
+                  </html:span>
+                </html:div>
+
+                <html:div
                   style="
                     display: flex;
                     align-items: center;
@@ -996,103 +1044,6 @@
                     style="font-size: 11.5px; display: none"
                   ></html:span>
                 </html:div>
-              </html:div>
-
-              <html:div
-                style="
-                  display: flex;
-                  flex-direction: column;
-                  gap: 8px;
-                  padding: 12px;
-                  border: 1px solid var(--stroke-secondary, #c8c8c8);
-                  border-radius: 8px;
-                  background: Field;
-                "
-              >
-                <html:div
-                  style="display: flex; flex-direction: column; gap: 4px"
-                >
-                  <html:span
-                    style="
-                      font-weight: 700;
-                      font-size: 12px;
-                      color: var(--fill-primary, inherit);
-                    "
-                    >Zotero MCP tools</html:span
-                  >
-                  <html:span
-                    style="
-                      font-size: 11px;
-                      color: var(--fill-secondary, #777);
-                      line-height: 1.5;
-                    "
-                  >
-                    Lets native Codex and Claude Code use a curated local MCP
-                    server for Zotero library/PDF reading and guarded Zotero
-                    operations. Write and destructive tools still use Zotero
-                    confirmation or tool-specific safety checks.
-                  </html:span>
-                </html:div>
-                <html:label
-                  style="
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 8px;
-                    font-size: 12px;
-                    font-weight: 600;
-                    color: var(--fill-primary, inherit);
-                  "
-                >
-                  <html:input
-                    id="__addonRef__-codex-app-server-mcp-enable"
-                    type="checkbox"
-                  ></html:input>
-                  Enable Zotero MCP tools for native Codex and Claude Code turns
-                </html:label>
-                <html:div
-                  style="
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    flex-wrap: wrap;
-                  "
-                >
-                  <html:button
-                    id="__addonRef__-codex-app-server-mcp-setup"
-                    type="button"
-                    style="
-                      padding: 4px 10px;
-                      font-size: 12px;
-                      font-weight: 500;
-                      white-space: nowrap;
-                      background: transparent;
-                      color: var(--color-accent, #2563eb);
-                      border: 1px solid var(--color-accent, #2563eb);
-                      border-radius: 5px;
-                      cursor: pointer;
-                    "
-                  >
-                    Install/update Zotero MCP config
-                  </html:button>
-                  <html:span
-                    id="__addonRef__-codex-app-server-mcp-status"
-                    style="font-size: 11.5px; display: none"
-                  ></html:span>
-                </html:div>
-                <html:span
-                  style="
-                    font-size: 11px;
-                    color: var(--fill-secondary, #777);
-                    line-height: 1.45;
-                    display: block;
-                  "
-                >
-                  For Codex, Zotero writes a local bearer-token protected MCP
-                  entry into Codex config and asks app-server to reload MCP
-                  servers. Claude Code receives a scoped MCP server directly for
-                  each turn. User-level Codex skills, plugins, and other MCP
-                  setup remain owned by Codex.
-                </html:span>
               </html:div>
 
               <html:div

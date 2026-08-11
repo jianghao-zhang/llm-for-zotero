@@ -113,6 +113,7 @@ export function normalizeSelectedTextContexts(
     const typed = entry as Record<string, unknown>;
     const text = normalizeText(typed.text, sanitize);
     if (!text) continue;
+    const comment = normalizeText(typed.comment, sanitize) || undefined;
     const source = normalizeSelectedTextSource(typed.source);
     const paperContext = normalizePaperContextRefs(
       typed.paperContext ? [typed.paperContext] : [],
@@ -128,7 +129,7 @@ export function normalizeSelectedTextContexts(
         ? Math.floor(rawPageIndex)
         : undefined;
     const rawPageLabel = normalizeText(typed.pageLabel, sanitize);
-    out.push({
+    const normalizedContext: SelectedTextContext = {
       text,
       source,
       paperContext,
@@ -138,7 +139,9 @@ export function normalizeSelectedTextContexts(
       pageLabel:
         rawPageLabel ||
         (pageIndex !== undefined ? `${pageIndex + 1}` : undefined),
-    });
+    };
+    if (comment) normalizedContext.comment = comment;
+    out.push(normalizedContext);
   }
   return out;
 }

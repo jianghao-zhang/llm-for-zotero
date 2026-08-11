@@ -296,7 +296,18 @@ function buildFallbackMessages(
 
 export function estimateTextTokens(text: string): number {
   if (!text) return 0;
-  return Math.ceil(text.length / TOKEN_ESTIMATE_CHARS_PER_TOKEN);
+  let compactChars = 0;
+  let denseChars = 0;
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) || 0;
+    if (codePoint > 0x7f) denseChars += 1;
+    else compactChars += 1;
+  }
+  // Latin source and code average roughly four characters per token, while
+  // CJK text and most non-ASCII symbols are commonly one token per character
+  // (sometimes more). Counting them separately avoids the 2–4x undercount
+  // that can trigger Codex auto-compaction before a short-context model turn.
+  return denseChars + Math.ceil(compactChars / TOKEN_ESTIMATE_CHARS_PER_TOKEN);
 }
 
 export function estimateConversationTokens(

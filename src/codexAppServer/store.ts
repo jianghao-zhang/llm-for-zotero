@@ -78,11 +78,16 @@ import {
   CONVERSATION_ID_TRANSITION_MIGRATION_ID,
   hasConversationSchemaMigration,
 } from "../shared/conversationSchemaMigrations";
+import {
+  resolveCodexExternalThreadSync,
+  type CodexNativeThreadSnapshot,
+} from "./threadSync";
 
 const CODEX_MESSAGES_TABLE = "llm_for_zotero_codex_messages";
 const CODEX_MESSAGES_INDEX = "llm_for_zotero_codex_messages_conversation_idx";
 const CODEX_MESSAGES_ID_INDEX =
   "llm_for_zotero_codex_messages_conversation_id_idx";
+const CODEX_SYNCED_TURNS_TABLE = "llm_for_zotero_codex_synced_turns";
 const CODEX_CONVERSATIONS_TABLE = "llm_for_zotero_codex_conversations";
 const CODEX_CONVERSATIONS_KIND_INDEX =
   "llm_for_zotero_codex_conversations_kind_idx";
@@ -1113,6 +1118,13 @@ export async function initCodexAppServerStore(): Promise<void> {
         context_window INTEGER
       )`,
     );
+    await Zotero.DB.queryAsync(
+      `CREATE TABLE IF NOT EXISTS ${CODEX_SYNCED_TURNS_TABLE} (
+        conversation_key INTEGER NOT NULL,
+        turn_id TEXT NOT NULL,
+        PRIMARY KEY (conversation_key, turn_id)
+      )`,
+    );
     const columns = (await Zotero.DB.queryAsync(
       `PRAGMA table_info(${CODEX_MESSAGES_TABLE})`,
     )) as Array<{ name?: unknown }> | undefined;
@@ -1381,6 +1393,122 @@ export async function appendCodexMessage(
     await refreshCodexConversationCatalogSummary(normalizedKey);
   });
   await refreshCodexConversationSearchIndex(normalizedKey);
+}
+
+export async function syncCodexExternalThreadSnapshot(params: {
+  conversationKey: number;
+  snapshot: CodexNativeThreadSnapshot;
+  ignoredTurnId?: string;
+}): Promise<StoredChatMessage[]> {
+  const conversationKey = normalizeConversationKey(params.conversationKey);
+  if (!conversationKey || !isCodexStoreConversationKey(conversationKey)) {
+    return [];
+  }
+  const importedMessages: StoredChatMessage[] = [];
+  await Zotero.DB.executeTransaction(async () => {
+    const syncedRows = (await Zotero.DB.queryAsync(
+      `SELECT turn_id AS turnId
+       FROM ${CODEX_SYNCED_TURNS_TABLE}
+       WHERE conversation_key = ?`,
+      [conversationKey],
+    )) as Array<{ turnId?: unknown }> | undefined;
+    const syncedTurnIds = new Set(
+      (syncedRows || [])
+        .map((row) =>
+          typeof row.turnId === "string" ? row.turnId.trim() : "",
+        )
+        .filter(Boolean),
+    );
+    const selector =
+      await resolveRepairingMessageConversationSelector(conversationKey);
+    const localMessages = (await Zotero.DB.queryAsync(
+      `SELECT role, text, timestamp
+       FROM ${CODEX_MESSAGES_TABLE}
+       WHERE ${selector.whereSql}
+       ORDER BY ${storedMessageDisplayOrderSql({ direction: "asc" })}`,
+      selector.params,
+    )) as Array<{
+      role?: unknown;
+      text?: unknown;
+      timestamp?: unknown;
+    }>;
+    const resolution = resolveCodexExternalThreadSync({
+      snapshot: params.snapshot,
+      syncedTurnIds,
+      localMessages: (localMessages || [])
+        .filter(
+          (message) =>
+            message.role === "user" || message.role === "assistant",
+        )
+        .map((message) => ({
+          role: message.role as "user" | "assistant",
+          text: typeof message.text === "string" ? message.text : "",
+          timestamp: Number(message.timestamp) || 0,
+        })),
+      ignoredTurnId: params.ignoredTurnId,
+    });
+    const conversationID = await resolveRegisteredConversationID(
+      conversationKey,
+    );
+    for (const turn of resolution.imports) {
+      for (const message of turn.messages) {
+        await Zotero.DB.queryAsync(
+          `INSERT INTO ${CODEX_MESSAGES_TABLE}
+            (conversation_id, conversation_key, role, text, timestamp, run_mode)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            conversationID,
+            conversationKey,
+            message.role,
+            message.text || "",
+            message.timestamp,
+            message.runMode || null,
+          ],
+        );
+        importedMessages.push(message);
+      }
+    }
+    for (const turnId of resolution.markTurnIds) {
+      await Zotero.DB.queryAsync(
+        `INSERT OR IGNORE INTO ${CODEX_SYNCED_TURNS_TABLE}
+          (conversation_key, turn_id)
+         VALUES (?, ?)`,
+        [conversationKey, turnId],
+      );
+    }
+    if (importedMessages.length) {
+      const latestTimestamp = Math.max(
+        ...importedMessages.map((message) => message.timestamp),
+      );
+      await touchCodexConversationActivity(conversationKey, latestTimestamp);
+      await refreshCodexConversationCatalogSummary(conversationKey);
+    }
+  });
+  if (importedMessages.length) {
+    await refreshCodexConversationSearchIndex(conversationKey);
+  }
+  return importedMessages;
+}
+
+export async function markCodexProviderTurnSynced(
+  conversationKey: number,
+  turnId: string,
+): Promise<void> {
+  const normalizedKey = normalizeConversationKey(conversationKey);
+  const normalizedTurnId = String(turnId || "").trim();
+  if (
+    !normalizedKey ||
+    !isCodexStoreConversationKey(normalizedKey) ||
+    !normalizedTurnId
+  ) {
+    return;
+  }
+  await Zotero.DB.queryAsync(
+    `INSERT OR IGNORE INTO ${CODEX_SYNCED_TURNS_TABLE}
+      (conversation_key, turn_id)
+     VALUES (?, ?)`,
+    [normalizedKey, normalizedTurnId],
+  );
 }
 
 export async function forkCodexConversationMessages(params: {
@@ -2852,6 +2980,11 @@ export async function deleteCodexConversation(
   const normalizedKey = normalizeConversationKey(conversationKey);
   if (!normalizedKey || !isCodexStoreConversationKey(normalizedKey)) return;
   await Zotero.DB.queryAsync(
+    `DELETE FROM ${CODEX_SYNCED_TURNS_TABLE}
+     WHERE conversation_key = ?`,
+    [normalizedKey],
+  );
+  await Zotero.DB.queryAsync(
     `DELETE FROM ${CODEX_CONVERSATIONS_TABLE}
      WHERE conversation_key = ?`,
     [normalizedKey],
@@ -2889,6 +3022,11 @@ export async function deleteCodexConversationLocalRows(
     },
   );
   await Zotero.DB.executeTransaction(async () => {
+    await Zotero.DB.queryAsync(
+      `DELETE FROM ${CODEX_SYNCED_TURNS_TABLE}
+       WHERE conversation_key = ?`,
+      [normalizedKey],
+    );
     await Zotero.DB.queryAsync(
       `DELETE FROM ${CODEX_MESSAGES_TABLE}
        WHERE ${selector.whereSql}`,
