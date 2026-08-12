@@ -67,6 +67,10 @@ type ComposeCaptureControllerDeps = {
   closeExportMenu: () => void;
   schedulePaperPickerSearch: () => void;
   updateImagePreviewPreservingScroll: () => void;
+  onScreenshotCaptured?: (params: {
+    itemId: number;
+    imageIndex: number;
+  }) => void;
   isScreenshotUnsupportedModel?: (modelName: string) => boolean;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
   log: (message: string, ...args: unknown[]) => void;
@@ -300,6 +304,10 @@ export function attachComposeCaptureController(
             nextImages.length - 1,
           );
           deps.updateImagePreviewPreservingScroll();
+          deps.onScreenshotCaptured?.({
+            itemId: item.id,
+            imageIndex: nextImages.length - 1,
+          });
           setStatus(`Screenshot captured (${nextImages.length})`, "ready");
         } else {
           setStatus(t("Selection cancelled"), "ready");

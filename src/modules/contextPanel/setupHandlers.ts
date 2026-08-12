@@ -438,6 +438,7 @@ import {
 import { attachComposePreviewInteractionController } from "./setupHandlers/controllers/composePreviewInteractionController";
 import { attachFontScaleShortcutController } from "./setupHandlers/controllers/fontScaleShortcutController";
 import { attachComposeCaptureController } from "./setupHandlers/controllers/composeCaptureController";
+import { showSnapshotCommentComposer } from "./snapshotCommentComposer";
 import { attachFloatingMenuInteractionController } from "./setupHandlers/controllers/floatingMenuInteractionController";
 import { createPaperPickerController } from "./setupHandlers/controllers/paperPickerController";
 import { createActionCommandController } from "./setupHandlers/controllers/actionCommandController";
@@ -7644,6 +7645,26 @@ export function setupHandlers(
     closeExportMenu,
     schedulePaperPickerSearch,
     updateImagePreviewPreservingScroll,
+    onScreenshotCaptured: ({ itemId, imageIndex }) => {
+      const images = selectedImageCache.get(itemId) || [];
+      if (imageIndex < 0 || imageIndex >= images.length) return;
+      const comments = selectedImageCommentCache.get(itemId) || [];
+      showSnapshotCommentComposer({
+        document: body.ownerDocument,
+        initialComment: comments[imageIndex] || "",
+        onSave: (comment) => {
+          const currentImages = selectedImageCache.get(itemId) || [];
+          if (imageIndex < 0 || imageIndex >= currentImages.length) return;
+          const currentComments = selectedImageCommentCache.get(itemId) || [];
+          const nextComments = currentImages.map(
+            (_, index) => currentComments[index] || "",
+          );
+          nextComments[imageIndex] = comment;
+          selectedImageCommentCache.set(itemId, nextComments);
+          updateImagePreviewPreservingScroll();
+        },
+      });
+    },
     isScreenshotUnsupportedModel: (modelName) => {
       const profile = getSelectedProfile();
       const inputMode = getAdvancedModelParamsForEntry(

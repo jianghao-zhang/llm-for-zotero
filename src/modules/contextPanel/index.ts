@@ -1011,11 +1011,20 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                 commentComposer.style.position = "fixed";
                 commentComposer.style.left = "50%";
                 commentComposer.style.bottom = "24px";
-                commentComposer.style.width = "min(420px, calc(100vw - 24px))";
+                commentComposer.style.width = "420px";
+                commentComposer.style.maxWidth = "calc(100vw - 24px)";
                 commentComposer.style.zIndex = "2147483647";
                 commentComposer.style.transform = "translate(-50%, 5px)";
+                commentComposer.style.boxSizing = "border-box";
+                commentComposer.style.padding = "8px 9px 8px 16px";
+                commentComposer.style.border =
+                  "1px solid rgba(127,127,127,0.32)";
+                commentComposer.style.borderRadius = "24px";
+                commentComposer.style.colorScheme = "light dark";
+                commentComposer.style.background = "Canvas";
+                commentComposer.style.color = "CanvasText";
                 commentComposer.style.boxShadow =
-                  "0 12px 30px rgba(0,0,0,0.30)";
+                  "0 12px 34px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.14)";
                 event.doc.body?.appendChild(commentComposer);
                 popupCommentOverlay = commentComposer;
               } else {
