@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { installMermaidDragPan } from "../src/modules/contextPanel/standaloneMermaidWindow";
+import {
+  getCursorAnchoredPanDelta,
+  installMermaidDragPan,
+} from "../src/modules/contextPanel/standaloneMermaidWindow";
 
 class FakePointerEvent extends Event {
   constructor(
@@ -57,6 +60,19 @@ describe("standalone Mermaid drag-to-pan", function () {
     assert.equal(viewport.classes.has("llm-mermaid-is-panning"), false);
 
     dispose();
+  });
+
+  it("keeps the same normalized SVG point under the zoom cursor", function () {
+    const correction = getCursorAnchoredPanDelta(
+      { left: 100, top: 80, width: 400, height: 200 },
+      { left: 20, top: 30, width: 800, height: 400 },
+      400,
+      130,
+    );
+
+    // The cursor was at 75% width / 25% height before zoom. Applying this
+    // correction puts that exact normalized point back at (400, 130).
+    assert.deepEqual(correction, { x: -220, y: 0 });
   });
 
   it("ignores secondary-button drags and detaches cleanly", function () {

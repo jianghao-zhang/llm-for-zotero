@@ -16,6 +16,7 @@ import {
   invalidateMermaidSvg,
 } from "./mermaidSvgCache";
 import {
+  getCursorAnchoredPanDelta,
   installMermaidDragPan,
   openStandaloneMermaidWindow,
   openStandaloneSvgWindow,
@@ -1401,6 +1402,24 @@ function openSvgViewer(
     zoomOut.disabled = scale <= MERMAID_ZOOM_MIN;
     zoomIn.disabled = scale >= MERMAID_ZOOM_MAX;
   };
+  const applyZoomAtPointer = (
+    nextScale: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const before = svg.getBoundingClientRect();
+    applyZoom(nextScale);
+    const after = svg.getBoundingClientRect();
+    const correction = getCursorAnchoredPanDelta(
+      before,
+      after,
+      clientX,
+      clientY,
+    );
+    panX += correction.x;
+    panY += correction.y;
+    applyPan();
+  };
   const closeViewer = () => {
     disposeDragPan();
     doc.removeEventListener("keydown", handleKeyDown);
@@ -1433,7 +1452,11 @@ function openSvgViewer(
   });
   viewport.addEventListener("wheel", (event: WheelEvent) => {
     event.preventDefault();
-    applyZoom(getMermaidWheelZoomScale(scale, event.deltaY));
+    applyZoomAtPointer(
+      getMermaidWheelZoomScale(scale, event.deltaY),
+      event.clientX,
+      event.clientY,
+    );
   });
   doc.addEventListener("keydown", handleKeyDown);
 

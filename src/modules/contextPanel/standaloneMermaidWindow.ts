@@ -104,6 +104,36 @@ export function installMermaidDragPan(
   };
 }
 
+type RectLike = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+/** Returns the pan correction that keeps one SVG point under the cursor. */
+export function getCursorAnchoredPanDelta(
+  before: RectLike,
+  after: RectLike,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } {
+  if (
+    before.width <= 0 ||
+    before.height <= 0 ||
+    after.width <= 0 ||
+    after.height <= 0
+  ) {
+    return { x: 0, y: 0 };
+  }
+  const relativeX = (clientX - before.left) / before.width;
+  const relativeY = (clientY - before.top) / before.height;
+  return {
+    x: clientX - (after.left + relativeX * after.width),
+    y: clientY - (after.top + relativeY * after.height),
+  };
+}
+
 function clampZoom(scale: number): number {
   return Math.min(
     MERMAID_WINDOW_ZOOM_MAX,
@@ -275,6 +305,24 @@ function initializeStandaloneSvgWindow(
     zoomOut.disabled = scale <= MERMAID_WINDOW_ZOOM_MIN;
     zoomIn.disabled = scale >= MERMAID_WINDOW_ZOOM_MAX;
   };
+  const applyZoomAtPointer = (
+    nextScale: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    const before = svg.getBoundingClientRect();
+    applyZoom(nextScale);
+    const after = svg.getBoundingClientRect();
+    const correction = getCursorAnchoredPanDelta(
+      before,
+      after,
+      clientX,
+      clientY,
+    );
+    panX += correction.x;
+    panY += correction.y;
+    applyPan();
+  };
   const closeWindow = () => targetWin.close();
 
   zoomOut.addEventListener("click", () =>
@@ -297,7 +345,11 @@ function initializeStandaloneSvgWindow(
   });
   viewport.addEventListener("wheel", (event: WheelEvent) => {
     event.preventDefault();
-    applyZoom(getWheelZoomScale(scale, event.deltaY));
+    applyZoomAtPointer(
+      getWheelZoomScale(scale, event.deltaY),
+      event.clientX,
+      event.clientY,
+    );
   });
   doc.addEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key === "Escape") {
