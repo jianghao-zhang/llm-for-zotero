@@ -915,6 +915,37 @@
                   <html:code>gpt-5.2-codex</html:code>. Use the model name
                   accepted by your installed Codex CLI.
                 </html:span>
+                <html:div
+                  id="__addonRef__-codex-minimal-runtime-note"
+                  style="
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    padding: 9px 10px;
+                    border-left: 3px solid var(--color-accent, #2563eb);
+                    border-radius: 4px;
+                    background: color-mix(
+                      in srgb,
+                      Field 94%,
+                      var(--color-accent, #2563eb) 6%
+                    );
+                  "
+                >
+                  <html:span
+                    style="font-size: 12px; font-weight: 700; color: var(--fill-primary, inherit)"
+                    >Minimal Codex</html:span
+                  >
+                  <html:span
+                    style="font-size: 11px; line-height: 1.45; color: var(--fill-secondary, #777)"
+                  >
+                    Uses your configured Codex CLI and its normal tools. The
+                    llm-for-zotero MCP and rigid preset skills are off by
+                    default; retained Zotero skills run only when you choose
+                    them. Paper identity, source, and page information stay as
+                    lightweight context, and library work should use
+                    <html:code>zcli</html:code>.
+                  </html:span>
+                </html:div>
                 <html:details style="display: block; margin-top: 2px">
                   <html:summary
                     style="

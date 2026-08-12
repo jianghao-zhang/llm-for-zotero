@@ -28,6 +28,16 @@ describe("runtime preference UI", function () {
     );
   });
 
+  it("explains the lightweight Codex runtime contract", function () {
+    const preferences = source("addon/content/preferences.xhtml");
+
+    assert.include(preferences, 'id="__addonRef__-codex-minimal-runtime-note"');
+    assert.include(preferences, "Minimal Codex");
+    assert.include(preferences, "llm-for-zotero MCP and rigid preset skills are off by");
+    assert.include(preferences, "Paper identity, source, and page information");
+    assert.include(preferences, "<html:code>zcli</html:code>");
+  });
+
   it("allows Codex and Claude Code availability to coexist", function () {
     const preferenceScript = source("src/modules/preferenceScript.ts");
     const preferences = source("addon/content/preferences.xhtml");
