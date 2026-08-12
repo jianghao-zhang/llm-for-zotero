@@ -22,7 +22,7 @@
  * - textUtils.ts   – text sanitization, formatting
  */
 
-import { config } from "./constants";
+import { config, MAX_SELECTED_IMAGES } from "./constants";
 import type { Message } from "./types";
 import type { ConversationSystem } from "../../shared/types";
 import {
@@ -30,10 +30,14 @@ import {
   activeContextPanelRawItems,
   activeContextPanelStateSync,
   chatHistory,
+  draftInputCache,
   loadedConversationKeys,
   readerContextPanelRegistered,
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
+  selectedImageCache,
+  selectedImagePreviewActiveIndexCache,
+  selectedImagePreviewExpandedCache,
 } from "./state";
 import { clearConversation as clearStoredConversation } from "../../utils/chatStore";
 import {
@@ -119,6 +123,11 @@ import {
   retainClaudeRuntimeForBody,
   releaseClaudeRuntimeForBody,
 } from "../../claudeCode/runtimeRetention";
+import { captureScreenshotSelection, optimizeImageDataUrl } from "./screenshot";
+import {
+  appendReaderSnapshotComment,
+  appendReaderSnapshotImage,
+} from "./readerSnapshotInclusion";
 
 export { openStandaloneChat } from "./standaloneWindow";
 import {
@@ -646,6 +655,41 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
         conversationKey: number;
         selectedText: string;
       } | null = null;
+      let snapshotCommentTarget: {
+        body: Element;
+        conversationKey: number;
+      } | null = null;
+      const resolvePopupPanelTarget = () => {
+        const docs = new Set<Document>();
+        const pushDoc = (doc?: Document | null) => {
+          if (doc) docs.add(doc);
+        };
+        pushDoc(event.doc);
+        pushDoc(event.doc.defaultView?.top?.document || null);
+        try {
+          pushDoc(Zotero.getMainWindow()?.document || null);
+        } catch (_err) {
+          void _err;
+        }
+        try {
+          const wins = Zotero.getMainWindows?.() || [];
+          for (const win of wins) pushDoc(win?.document || null);
+        } catch (_err) {
+          void _err;
+        }
+        const readerWithTab = event.reader as unknown as {
+          tabID?: string | number | null;
+          _tabID?: string | number | null;
+        };
+        const popupTopDoc = event.doc.defaultView?.top?.document || null;
+        return isStandaloneWindowActive()
+          ? resolveStandalonePopupPanelTarget(activeContextPanels.keys())
+          : resolveReaderPopupPanelTarget({
+              preferredDocument: popupTopDoc,
+              documents: docs,
+              tabID: readerWithTab.tabID ?? readerWithTab._tabID ?? null,
+            });
+      };
       const addTextToPanel =
         async (): Promise<IncludeReaderSelectedTextResult | null> => {
           const effectiveSelectedText =
@@ -656,37 +700,7 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             return null;
           }
           try {
-            const docs = new Set<Document>();
-            const pushDoc = (doc?: Document | null) => {
-              if (doc) docs.add(doc);
-            };
-            pushDoc(event.doc);
-            pushDoc(event.doc.defaultView?.top?.document || null);
-            try {
-              pushDoc(Zotero.getMainWindow()?.document || null);
-            } catch (_err) {
-              void _err;
-            }
-            try {
-              const wins = Zotero.getMainWindows?.() || [];
-              for (const win of wins) {
-                pushDoc(win?.document || null);
-              }
-            } catch (_err) {
-              void _err;
-            }
-            const readerWithTab = event.reader as unknown as {
-              tabID?: string | number | null;
-              _tabID?: string | number | null;
-            };
-            const popupTopDoc = event.doc.defaultView?.top?.document || null;
-            const target = isStandaloneWindowActive()
-              ? resolveStandalonePopupPanelTarget(activeContextPanels.keys())
-              : resolveReaderPopupPanelTarget({
-                  preferredDocument: popupTopDoc,
-                  documents: docs,
-                  tabID: readerWithTab.tabID ?? readerWithTab._tabID ?? null,
-                });
+            const target = resolvePopupPanelTarget();
             if (!target) {
               ztoolkit.log(
                 "LLM: Add Text popup action skipped (reader panel unavailable)",
@@ -767,6 +781,22 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             return null;
           }
         };
+      const appendSnapshotCommentToDraft = (comment: string): boolean => {
+        const target = snapshotCommentTarget;
+        if (!target) return false;
+        const input = target.body.querySelector(
+          "#llm-input",
+        ) as HTMLTextAreaElement | null;
+        if (!input) return false;
+        input.value = appendReaderSnapshotComment({
+          existingDraft: input.value,
+          comment,
+        });
+        draftInputCache.set(target.conversationKey, input.value);
+        const EventCtor = input.ownerDocument.defaultView?.Event ?? Event;
+        input.dispatchEvent(new EventCtor("input", { bubbles: true }));
+        return true;
+      };
       const dismissReaderSelectionPopup = () => {
         cleanupPopupConfirmListeners();
         // This is the exact callback Zotero's active PDF view invokes from
@@ -832,7 +862,8 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           addTextBtn.title = "Add selected text to LLM panel";
           addTextBtn.style.cssText = [
             "display:block",
-            "width:100%",
+            "flex:1 1 0",
+            "min-width:0",
             "margin:0",
             "padding:6px 8px",
             "box-sizing:border-box",
@@ -849,6 +880,27 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             "transform:translateY(0)",
             "transition:opacity 120ms ease, transform 160ms ease, background 120ms ease",
           ].join(";");
+
+          const snapBtn = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "button",
+          ) as HTMLButtonElement;
+          snapBtn.type = "button";
+          snapBtn.textContent = "Snap";
+          snapBtn.title = "Add a reader screenshot to the LLM panel";
+          snapBtn.style.cssText = addTextBtn.style.cssText;
+
+          const popupActionRow = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "div",
+          ) as HTMLDivElement;
+          popupActionRow.style.cssText = [
+            "display:flex",
+            "align-items:stretch",
+            "gap:6px",
+            "width:100%",
+          ].join(";");
+          popupActionRow.append(addTextBtn, snapBtn);
 
           const commentComposer = event.doc.createElementNS(
             "http://www.w3.org/1999/xhtml",
@@ -937,7 +989,7 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           ].join(";");
 
           commentComposer.append(commentInput, saveCommentBtn);
-          popupAction.append(addTextBtn, commentComposer);
+          popupAction.append(popupActionRow, commentComposer);
 
           const keepPopupOpen = (e: Event) => {
             e.stopPropagation();
@@ -950,11 +1002,11 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           let addTextScreenPoint: { x: number; y: number } | null = null;
           const revealCommentComposer = () => {
             commentModeActive = true;
-            addTextBtn.style.opacity = "0";
-            addTextBtn.style.transform = "translateY(-4px)";
+            popupActionRow.style.opacity = "0";
+            popupActionRow.style.transform = "translateY(-4px)";
             const win = event.doc.defaultView;
             win?.setTimeout(() => {
-              addTextBtn.style.display = "none";
+              popupActionRow.style.display = "none";
               popupAction.style.maxHeight = "72px";
               commentComposer.style.opacity = "1";
               commentComposer.style.transform = "translateY(0)";
@@ -1023,6 +1075,21 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                 "aria-label",
                 "Saving optional comment",
               );
+            }
+            if (snapshotCommentTarget) {
+              if (!appendSnapshotCommentToDraft(comment)) {
+                saveCommentBtn.textContent = "↑";
+                saveCommentBtn.title = "Unable to update the current draft";
+                saveCommentBtn.setAttribute(
+                  "aria-label",
+                  "Unable to save optional comment",
+                );
+                return;
+              }
+              commentCommitted = true;
+              closePopupCommentOverlay();
+              dismissReaderSelectionPopup();
+              return;
             }
             const commentTarget = resolveCommentTarget();
             if (!commentTarget) {
@@ -1468,6 +1535,97 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           });
           addTextBtn.addEventListener("click", handleAddTextAction);
           addTextBtn.addEventListener("command", handleAddTextAction);
+          let snapHandled = false;
+          const showSnapUnavailable = (message: string) => {
+            snapBtn.textContent = "Unavailable";
+            snapBtn.title = message;
+            snapBtn.disabled = true;
+            snapBtn.style.cursor = "not-allowed";
+          };
+          const handleSnapAction = (e: Event) => {
+            if (snapHandled || commentModeActive) return;
+            snapHandled = true;
+            e.preventDefault();
+            e.stopPropagation();
+            void (async () => {
+              const target = resolvePopupPanelTarget();
+              const ownerItem = target
+                ? activeContextPanels.get(target.body)?.()
+                : null;
+              const conversationKey = target
+                ? Math.floor(Number(target.root.dataset.itemId || 0))
+                : 0;
+              if (
+                !target ||
+                !ownerItem ||
+                !Number.isFinite(conversationKey) ||
+                conversationKey <= 0
+              ) {
+                showSnapUnavailable(
+                  "The active reader chat panel is unavailable",
+                );
+                return;
+              }
+              const existingImages = selectedImageCache.get(ownerItem.id) || [];
+              if (existingImages.length >= MAX_SELECTED_IMAGES) {
+                showSnapUnavailable(`Max ${MAX_SELECTED_IMAGES} screenshots`);
+                return;
+              }
+              const mainWindow =
+                Zotero.getMainWindow?.() ||
+                event.doc.defaultView?.top ||
+                event.doc.defaultView;
+              if (!mainWindow) {
+                showSnapUnavailable("The reader window is unavailable");
+                return;
+              }
+              snapBtn.textContent = "Select region…";
+              snapBtn.disabled = true;
+              try {
+                const dataUrl = await captureScreenshotSelection(mainWindow);
+                if (!dataUrl) {
+                  dismissReaderSelectionPopup();
+                  return;
+                }
+                const optimized = await optimizeImageDataUrl(
+                  mainWindow,
+                  dataUrl,
+                );
+                const currentImages =
+                  selectedImageCache.get(ownerItem.id) || [];
+                const nextImages = appendReaderSnapshotImage({
+                  existingImages: currentImages,
+                  image: optimized,
+                  maxImages: MAX_SELECTED_IMAGES,
+                });
+                selectedImageCache.set(ownerItem.id, nextImages);
+                selectedImagePreviewExpandedCache.set(ownerItem.id, false);
+                selectedImagePreviewActiveIndexCache.set(
+                  ownerItem.id,
+                  nextImages.length - 1,
+                );
+                snapshotCommentTarget = {
+                  body: target.body,
+                  conversationKey,
+                };
+                activeContextPanelStateSync.get(target.body)?.();
+                revealCommentComposer();
+              } catch (error) {
+                ztoolkit.log("LLM: reader popup screenshot failed", error);
+                showSnapUnavailable("Screenshot failed");
+              }
+            })();
+          };
+          snapBtn.addEventListener("pointerdown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleSnapAction(e);
+          });
+          snapBtn.addEventListener("mousedown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleSnapAction(e);
+          });
+          snapBtn.addEventListener("click", handleSnapAction);
+          snapBtn.addEventListener("command", handleSnapAction);
           event.append(popupAction);
           popupSentinelEl = popupAction;
           stripPopupRowChrome(popupAction.parentElement as HTMLElement | null);
