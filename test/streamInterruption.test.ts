@@ -1,5 +1,6 @@
 import { assert } from "chai";
 import {
+  formatCodexTurnFailure,
   getStreamInterruptionLabel,
   resolveStreamInterruptionOutcome,
 } from "../src/modules/contextPanel/streamInterruption";
@@ -67,6 +68,23 @@ describe("streamInterruption", function () {
     assert.isString(label);
     assert.isNotEmpty(label);
     assert.notInclude(label.toLowerCase(), "webchat");
+  });
+
+  it("turns a detail-free Codex failure into actionable recovery guidance", function () {
+    const message = formatCodexTurnFailure(
+      "Turn ended with status: failed",
+    );
+
+    assert.include(message, "prompt and context were kept");
+    assert.include(message, "retry the response");
+    assert.notInclude(message, "status: failed");
+  });
+
+  it("preserves specific Codex provider errors", function () {
+    assert.equal(
+      formatCodexTurnFailure("Model is unavailable in this account"),
+      "Model is unavailable in this account",
+    );
   });
 });
 

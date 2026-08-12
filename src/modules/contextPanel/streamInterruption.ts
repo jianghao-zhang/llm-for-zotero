@@ -60,3 +60,18 @@ export function resolveStreamInterruptionOutcome(
 export function getStreamInterruptionLabel(): string {
   return "Response interrupted before it finished — retry to continue.";
 }
+
+/**
+ * Codex app-server sometimes reports only a terminal turn status and omits the
+ * provider's concrete error. Present that case as a recoverable UI state: the
+ * local user turn and all attached context remain available to the retry path.
+ * Specific provider errors stay untouched because they are more useful than a
+ * generic rewrite.
+ */
+export function formatCodexTurnFailure(errorMessage: string): string {
+  const message = `${errorMessage || ""}`.trim();
+  if (/^turn ended with status:\s*(?:failed|unknown)$/i.test(message)) {
+    return "Codex could not complete this turn. Your prompt and context were kept — retry the response; if it repeats, switch models or restart Codex.";
+  }
+  return message || "Codex could not complete this turn.";
+}

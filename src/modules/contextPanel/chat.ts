@@ -126,6 +126,7 @@ import {
   type BlockStreamFlushReason,
 } from "./blockStreamCoalescer";
 import {
+  formatCodexTurnFailure,
   getStreamInterruptionLabel,
   resolveStreamInterruptionOutcome,
 } from "./streamInterruption";
@@ -7771,7 +7772,10 @@ export async function retryLatestAssistantResponse(
       return;
     }
 
-    const errMsg = (err as Error).message || "Error";
+    const rawErrMsg = (err as Error).message || "Error";
+    const errMsg = isCodexNativeTurn
+      ? formatCodexTurnFailure(rawErrMsg)
+      : rawErrMsg;
     const retryHint = resolveMultimodalRetryHint(
       errMsg,
       screenshotImages.length,
@@ -10052,7 +10056,10 @@ export async function sendQuestion(
       return;
     }
 
-    const errMsg = (err as Error).message || "Error";
+    const rawErrMsg = (err as Error).message || "Error";
+    const errMsg = isCodexNativeTurn
+      ? formatCodexTurnFailure(rawErrMsg)
+      : rawErrMsg;
     const retryHint = resolveMultimodalRetryHint(errMsg, imageCount);
     // Preserve whatever streamed before the connection dropped instead of
     // discarding it. getFullText() includes the last, not-yet-flushed chunk.
@@ -11569,7 +11576,7 @@ export function refreshChat(
           doc,
           actions,
           className: "llm-message-action-retry llm-retry-latest",
-          title: "Retry response with another model",
+          title: "Retry response",
         });
       }
 
