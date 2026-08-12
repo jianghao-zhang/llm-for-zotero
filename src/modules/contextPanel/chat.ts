@@ -1764,29 +1764,29 @@ async function syncExternalCodexThreadSnapshot(params: {
   params.refresh();
 }
 
-async function refreshSharedCodexConversation(params: {
+export async function refreshSharedCodexConversation(params: {
   conversationKey: number;
   history: Message[];
-}): Promise<void> {
+  refresh?: () => void;
+}): Promise<CodexNativeThreadSnapshot | null> {
   try {
     const summary = await getCodexConversationSummary(params.conversationKey);
-    if (!summary?.providerSessionId) return;
+    if (!summary?.providerSessionId) return null;
     const snapshot = await readCodexAppServerThreadSnapshot({
       threadId: summary.providerSessionId,
       codexPath: getEffectiveCodexAppServerBinaryPath(),
     });
-    if (!snapshot) return;
+    if (!snapshot) return null;
     await syncExternalCodexThreadSnapshot({
       conversationKey: params.conversationKey,
       snapshot,
       history: params.history,
-      refresh: () => undefined,
+      refresh: params.refresh || (() => undefined),
     });
+    return snapshot;
   } catch (error) {
-    ztoolkit.log(
-      "LLM: Failed to refresh the shared Codex conversation",
-      error,
-    );
+    ztoolkit.log("LLM: Failed to refresh the shared Codex conversation", error);
+    return null;
   }
 }
 
@@ -7754,10 +7754,7 @@ export async function retryLatestAssistantResponse(
       effectiveStorageSystem,
     );
     if (codexProviderTurnId) {
-      await markCodexProviderTurnSynced(
-        conversationKey,
-        codexProviderTurnId,
-      );
+      await markCodexProviderTurnSynced(conversationKey, codexProviderTurnId);
     }
 
     setStatusSafely("Ready", "ready");
@@ -10006,10 +10003,7 @@ export async function sendQuestion(
     refreshChatSafely();
     await persistAssistantOnce();
     if (codexProviderTurnId) {
-      await markCodexProviderTurnSynced(
-        conversationKey,
-        codexProviderTurnId,
-      );
+      await markCodexProviderTurnSynced(conversationKey, codexProviderTurnId);
     }
     if (resolveConversationSystemForItem(item) === "claude_code") {
       const activeNoteSession = resolveActiveNoteSession(item);

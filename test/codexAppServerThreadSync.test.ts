@@ -1,5 +1,8 @@
 import { assert } from "chai";
-import { resolveCodexExternalThreadSync } from "../src/codexAppServer/threadSync";
+import {
+  isCodexThreadSnapshotBusy,
+  resolveCodexExternalThreadSync,
+} from "../src/codexAppServer/threadSync";
 
 describe("Codex shared thread sync", function () {
   const snapshot = {
@@ -108,5 +111,20 @@ describe("Codex shared thread sync", function () {
       localMessages,
     });
     assert.deepEqual(resolved, { imports: [], markTurnIds: [] });
+  });
+
+  it("locks only while the latest external turn is active", function () {
+    assert.isTrue(
+      isCodexThreadSnapshotBusy({
+        threadId: "thread",
+        turns: [{ id: "turn", status: "inProgress" }],
+      }),
+    );
+    assert.isFalse(
+      isCodexThreadSnapshotBusy({
+        threadId: "thread",
+        turns: [{ id: "turn", status: "completed" }],
+      }),
+    );
   });
 });

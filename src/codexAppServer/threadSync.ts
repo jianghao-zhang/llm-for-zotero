@@ -25,6 +25,20 @@ export type CodexExternalThreadSyncResolution = Readonly<{
   markTurnIds: readonly string[];
 }>;
 
+export function isCodexThreadSnapshotBusy(
+  snapshot: CodexNativeThreadSnapshot | null | undefined,
+): boolean {
+  const latest = snapshot?.turns.at(-1);
+  if (!latest) return false;
+  const status = `${latest.status || ""}`.toLowerCase().replace(/[^a-z]/g, "");
+  return (
+    status === "inprogress" ||
+    status === "running" ||
+    status === "pending" ||
+    status === "queued"
+  );
+}
+
 function normalizeText(value: string | undefined): string {
   return String(value || "")
     .replace(/\s+/g, " ")
@@ -40,7 +54,8 @@ function timestampMs(seconds: number | undefined, fallback: number): number {
 function buildLocalPairs(
   messages: readonly Pick<StoredChatMessage, "role" | "text" | "timestamp">[],
 ): Array<{ user: string; assistant: string; timestamp: number }> {
-  const pairs: Array<{ user: string; assistant: string; timestamp: number }> = [];
+  const pairs: Array<{ user: string; assistant: string; timestamp: number }> =
+    [];
   for (let index = 0; index < messages.length - 1; index += 1) {
     const user = messages[index];
     const assistant = messages[index + 1];

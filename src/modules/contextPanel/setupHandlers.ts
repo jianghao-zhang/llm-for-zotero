@@ -170,6 +170,7 @@ import {
   withScrollGuard,
   copyTextToClipboard,
   refreshConversationPanels,
+  refreshSharedCodexConversation,
   clearPendingRequestIdAndSync,
   detectReasoningProvider,
   getReasoningOptions,
@@ -181,6 +182,7 @@ import {
   scheduleConversationQuoteRevalidation,
   type EditLatestTurnMarker,
 } from "./chat";
+import { isCodexThreadSnapshotBusy } from "../../codexAppServer/threadSync";
 import {
   getWorkflowTestSendInterceptor,
   notifyWorkflowTestSendSettled,
@@ -839,6 +841,79 @@ export function setupHandlers(
   const ElementCtor = panelDoc.defaultView?.Element;
   const isElementNode = (value: unknown): value is Element =>
     Boolean(ElementCtor && value instanceof ElementCtor);
+  let sharedCodexSyncTimer: number | null = null;
+  let sharedCodexSyncRunning = false;
+  let sharedCodexSyncGeneration = 0;
+  const setSharedCodexComposerLocked = (locked: boolean) => {
+    if (!isCodexConversationSystem() || !item) return;
+    const activeConversationKey = getConversationKey(item);
+    if (isRequestPending(activeConversationKey)) return;
+    inputBox.disabled = locked;
+    sendBtn.disabled = locked;
+    panelRoot.dataset.codexExternalTurnActive = locked ? "true" : "false";
+    if (locked && status) {
+      setStatus(status, "Syncing Codex response…", "sending");
+    } else if (status?.textContent === "Syncing Codex response…") {
+      setStatus(status, "Ready", "ready");
+    }
+  };
+  const cancelSharedCodexSync = () => {
+    sharedCodexSyncGeneration += 1;
+    if (sharedCodexSyncTimer !== null && panelWin) {
+      panelWin.clearTimeout(sharedCodexSyncTimer);
+    }
+    sharedCodexSyncTimer = null;
+    sharedCodexSyncRunning = false;
+  };
+  const scheduleSharedCodexSync = (delayMs = 0) => {
+    if (!panelWin || !item || !isCodexConversationSystem()) return;
+    if (sharedCodexSyncTimer !== null || sharedCodexSyncRunning) return;
+    const generation = sharedCodexSyncGeneration;
+    sharedCodexSyncTimer = panelWin.setTimeout(
+      () => {
+        sharedCodexSyncTimer = null;
+        if (generation !== sharedCodexSyncGeneration || !body.isConnected)
+          return;
+        const currentItem = item;
+        if (!currentItem) return;
+        const conversationKey = getConversationKey(currentItem);
+        sharedCodexSyncRunning = true;
+        setSharedCodexComposerLocked(true);
+        void refreshSharedCodexConversation({
+          conversationKey,
+          history: chatHistory.get(conversationKey) || [],
+          refresh: refreshChatPreservingScroll,
+        })
+          .then((snapshot) => {
+            if (generation !== sharedCodexSyncGeneration || !body.isConnected) {
+              return;
+            }
+            const busy = isCodexThreadSnapshotBusy(snapshot);
+            setSharedCodexComposerLocked(busy);
+            if (busy) scheduleSharedCodexSync(800);
+          })
+          .finally(() => {
+            sharedCodexSyncRunning = false;
+            if (
+              generation === sharedCodexSyncGeneration &&
+              body.isConnected &&
+              panelRoot.dataset.codexExternalTurnActive === "true"
+            ) {
+              scheduleSharedCodexSync(800);
+            } else if (generation === sharedCodexSyncGeneration) {
+              setSharedCodexComposerLocked(false);
+            }
+          });
+      },
+      Math.max(0, delayMs),
+    );
+  };
+  const handleSharedCodexFocus = () => scheduleSharedCodexSync();
+  const handleSharedCodexVisibility = () => {
+    if (panelDoc.visibilityState === "visible") scheduleSharedCodexSync();
+  };
+  panelWin?.addEventListener("focus", handleSharedCodexFocus);
+  panelDoc.addEventListener("visibilitychange", handleSharedCodexVisibility);
   const headerTop = body.querySelector(
     ".llm-header-top",
   ) as HTMLDivElement | null;
@@ -6272,6 +6347,7 @@ export function setupHandlers(
       syncModelFromPrefs();
       syncConversationPanelState();
     });
+    scheduleSharedCodexSync();
   });
   const ResizeObserverCtor = body.ownerDocument?.defaultView?.ResizeObserver;
   if (ResizeObserverCtor && panelRoot && modelBtn) {
@@ -7901,6 +7977,12 @@ export function setupHandlers(
   let disconnectObserverCleanup: (() => void) | null = null;
   let setupHandlersCleaned = false;
   const cleanupSetupHandlers = () => {
+    cancelSharedCodexSync();
+    panelWin?.removeEventListener("focus", handleSharedCodexFocus);
+    panelDoc.removeEventListener(
+      "visibilitychange",
+      handleSharedCodexVisibility,
+    );
     if (setupHandlersCleaned) return;
     setupHandlersCleaned = true;
     // The connection-check interval and preload token outlive the detached
@@ -7947,6 +8029,7 @@ export function setupHandlers(
   );
   if (isCodexConversationSystem()) {
     void ensureCodexModelCatalogLoaded();
+    scheduleSharedCodexSync();
   }
   panelRoot.dataset.handlersInitialized = thisGen;
 }

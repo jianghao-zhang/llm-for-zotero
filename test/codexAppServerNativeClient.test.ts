@@ -2578,6 +2578,13 @@ describe("Codex app-server native client", function () {
               handleMessage: (msg: Record<string, unknown>) => void;
             }
           ).handleMessage.bind(proc);
+          if (request.method === "model/list") {
+            setTimeout(
+              () => handleMessage({ id: request.id, result: { data: [] } }),
+              0,
+            );
+            return;
+          }
           if (request.method === "skills/list") {
             skillsListParams = request.params;
             setTimeout(
@@ -2616,6 +2623,10 @@ describe("Codex app-server native client", function () {
                 }),
               0,
             );
+            return;
+          }
+          if (request.method === "thread/name/set") {
+            setTimeout(() => handleMessage({ id: request.id, result: {} }), 0);
             return;
           }
           if (request.method === "turn/start") {
