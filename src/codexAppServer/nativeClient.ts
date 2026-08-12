@@ -1895,24 +1895,30 @@ export function resolveCodexNativeThreadTitle(params: {
   userText?: string;
   paperTitle?: string;
 }): string {
+  const compactPart = (value: string, maxLength: number): string => {
+    const normalized = value.replace(/\s+/g, " ").trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+  };
   const userText = normalizeNonEmptyString(params.userText);
   const commentMatch = userText.match(
     /User comment for this context:\s*\n([\s\S]*?)(?=\n\n(?:Selected text context|User question:)|$)/i,
   );
   const comment = normalizeNonEmptyString(commentMatch?.[1]);
-  if (comment) return comment.slice(0, 120);
   const requestedTitle = normalizeNonEmptyString(params.requestedTitle);
-  if (
-    requestedTitle &&
-    !/^please explain this selected text\.?$/i.test(requestedTitle)
-  ) {
-    return requestedTitle.slice(0, 120);
-  }
   const paperTitle = normalizeNonEmptyString(params.paperTitle);
-  if (requestedTitle && paperTitle) {
-    return `${paperTitle} — selected text`.slice(0, 120);
+  const isDefaultSelectedTextTitle =
+    /^please explain this selected text\.?$/i.test(requestedTitle);
+  const intent = comment || (!isDefaultSelectedTextTitle ? requestedTitle : "");
+  if (paperTitle) {
+    const compactPaper = compactPart(paperTitle, 46);
+    const compactIntent = compactPart(intent || "selected text", 70);
+    if (compactIntent.toLowerCase() === compactPaper.toLowerCase()) {
+      return compactPaper;
+    }
+    return `${compactPaper} · ${compactIntent}`;
   }
-  return requestedTitle.slice(0, 120);
+  return compactPart(intent || requestedTitle, 120);
 }
 
 function registerNativeApprovalRequestHandlers(params: {

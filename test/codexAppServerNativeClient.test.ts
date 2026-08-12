@@ -282,15 +282,34 @@ describe("Codex app-server native client", function () {
         userText:
           "Selected text contexts with explicit sources:\nText Context 1:\ntext\n\nUser comment for this context:\nHow reliable is this claim?\n\nUser question:\nPlease explain this selected text.",
       }),
-      "How reliable is this claim?",
+      "Recursive Language Models · How reliable is this claim?",
     );
     assert.equal(
       resolveCodexNativeThreadTitle({
         requestedTitle: "Please explain this selected text.",
         paperTitle: "Recursive Language Models",
       }),
-      "Recursive Language Models — selected text",
+      "Recursive Language Models · selected text",
     );
+  });
+
+  it("keeps both paper identity and user intent in a concise shared thread title", function () {
+    assert.equal(
+      resolveCodexNativeThreadTitle({
+        requestedTitle: "Compare the inference-time scaling trade-offs",
+        paperTitle: "Recursive Language Models",
+      }),
+      "Recursive Language Models · Compare the inference-time scaling trade-offs",
+    );
+
+    const longTitle = resolveCodexNativeThreadTitle({
+      requestedTitle:
+        "Explain how the proposed method changes the reliability and compute trade-offs across every benchmark in the evaluation",
+      paperTitle:
+        "A Very Long Paper Title About Recursive Language Models and Inference-Time Scaling",
+    });
+    assert.isAtMost(longTitle.length, 120);
+    assert.include(longTitle, " · ");
   });
 
   it("starts a clean native thread when the selected model changes", function () {
