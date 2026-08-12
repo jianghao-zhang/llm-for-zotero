@@ -296,6 +296,10 @@ export const selectedImageCache = new TTLMap<number, string[]>(
   24 * 60 * 60 * 1000,
   30,
 );
+export const selectedImageCommentCache = new TTLMap<number, string[]>(
+  24 * 60 * 60 * 1000,
+  30,
+);
 export const selectedFileAttachmentCache = new Map<number, ChatAttachment[]>();
 export const selectedFilePreviewExpandedCache = new Map<number, boolean>();
 export const selectedPaperContextCache = new Map<number, PaperContextRef[]>();
@@ -444,6 +448,7 @@ export function clearAllState(): void {
   activeContextPanelRawItems.clear();
   activeContextPanelStateSync.clear();
   selectedImageCache.clear();
+  selectedImageCommentCache.clear();
   selectedFileAttachmentCache.clear();
   selectedFilePreviewExpandedCache.clear();
   selectedPaperContextCache.clear();

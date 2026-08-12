@@ -30,12 +30,12 @@ import {
   activeContextPanelRawItems,
   activeContextPanelStateSync,
   chatHistory,
-  draftInputCache,
   loadedConversationKeys,
   readerContextPanelRegistered,
   setReaderContextPanelRegistered,
   recentReaderSelectionCache,
   selectedImageCache,
+  selectedImageCommentCache,
   selectedImagePreviewActiveIndexCache,
   selectedImagePreviewExpandedCache,
 } from "./state";
@@ -124,10 +124,7 @@ import {
   releaseClaudeRuntimeForBody,
 } from "../../claudeCode/runtimeRetention";
 import { captureScreenshotSelection, optimizeImageDataUrl } from "./screenshot";
-import {
-  appendReaderSnapshotComment,
-  appendReaderSnapshotImage,
-} from "./readerSnapshotInclusion";
+import { appendReaderSnapshotImage } from "./readerSnapshotInclusion";
 
 export { openStandaloneChat } from "./standaloneWindow";
 import {
@@ -657,7 +654,8 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
       } | null = null;
       let snapshotCommentTarget: {
         body: Element;
-        conversationKey: number;
+        ownerItemId: number;
+        imageIndex: number;
       } | null = null;
       const resolvePopupPanelTarget = () => {
         const docs = new Set<Document>();
@@ -781,33 +779,35 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             return null;
           }
         };
-      const appendSnapshotCommentToDraft = (comment: string): boolean => {
+      const updateSnapshotComment = (comment: string): boolean => {
         const target = snapshotCommentTarget;
         if (!target) return false;
-        const input = target.body.querySelector(
-          "#llm-input",
-        ) as HTMLTextAreaElement | null;
-        if (!input) return false;
-        input.value = appendReaderSnapshotComment({
-          existingDraft: input.value,
-          comment,
-        });
-        draftInputCache.set(target.conversationKey, input.value);
-        const EventCtor = input.ownerDocument.defaultView?.Event ?? Event;
-        input.dispatchEvent(new EventCtor("input", { bubbles: true }));
+        const images = selectedImageCache.get(target.ownerItemId) || [];
+        if (target.imageIndex < 0 || target.imageIndex >= images.length) {
+          return false;
+        }
+        const comments =
+          selectedImageCommentCache.get(target.ownerItemId) || [];
+        const nextComments = images.map((_, index) => comments[index] || "");
+        nextComments[target.imageIndex] = comment.trim();
+        selectedImageCommentCache.set(target.ownerItemId, nextComments);
+        activeContextPanelStateSync.get(target.body)?.();
         return true;
       };
-      const dismissReaderSelectionPopup = () => {
-        cleanupPopupConfirmListeners();
-        // This is the exact callback Zotero's active PDF view invokes from
-        // its native selectionchange handler. Calling it once lets React
-        // unmount the popup without mutating Reader state or removing DOM.
+      const hideReaderSelectionPopup = () => {
         try {
           const activeView = (event.reader as any)?._internalReader?._lastView;
           activeView?._options?.onSetSelectionPopup?.(null);
         } catch (_err) {
           void _err;
         }
+      };
+      const dismissReaderSelectionPopup = () => {
+        cleanupPopupConfirmListeners();
+        // This is the exact callback Zotero's active PDF view invokes from
+        // its native selectionchange handler. Calling it once lets React
+        // unmount the popup without mutating Reader state or removing DOM.
+        hideReaderSelectionPopup();
       };
       const stripPopupRowChrome = (
         row: HTMLElement | null,
@@ -1000,16 +1000,31 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
 
           let commentModeActive = false;
           let addTextScreenPoint: { x: number; y: number } | null = null;
-          const revealCommentComposer = () => {
+          const revealCommentComposer = (floating = false) => {
             commentModeActive = true;
             popupActionRow.style.opacity = "0";
             popupActionRow.style.transform = "translateY(-4px)";
             const win = event.doc.defaultView;
             win?.setTimeout(() => {
               popupActionRow.style.display = "none";
-              popupAction.style.maxHeight = "72px";
+              if (floating) {
+                commentComposer.style.position = "fixed";
+                commentComposer.style.left = "50%";
+                commentComposer.style.bottom = "24px";
+                commentComposer.style.width = "min(420px, calc(100vw - 24px))";
+                commentComposer.style.zIndex = "2147483647";
+                commentComposer.style.transform = "translate(-50%, 5px)";
+                commentComposer.style.boxShadow =
+                  "0 12px 30px rgba(0,0,0,0.30)";
+                event.doc.body?.appendChild(commentComposer);
+                popupCommentOverlay = commentComposer;
+              } else {
+                popupAction.style.maxHeight = "72px";
+              }
               commentComposer.style.opacity = "1";
-              commentComposer.style.transform = "translateY(0)";
+              commentComposer.style.transform = floating
+                ? "translate(-50%, 0)"
+                : "translateY(0)";
               commentComposer.style.pointerEvents = "auto";
               commentInput.focus({ preventScroll: true });
             }, 90);
@@ -1077,7 +1092,7 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
               );
             }
             if (snapshotCommentTarget) {
-              if (!appendSnapshotCommentToDraft(comment)) {
+              if (!updateSnapshotComment(comment)) {
                 saveCommentBtn.textContent = "↑";
                 saveCommentBtn.title = "Unable to update the current draft";
                 saveCommentBtn.setAttribute(
@@ -1579,12 +1594,11 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                 showSnapUnavailable("The reader window is unavailable");
                 return;
               }
-              snapBtn.textContent = "Select region…";
-              snapBtn.disabled = true;
+              hideReaderSelectionPopup();
               try {
                 const dataUrl = await captureScreenshotSelection(mainWindow);
                 if (!dataUrl) {
-                  dismissReaderSelectionPopup();
+                  cleanupPopupConfirmListeners();
                   return;
                 }
                 const optimized = await optimizeImageDataUrl(
@@ -1599,6 +1613,12 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                   maxImages: MAX_SELECTED_IMAGES,
                 });
                 selectedImageCache.set(ownerItem.id, nextImages);
+                const currentComments =
+                  selectedImageCommentCache.get(ownerItem.id) || [];
+                selectedImageCommentCache.set(
+                  ownerItem.id,
+                  nextImages.map((_, index) => currentComments[index] || ""),
+                );
                 selectedImagePreviewExpandedCache.set(ownerItem.id, false);
                 selectedImagePreviewActiveIndexCache.set(
                   ownerItem.id,
@@ -1606,13 +1626,14 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                 );
                 snapshotCommentTarget = {
                   body: target.body,
-                  conversationKey,
+                  ownerItemId: ownerItem.id,
+                  imageIndex: nextImages.length - 1,
                 };
                 activeContextPanelStateSync.get(target.body)?.();
-                revealCommentComposer();
+                revealCommentComposer(true);
               } catch (error) {
                 ztoolkit.log("LLM: reader popup screenshot failed", error);
-                showSnapUnavailable("Screenshot failed");
+                cleanupPopupConfirmListeners();
               }
             })();
           };

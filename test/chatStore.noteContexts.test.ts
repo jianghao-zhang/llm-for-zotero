@@ -303,6 +303,7 @@ describe("chatStore note contexts", function () {
         },
       ],
       screenshotImages: ["data:image/png;base64,user-input"],
+      screenshotComments: ["Why does this curve flatten?"],
     });
 
     const insert = findChatMessageInsert(queries);
@@ -320,7 +321,12 @@ describe("chatStore note contexts", function () {
     );
     assert.equal(
       insert.params[21],
-      JSON.stringify(["data:image/png;base64,user-input"]),
+      JSON.stringify([
+        {
+          image: "data:image/png;base64,user-input",
+          comment: "Why does this curve flatten?",
+        },
+      ]),
     );
   });
 

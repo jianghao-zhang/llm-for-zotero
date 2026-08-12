@@ -4,6 +4,7 @@
 
 import {
   selectedImageCache,
+  selectedImageCommentCache,
   selectedImagePreviewExpandedCache,
   selectedImagePreviewActiveIndexCache,
 } from "../state";
@@ -17,6 +18,7 @@ export function clearSelectedImageState(
   itemId: number,
 ): void {
   selectedImageCache.delete(itemId);
+  selectedImageCommentCache.delete(itemId);
   selectedImagePreviewExpandedCache.delete(itemId);
   selectedImagePreviewActiveIndexCache.delete(itemId);
   clearPinnedContextOwner(pinnedImageKeys, itemId);
@@ -32,7 +34,16 @@ export function retainPinnedImageState(
     selectedImageCache.get(itemId) || [],
   );
   if (retained.length) {
+    const previousImages = selectedImageCache.get(itemId) || [];
+    const previousComments = selectedImageCommentCache.get(itemId) || [];
     selectedImageCache.set(itemId, retained);
+    selectedImageCommentCache.set(
+      itemId,
+      retained.map((image) => {
+        const previousIndex = previousImages.indexOf(image);
+        return previousIndex >= 0 ? previousComments[previousIndex] || "" : "";
+      }),
+    );
     const currentActiveIndex = selectedImagePreviewActiveIndexCache.get(itemId);
     const normalizedActiveIndex =
       typeof currentActiveIndex === "number" &&
@@ -46,6 +57,7 @@ export function retainPinnedImageState(
     return;
   }
   selectedImageCache.delete(itemId);
+  selectedImageCommentCache.delete(itemId);
   selectedImagePreviewExpandedCache.delete(itemId);
   selectedImagePreviewActiveIndexCache.delete(itemId);
 }

@@ -3412,8 +3412,7 @@
   margin: 0;
   padding: 5px 5px 5px 11px;
   box-sizing: border-box;
-  border: 1px solid
-    color-mix(in srgb, var(--stroke-secondary) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--stroke-secondary) 72%, transparent);
   border-radius: 16px;
   background: color-mix(
     in srgb,
@@ -4263,6 +4262,17 @@
   height: auto;
   max-width: 100%;
   object-fit: contain;
+}
+
+.llm-image-preview-comment,
+.llm-user-screenshots-preview-comment {
+  padding: 8px 10px;
+  border-top: 1px solid var(--fill-quinary, rgba(127, 127, 127, 0.2));
+  color: var(--fill-primary, currentColor);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .llm-bubble.assistant {
@@ -11234,9 +11244,7 @@ label.llm-search-results-item:hover {
 
 /* Keep the persistent composer aligned with the message column instead of
  * letting its rounded edge sit against the ContextPane frame. */
-#llmforzotero-reader-context-panel
-  > .llm-panel
-  > .llm-input-section {
+#llmforzotero-reader-context-panel > .llm-panel > .llm-input-section {
   margin-inline: 10px;
 }
 

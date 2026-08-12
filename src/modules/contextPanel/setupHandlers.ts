@@ -57,6 +57,7 @@ import {
   selectedReasoningProviderCache,
   selectedRuntimeModeCache,
   selectedImageCache,
+  selectedImageCommentCache,
   selectedFileAttachmentCache,
   selectedImagePreviewExpandedCache,
   selectedImagePreviewActiveIndexCache,
@@ -4470,9 +4471,11 @@ export function setupHandlers(
     );
     const screenshotDisabledHint = getScreenshotDisabledHint(currentModel);
     let selectedImages = selectedImageCache.get(item.id) || [];
+    let selectedImageComments = selectedImageCommentCache.get(item.id) || [];
     if (screenshotUnsupported && selectedImages.length) {
       clearSelectedImageState(item.id);
       selectedImages = [];
+      selectedImageComments = [];
     }
     prunePinnedImageKeys(pinnedImageKeys, item.id, selectedImages);
     if (selectedImages.length) {
@@ -4561,8 +4564,11 @@ export function setupHandlers(
             removePinnedImage(pinnedImageKeys, item.id, removedImage);
           }
           const nextImages = currentImages.filter((_, i) => i !== index);
+          const currentComments = selectedImageCommentCache.get(item.id) || [];
+          const nextComments = currentComments.filter((_, i) => i !== index);
           if (nextImages.length) {
             selectedImageCache.set(item.id, nextImages);
+            selectedImageCommentCache.set(item.id, nextComments);
             let nextActive =
               selectedImagePreviewActiveIndexCache.get(item.id) || 0;
             if (index < nextActive) {
@@ -4589,6 +4595,26 @@ export function setupHandlers(
       }
       previewSelectedImg.src = selectedImages[activeIndex];
       previewSelectedImg.alt = `Selected screenshot ${activeIndex + 1}`;
+      const selectedComment =
+        `${selectedImageComments[activeIndex] || ""}`.trim();
+      let commentEl = previewSelected.querySelector(
+        ".llm-image-preview-comment",
+      ) as HTMLDivElement | null;
+      if (selectedComment) {
+        if (!commentEl) {
+          commentEl = createElement(
+            ownerDoc,
+            "div",
+            "llm-image-preview-comment",
+          );
+          previewSelected.appendChild(commentEl);
+        }
+        commentEl.textContent = selectedComment;
+        commentEl.style.display = "block";
+      } else if (commentEl) {
+        commentEl.textContent = "";
+        commentEl.style.display = "none";
+      }
       screenshotBtn.disabled =
         screenshotUnsupported || imageCount >= MAX_SELECTED_IMAGES;
       screenshotBtn.title = screenshotUnsupported
@@ -4609,6 +4635,7 @@ export function setupHandlers(
       previewMeta.classList.remove("expanded");
       previewMeta.setAttribute("aria-expanded", "false");
       previewMeta.title = t("Expand figures panel");
+      previewSelected.querySelector(".llm-image-preview-comment")?.remove();
       clearSelectedImageState(item.id);
       screenshotBtn.disabled = screenshotUnsupported;
       screenshotBtn.title = screenshotUnsupported
@@ -6468,6 +6495,7 @@ export function setupHandlers(
     optimizeImageDataUrl,
     persistAttachmentBlob,
     selectedImageCache,
+    selectedImageCommentCache,
     selectedFileAttachmentCache,
     updateImagePreview,
     updateFilePreview,
@@ -6903,6 +6931,8 @@ export function setupHandlers(
     resolvePdfBytes: pdfPaperResolver.resolvePdfBytes,
     getSelectedFiles: (itemId) => selectedFileAttachmentCache.get(itemId) || [],
     getSelectedImages: (itemId) => selectedImageCache.get(itemId) || [],
+    getSelectedImageComments: (itemId) =>
+      selectedImageCommentCache.get(itemId) || [],
     resolvePromptText,
     buildQuestionWithSelectedTextContexts,
     buildModelPromptWithFileContext,
@@ -7185,6 +7215,9 @@ export function setupHandlers(
       const selectedImages = (
         selectedImageCache.get(currentItem.id) || []
       ).slice(0, MAX_SELECTED_IMAGES);
+      const selectedImageComments = (
+        selectedImageCommentCache.get(currentItem.id) || []
+      ).slice(0, selectedImages.length);
       const pdfInputs = await resolvePdfModeModelInputs({
         deps: {
           setInputDisabled: (disabled) => {
@@ -7303,6 +7336,10 @@ export function setupHandlers(
           selectedCollectionContexts,
           selectedTagContexts,
           screenshotImages: images,
+          screenshotComments: [
+            ...selectedImageComments,
+            ...pdfPageImageDataUrls.map(() => ""),
+          ],
           paperContexts: selectedPaperContexts,
           pdfPaperContexts: pdfModePapers,
           fullTextPaperContexts,

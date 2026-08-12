@@ -24,6 +24,10 @@ type FileIntakeControllerDeps = {
     set(key: number, value: string[]): unknown;
     delete(key: number): boolean;
   };
+  selectedImageCommentCache: {
+    get(key: number): string[] | undefined;
+    set(key: number, value: string[]): unknown;
+  };
   selectedFileAttachmentCache: Map<number, ChatAttachment[]>;
   updateImagePreview: () => void;
   updateFilePreview: () => void;
@@ -299,6 +303,11 @@ export function createFileIntakeController(deps: FileIntakeControllerDeps): {
 
     if (nextImages.length) {
       deps.selectedImageCache.set(item.id, nextImages);
+      const currentComments = deps.selectedImageCommentCache.get(item.id) || [];
+      deps.selectedImageCommentCache.set(
+        item.id,
+        nextImages.map((_, index) => currentComments[index] || ""),
+      );
     }
     if (nextFiles.length) {
       deps.selectedFileAttachmentCache.set(item.id, nextFiles);

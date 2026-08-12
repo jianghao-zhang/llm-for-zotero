@@ -47,6 +47,9 @@ export const cloneTurnMessageForUndo = (message: Message): Message => ({
   screenshotImages: Array.isArray(message.screenshotImages)
     ? [...message.screenshotImages]
     : undefined,
+  screenshotComments: Array.isArray(message.screenshotComments)
+    ? [...message.screenshotComments]
+    : undefined,
   paperContexts: Array.isArray(message.paperContexts)
     ? [...message.paperContexts]
     : undefined,

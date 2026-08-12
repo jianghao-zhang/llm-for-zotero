@@ -34,6 +34,7 @@ import {
   selectedFileAttachmentCache,
   selectedFilePreviewExpandedCache,
   selectedImageCache,
+  selectedImageCommentCache,
   selectedImagePreviewActiveIndexCache,
   selectedImagePreviewExpandedCache,
   selectedCollectionContextCache,
@@ -331,6 +332,7 @@ export function clearUserAddedContextForItem(params: {
   selectedCollectionContextCache.delete(itemId);
   selectedTagContextCache.delete(itemId);
   selectedImageCache.delete(itemId);
+  selectedImageCommentCache.delete(itemId);
   selectedImagePreviewExpandedCache.delete(itemId);
   selectedImagePreviewActiveIndexCache.delete(itemId);
   selectedFileAttachmentCache.delete(itemId);

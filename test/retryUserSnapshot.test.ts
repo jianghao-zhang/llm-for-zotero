@@ -15,6 +15,7 @@ function userMessage(): Message {
     agentRunId: "run-old",
     selectedTextContexts: [{ text: "old selection" } as never],
     screenshotImages: ["data:image/png;base64,old"],
+    screenshotComments: ["old figure note"],
     paperContexts: [{ itemId: 1, title: "Old paper" } as never],
     pdfPaperContexts: [{ itemId: 2, title: "Old pdf" } as never],
     fullTextPaperContexts: [{ itemId: 3, title: "Old full" } as never],
@@ -35,6 +36,7 @@ describe("retryUserSnapshot", function () {
     message.agentRunId = "run-new";
     message.selectedTextContexts = undefined;
     message.screenshotImages = undefined;
+    message.screenshotComments = undefined;
     message.paperContexts = [{ itemId: 10, title: "New paper" } as never];
     message.pdfPaperContexts = undefined;
     message.fullTextPaperContexts = undefined;

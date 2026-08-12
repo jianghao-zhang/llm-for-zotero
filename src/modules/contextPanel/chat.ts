@@ -131,6 +131,10 @@ import {
   resolveStreamInterruptionOutcome,
 } from "./streamInterruption";
 import {
+  appendScreenshotCommentsToPrompt,
+  normalizeScreenshotComments,
+} from "./screenshotComments";
+import {
   restoreRetryUserSnapshot,
   takeRetryUserSnapshot,
 } from "./retryUserSnapshot";
@@ -191,6 +195,7 @@ import {
   selectedReasoningCache,
   selectedReasoningProviderCache,
   selectedImageCache,
+  selectedImageCommentCache,
   selectedFileAttachmentCache,
   selectedPaperContextCache,
   selectedCollectionContextCache,
@@ -1927,6 +1932,7 @@ function toPanelMessage(message: StoredChatMessage): Message {
       : undefined,
     paperContextsExpanded: false,
     screenshotImages,
+    screenshotComments: message.screenshotComments,
     attachments,
     modelAttachments,
     generatedImages: generatedImages.length ? generatedImages : undefined,
@@ -6108,6 +6114,7 @@ function reconstructRetryPayload(
 ): {
   question: string;
   screenshotImages: string[];
+  screenshotComments: string[];
   attachments: ChatAttachment[];
   paperContexts: PaperContextRef[];
   pdfPaperContexts: PaperContextRef[];
@@ -6154,9 +6161,9 @@ function reconstructRetryPayload(
         },
       )
     : promptText;
-  const question = buildModelPromptWithFileContext(
-    composedQuestionBase,
-    fileAttachments,
+  const question = appendScreenshotCommentsToPrompt(
+    buildModelPromptWithFileContext(composedQuestionBase, fileAttachments),
+    userMessage.screenshotComments,
   );
   const screenshotImages = Array.isArray(userMessage.screenshotImages)
     ? userMessage.screenshotImages
@@ -6165,6 +6172,10 @@ function reconstructRetryPayload(
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const screenshotComments = normalizeScreenshotComments(
+    screenshotImages,
+    userMessage.screenshotComments,
+  );
   const { paperContexts, pdfPaperContexts, fullTextPaperContexts } =
     normalizeStoredPaperContextRoutes({
       paperContexts: userMessage.paperContexts,
@@ -6181,6 +6192,7 @@ function reconstructRetryPayload(
   return {
     question,
     screenshotImages,
+    screenshotComments,
     attachments: fileAttachments,
     paperContexts,
     pdfPaperContexts,
@@ -6672,8 +6684,16 @@ function syncComposeContextForInlineEdit(
     : [];
   if (screenshotImages.length) {
     selectedImageCache.set(item.id, screenshotImages);
+    selectedImageCommentCache.set(
+      item.id,
+      normalizeScreenshotComments(
+        screenshotImages,
+        userMessage.screenshotComments,
+      ),
+    );
   } else {
     selectedImageCache.delete(item.id);
+    selectedImageCommentCache.delete(item.id);
   }
 
   const fileAttachments = normalizeEditableAttachments(userMessage.attachments);
@@ -6763,6 +6783,7 @@ export async function editLatestUserMessageAndRetry(
     selectedTextPaperContexts,
     selectedTextNoteContexts,
     screenshotImages,
+    screenshotComments,
     paperContexts,
     pdfPaperContexts,
     fullTextPaperContexts,
@@ -6879,6 +6900,10 @@ export async function editLatestUserMessageAndRetry(
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const screenshotCommentsForMessage = normalizeScreenshotComments(
+    screenshotImagesForMessage,
+    screenshotComments,
+  );
   const normalizedPaperContextsInput = normalizeEditablePaperContexts([
     ...(paperContexts || []),
     ...selectedTextPaperContextsForMessage.filter(
@@ -6964,6 +6989,11 @@ export async function editLatestUserMessageAndRetry(
   retryPair.userMessage.screenshotImages = screenshotImagesForMessage.length
     ? screenshotImagesForMessage
     : undefined;
+  retryPair.userMessage.screenshotComments = screenshotCommentsForMessage.some(
+    Boolean,
+  )
+    ? screenshotCommentsForMessage
+    : undefined;
   retryPair.userMessage.screenshotExpanded = false;
   retryPair.userMessage.screenshotActiveIndex =
     screenshotImagesForMessage.length ? 0 : undefined;
@@ -7025,6 +7055,7 @@ export async function editLatestUserMessageAndRetry(
           retryPair.userMessage.selectedTextNoteContexts,
         forcedSkillIds: retryPair.userMessage.forcedSkillIds,
         screenshotImages: retryPair.userMessage.screenshotImages,
+        screenshotComments: retryPair.userMessage.screenshotComments,
         paperContexts: retryPair.userMessage.paperContexts,
         pdfPaperContexts: retryPair.userMessage.pdfPaperContexts,
         fullTextPaperContexts: retryPair.userMessage.fullTextPaperContexts,
@@ -7330,6 +7361,7 @@ export async function retryLatestAssistantResponse(
         selectedTextPaperContexts:
           retryPair.userMessage.selectedTextPaperContexts,
         screenshotImages: retryPair.userMessage.screenshotImages,
+        screenshotComments: retryPair.userMessage.screenshotComments,
         paperContexts: retryPair.userMessage.paperContexts,
         pdfPaperContexts: retryPair.userMessage.pdfPaperContexts,
         fullTextPaperContexts: retryPair.userMessage.fullTextPaperContexts,
@@ -7867,6 +7899,7 @@ export async function editUserTurnAndRetry(opts: {
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   screenshotImages?: string[];
+  screenshotComments?: string[];
   paperContexts?: PaperContextRef[];
   pdfPaperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
@@ -7905,6 +7938,7 @@ export async function editUserTurnAndRetry(opts: {
     selectedTextPaperContexts,
     selectedTextNoteContexts,
     screenshotImages,
+    screenshotComments,
     paperContexts,
     pdfPaperContexts,
     fullTextPaperContexts,
@@ -8066,6 +8100,10 @@ export async function editUserTurnAndRetry(opts: {
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const screenshotCommentsForMessage = normalizeScreenshotComments(
+    screenshotImagesForMessage,
+    screenshotComments,
+  );
   const normalizedPaperContexts = normalizeEditablePaperContexts([
     ...(paperContexts || []),
     ...selectedTextPaperContextsForMessage.filter(
@@ -8123,6 +8161,9 @@ export async function editUserTurnAndRetry(opts: {
   userMsg.screenshotImages = screenshotImagesForMessage.length
     ? screenshotImagesForMessage
     : undefined;
+  userMsg.screenshotComments = screenshotCommentsForMessage.some(Boolean)
+    ? screenshotCommentsForMessage
+    : undefined;
   userMsg.screenshotExpanded = false;
   userMsg.screenshotActiveIndex = screenshotImagesForMessage.length
     ? 0
@@ -8175,6 +8216,7 @@ export async function editUserTurnAndRetry(opts: {
         selectedTextNoteContexts: userMsg.selectedTextNoteContexts,
         forcedSkillIds: userMsg.forcedSkillIds,
         screenshotImages: userMsg.screenshotImages,
+        screenshotComments: userMsg.screenshotComments,
         paperContexts: userMsg.paperContexts,
         pdfPaperContexts: userMsg.pdfPaperContexts,
         fullTextPaperContexts: userMsg.fullTextPaperContexts,
@@ -8877,6 +8919,7 @@ async function sendAgentQuestion(opts: {
   contextSource?: ResolvedContextSource | null;
   question: string;
   images?: string[];
+  screenshotComments?: string[];
   model?: string;
   apiBase?: string;
   apiKey?: string;
@@ -8946,6 +8989,7 @@ export async function sendQuestion(
     contextSource,
     question,
     images,
+    screenshotComments,
     model,
     apiBase,
     apiKey,
@@ -8970,6 +9014,10 @@ export async function sendQuestion(
     agentRunId,
     skipAgentDispatch = false,
   } = opts;
+  const modelQuestion = appendScreenshotCommentsToPrompt(
+    question,
+    screenshotComments,
+  );
   {
     // A new send is the user moving on: complete any pending turn deletion so
     // the hidden turn is neither included in the prompt nor resurrected later.
@@ -9018,8 +9066,9 @@ export async function sendQuestion(
       body,
       item,
       contextSource: opts.contextSource,
-      question,
+      question: modelQuestion,
       images,
+      screenshotComments,
       model,
       apiBase,
       apiKey,
@@ -9398,6 +9447,10 @@ export async function sendQuestion(
         .filter(Boolean)
         .slice(0, MAX_SELECTED_IMAGES)
     : [];
+  const screenshotCommentsForMessage = normalizeScreenshotComments(
+    screenshotImagesForMessage,
+    screenshotComments,
+  );
   const imageCount = screenshotImagesForMessage.length;
   const userMessageText = shownQuestion;
   const userMessage: Message = {
@@ -9453,6 +9506,9 @@ export async function sendQuestion(
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
       : undefined,
+    screenshotComments: screenshotCommentsForMessage.some(Boolean)
+      ? screenshotCommentsForMessage
+      : undefined,
     screenshotExpanded: false,
     screenshotActiveIndex: 0,
     attachments: attachments?.length ? attachments : undefined,
@@ -9491,6 +9547,7 @@ export async function sendQuestion(
           selectedCollectionContexts: userMessage.selectedCollectionContexts,
           selectedTagContexts: userMessage.selectedTagContexts,
           screenshotImages: userMessage.screenshotImages,
+          screenshotComments: userMessage.screenshotComments,
           attachments: userMessage.attachments,
           modelAttachments: userMessage.modelAttachments,
           modelName: userMessage.modelName,
@@ -9604,7 +9661,7 @@ export async function sendQuestion(
       const { getRelayBaseUrl } = await import("../../webchat/relayServer");
       const answer = await sendWebChatQuestion({
         item,
-        question,
+        question: modelQuestion,
         host: getRelayBaseUrl(),
         sendPdf: opts.webchatSendPdf === true,
         pdfPaperContexts: normalizedWebChatPdfPaperContexts,
@@ -9740,7 +9797,7 @@ export async function sendQuestion(
       : await buildContextPlanForRequest({
           item,
           contextSource,
-          question,
+          question: modelQuestion,
           images,
           selectedTextSources: selectedTextSourcesForMessage,
           resolvedSelectedTextAnchors,
@@ -9783,6 +9840,7 @@ export async function sendQuestion(
         selectedTextSources: userMessage.selectedTextSources,
         selectedTextPaperContexts: userMessage.selectedTextPaperContexts,
         screenshotImages: userMessage.screenshotImages,
+        screenshotComments: userMessage.screenshotComments,
         paperContexts: userMessage.paperContexts,
         pdfPaperContexts: userMessage.pdfPaperContexts,
         fullTextPaperContexts: userMessage.fullTextPaperContexts,
@@ -9835,7 +9893,7 @@ export async function sendQuestion(
       ? [...(images || []), ...(contextPlan.modelImages || [])]
       : [];
     const requestParams = {
-      prompt: question,
+      prompt: modelQuestion,
       context: combinedContext,
       history: llmHistory,
       signal: getAbortController(conversationKey)?.signal,
@@ -10469,12 +10527,22 @@ export function refreshChat(
       contextBadgesRow.className = "llm-user-context-badges";
       let hasContextBadge = false;
 
-      const screenshotImages = Array.isArray(msg.screenshotImages)
-        ? msg.screenshotImages.filter(
-            (entry) =>
-              Boolean(entry) && !entry.startsWith("data:application/pdf"),
-          )
+      const screenshotEntries = Array.isArray(msg.screenshotImages)
+        ? msg.screenshotImages
+            .map((image, index) => ({
+              image,
+              comment: `${msg.screenshotComments?.[index] || ""}`.trim(),
+            }))
+            .filter(
+              (entry) =>
+                Boolean(entry.image) &&
+                !entry.image.startsWith("data:application/pdf"),
+            )
         : [];
+      const screenshotImages = screenshotEntries.map((entry) => entry.image);
+      const screenshotComments = screenshotEntries.map(
+        (entry) => entry.comment,
+      );
       let screenshotExpanded: HTMLDivElement | null = null;
       let papersExpanded: HTMLDivElement | null = null;
       let collectionsExpanded: HTMLDivElement | null = null;
@@ -10535,7 +10603,9 @@ export function refreshChat(
         const previewImg = doc.createElement("img") as HTMLImageElement;
         previewImg.className = "llm-user-screenshots-preview-img";
         previewImg.alt = "Screenshot preview";
-        previewWrap.appendChild(previewImg);
+        const previewComment = doc.createElement("div") as HTMLDivElement;
+        previewComment.className = "llm-user-screenshots-preview-comment";
+        previewWrap.append(previewImg, previewComment);
 
         const thumbButtons: HTMLButtonElement[] = [];
         screenshotImages.forEach((imageUrl, index) => {
@@ -10581,8 +10651,10 @@ export function refreshChat(
 
         screenshotExpandedEl.append(thumbStrip, previewWrap);
 
+        let screenshotHoverExpanded = false;
         const applyScreenshotState = () => {
-          const expanded = Boolean(msg.screenshotExpanded);
+          const expanded =
+            Boolean(msg.screenshotExpanded) || screenshotHoverExpanded;
           let activeIndex =
             typeof msg.screenshotActiveIndex === "number"
               ? Math.floor(msg.screenshotActiveIndex)
@@ -10599,6 +10671,10 @@ export function refreshChat(
           screenshotExpandedEl.hidden = !expanded;
           screenshotExpandedEl.style.display = expanded ? "flex" : "none";
           previewImg.src = screenshotImages[activeIndex];
+          const activeComment =
+            `${screenshotComments[activeIndex] || ""}`.trim();
+          previewComment.textContent = activeComment;
+          previewComment.hidden = !activeComment;
           thumbButtons.forEach((btn, index) => {
             btn.classList.toggle("active", index === activeIndex);
           });
@@ -10609,11 +10685,22 @@ export function refreshChat(
 
         const toggleScreenshotsExpanded = () => {
           mutateChatWithScrollGuard(() => {
+            screenshotHoverExpanded = false;
             msg.screenshotExpanded = !msg.screenshotExpanded;
             applyScreenshotState();
           });
         };
         applyScreenshotState();
+        screenshotBar.addEventListener("mouseenter", () => {
+          if (msg.screenshotExpanded) return;
+          screenshotHoverExpanded = true;
+          applyScreenshotState();
+        });
+        wrapper.addEventListener("mouseleave", () => {
+          if (!screenshotHoverExpanded) return;
+          screenshotHoverExpanded = false;
+          applyScreenshotState();
+        });
         screenshotBar.addEventListener("mousedown", (e: Event) => {
           const mouse = e as MouseEvent;
           if (mouse.button !== 0) return;

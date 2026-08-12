@@ -4,6 +4,7 @@ import { MAX_SELECTED_IMAGES } from "../../constants";
 import {
   activeContextPanels,
   selectedImageCache,
+  selectedImageCommentCache,
   selectedImagePreviewActiveIndexCache,
   selectedImagePreviewExpandedCache,
 } from "../../state";
@@ -278,6 +279,13 @@ export function attachComposeCaptureController(
             MAX_SELECTED_IMAGES,
           );
           selectedImageCache.set(item.id, nextImages);
+          selectedImageCommentCache.set(
+            item.id,
+            nextImages.map(
+              (_, index) =>
+                selectedImageCommentCache.get(item.id)?.[index] || "",
+            ),
+          );
           const expandedBeforeCapture = selectedImagePreviewExpandedCache.get(
             item.id,
           );
@@ -421,6 +429,13 @@ export function attachComposeCaptureController(
             MAX_SELECTED_IMAGES,
           );
           selectedImageCache.set(item.id, nextImages);
+          selectedImageCommentCache.set(
+            item.id,
+            nextImages.map(
+              (_, index) =>
+                selectedImageCommentCache.get(item.id)?.[index] || "",
+            ),
+          );
           const expandedBefore = selectedImagePreviewExpandedCache.get(item.id);
           selectedImagePreviewExpandedCache.set(
             item.id,
@@ -568,6 +583,13 @@ export function attachComposeCaptureController(
               MAX_SELECTED_IMAGES,
             );
             selectedImageCache.set(item.id, nextImages);
+            selectedImageCommentCache.set(
+              item.id,
+              nextImages.map(
+                (_, index) =>
+                  selectedImageCommentCache.get(item.id)?.[index] || "",
+              ),
+            );
             const expandedBefore = selectedImagePreviewExpandedCache.get(
               item.id,
             );

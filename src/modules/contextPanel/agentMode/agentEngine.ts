@@ -114,6 +114,7 @@ import {
 } from "../quoteCitations";
 import { synthesizeSelectedTextContexts } from "../normalizers";
 import { resolveSelectedTextAnchors } from "../selectedTextAnchors";
+import { normalizeScreenshotComments } from "../screenshotComments";
 
 function readUsageNumber(record: Record<string, unknown>, key: string): number {
   const value = record[key];
@@ -208,6 +209,7 @@ function buildStoredUserMessagePatch(
     selectedTextPaperContexts: message.selectedTextPaperContexts,
     selectedTextNoteContexts: message.selectedTextNoteContexts,
     screenshotImages: message.screenshotImages,
+    screenshotComments: message.screenshotComments,
     paperContexts: message.paperContexts,
     pdfPaperContexts: message.pdfPaperContexts,
     fullTextPaperContexts: message.fullTextPaperContexts,
@@ -1228,6 +1230,7 @@ export async function sendAgentTurn(
     contextSource?: ResolvedContextSource | null;
     question: string;
     images?: string[];
+    screenshotComments?: string[];
     model?: string;
     apiBase?: string;
     apiKey?: string;
@@ -1273,6 +1276,7 @@ export async function sendAgentTurn(
     contextSource,
     question,
     images,
+    screenshotComments,
     model,
     apiBase,
     apiKey,
@@ -1347,6 +1351,10 @@ export async function sendAgentTurn(
         .filter(Boolean)
         .slice(0, deps.maxSelectedImages)
     : [];
+  const screenshotCommentsForMessage = normalizeScreenshotComments(
+    screenshotImagesForMessage,
+    screenshotComments,
+  );
 
   const historyForRun = deps.chatHistory.get(conversationKey) || [];
   const isCompactCommand = /^\/compact(?:\s|$)/i.test(question.trim());
@@ -1387,6 +1395,9 @@ export async function sendAgentTurn(
     screenshotImages: screenshotImagesForMessage.length
       ? screenshotImagesForMessage
       : undefined,
+    screenshotComments: screenshotCommentsForMessage.some(Boolean)
+      ? screenshotCommentsForMessage
+      : undefined,
     screenshotExpanded: false,
     screenshotActiveIndex: 0,
     attachments: attachments?.length ? attachments : undefined,
@@ -1420,6 +1431,7 @@ export async function sendAgentTurn(
       selectedCollectionContexts: userMessage.selectedCollectionContexts,
       selectedTagContexts: userMessage.selectedTagContexts,
       screenshotImages: userMessage.screenshotImages,
+      screenshotComments: userMessage.screenshotComments,
       attachments: userMessage.attachments,
       modelAttachments: userMessage.modelAttachments,
     });
@@ -1564,6 +1576,7 @@ export async function sendAgentTurn(
       selectedCollectionContexts: userMessage.selectedCollectionContexts,
       selectedTagContexts: userMessage.selectedTagContexts,
       screenshotImages: userMessage.screenshotImages,
+      screenshotComments: userMessage.screenshotComments,
       attachments: userMessage.attachments,
       modelAttachments: userMessage.modelAttachments,
       modelName: userMessage.modelName,

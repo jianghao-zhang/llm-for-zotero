@@ -43,11 +43,16 @@ describe("turnMessageUtils", function () {
       text: "hi",
       attachments: [{ contentHash: HASH_A, category: "file" }],
       selectedTexts: ["a"],
+      screenshotComments: ["figure note"],
     } as unknown as Message;
     const clone = cloneTurnMessageForUndo(original);
     assert.notStrictEqual(clone.attachments, original.attachments);
     assert.notStrictEqual(clone.attachments![0], original.attachments![0]);
     assert.notStrictEqual(clone.selectedTexts, original.selectedTexts);
+    assert.notStrictEqual(
+      clone.screenshotComments,
+      original.screenshotComments,
+    );
     assert.deepEqual(clone.attachments, original.attachments);
   });
 

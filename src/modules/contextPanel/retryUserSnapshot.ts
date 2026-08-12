@@ -18,6 +18,7 @@ export type RetryUserSnapshot = {
   agentRunId: Message["agentRunId"];
   selectedTextContexts: Message["selectedTextContexts"];
   screenshotImages: Message["screenshotImages"];
+  screenshotComments: Message["screenshotComments"];
   paperContexts: Message["paperContexts"];
   pdfPaperContexts: Message["pdfPaperContexts"];
   fullTextPaperContexts: Message["fullTextPaperContexts"];
@@ -38,6 +39,7 @@ export function takeRetryUserSnapshot(message: Message): RetryUserSnapshot {
     agentRunId: message.agentRunId,
     selectedTextContexts: copyArray(message.selectedTextContexts),
     screenshotImages: copyArray(message.screenshotImages),
+    screenshotComments: copyArray(message.screenshotComments),
     paperContexts: copyArray(message.paperContexts),
     pdfPaperContexts: copyArray(message.pdfPaperContexts),
     fullTextPaperContexts: copyArray(message.fullTextPaperContexts),
@@ -57,6 +59,7 @@ export function restoreRetryUserSnapshot(
   message.agentRunId = snapshot.agentRunId;
   message.selectedTextContexts = copyArray(snapshot.selectedTextContexts);
   message.screenshotImages = copyArray(snapshot.screenshotImages);
+  message.screenshotComments = copyArray(snapshot.screenshotComments);
   message.paperContexts = copyArray(snapshot.paperContexts);
   message.pdfPaperContexts = copyArray(snapshot.pdfPaperContexts);
   message.fullTextPaperContexts = copyArray(snapshot.fullTextPaperContexts);

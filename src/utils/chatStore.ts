@@ -12,6 +12,10 @@ import type {
 } from "../shared/types";
 import { normalizeGeneratedChatImages } from "../shared/generatedImages";
 import {
+  parseScreenshotContexts,
+  serializeScreenshotContexts,
+} from "../modules/contextPanel/screenshotComments";
+import {
   GLOBAL_CONVERSATION_KEY_BASE,
   PAPER_CONVERSATION_KEY_BASE,
 } from "../modules/contextPanel/constants";
@@ -100,6 +104,7 @@ export type StoredChatMessage = {
   selectedCollectionContexts?: CollectionContextRef[];
   selectedTagContexts?: TagContextRef[];
   screenshotImages?: string[];
+  screenshotComments?: string[];
   attachments?: StoredChatAttachment[];
   modelAttachments?: StoredChatAttachment[];
   generatedImages?: GeneratedChatImage[];
@@ -1955,23 +1960,13 @@ export async function loadConversation(
         selectedTagContexts = undefined;
       }
     }
-    let screenshotImages: string[] | undefined;
-    if (typeof row.screenshotImages === "string" && row.screenshotImages) {
-      try {
-        const parsed = JSON.parse(row.screenshotImages) as unknown;
-        if (Array.isArray(parsed)) {
-          const normalized = parsed.filter(
-            (entry): entry is string =>
-              typeof entry === "string" && Boolean(entry.trim()),
-          );
-          if (normalized.length) {
-            screenshotImages = normalized;
-          }
-        }
-      } catch (_err) {
-        screenshotImages = undefined;
-      }
-    }
+    const parsedScreenshots = parseScreenshotContexts(row.screenshotImages);
+    const screenshotImages = parsedScreenshots.images.length
+      ? parsedScreenshots.images
+      : undefined;
+    const screenshotComments = parsedScreenshots.comments.some(Boolean)
+      ? parsedScreenshots.comments
+      : undefined;
     let attachments = parseStoredAttachmentsJson(row.attachmentsJson);
     const modelAttachments = parseStoredAttachmentsJson(
       row.modelAttachmentsJson,
@@ -2044,6 +2039,7 @@ export async function loadConversation(
       selectedCollectionContexts,
       selectedTagContexts,
       screenshotImages,
+      screenshotComments,
       attachments,
       modelAttachments,
       generatedImages,
@@ -2203,7 +2199,10 @@ export async function appendMessage(
           ? JSON.stringify(selectedCollectionContexts)
           : null,
         selectedTagContexts.length ? JSON.stringify(selectedTagContexts) : null,
-        screenshotImages.length ? JSON.stringify(screenshotImages) : null,
+        serializeScreenshotContexts(
+          screenshotImages,
+          message.screenshotComments,
+        ),
         attachments.length ? JSON.stringify(attachments) : null,
         hasExplicitModelAttachments ? JSON.stringify(modelAttachments) : null,
         generatedImages.length ? JSON.stringify(generatedImages) : null,
@@ -2264,6 +2263,7 @@ export async function updateLatestUserMessage(
     | "selectedCollectionContexts"
     | "selectedTagContexts"
     | "screenshotImages"
+    | "screenshotComments"
     | "attachments"
     | "modelAttachments"
     | "generatedImages"
@@ -2387,7 +2387,10 @@ export async function updateLatestUserMessage(
           ? JSON.stringify(selectedCollectionContexts)
           : null,
         selectedTagContexts.length ? JSON.stringify(selectedTagContexts) : null,
-        screenshotImages.length ? JSON.stringify(screenshotImages) : null,
+        serializeScreenshotContexts(
+          screenshotImages,
+          message.screenshotComments,
+        ),
         attachments.length ? JSON.stringify(attachments) : null,
         hasExplicitModelAttachments ? JSON.stringify(modelAttachments) : null,
         generatedImages.length ? JSON.stringify(generatedImages) : null,

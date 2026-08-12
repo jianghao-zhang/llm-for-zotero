@@ -8,6 +8,10 @@ import type {
 } from "../shared/types";
 import { normalizeGeneratedChatImages } from "../shared/generatedImages";
 import {
+  parseScreenshotContexts,
+  serializeScreenshotContexts,
+} from "../modules/contextPanel/screenshotComments";
+import {
   normalizeSelectedTextNoteContexts,
   normalizeSelectedTextPaperContexts,
   normalizeSelectedTextSource,
@@ -1369,7 +1373,10 @@ export async function appendCodexMessage(
           ? JSON.stringify(citationPaperContexts)
           : null,
         quoteCitations.length ? JSON.stringify(quoteCitations) : null,
-        screenshotImages.length ? JSON.stringify(screenshotImages) : null,
+        serializeScreenshotContexts(
+          screenshotImages,
+          message.screenshotComments,
+        ),
         attachments.length ? JSON.stringify(attachments) : null,
         generatedImages.length ? JSON.stringify(generatedImages) : null,
         message.modelName || null,
@@ -1414,9 +1421,7 @@ export async function syncCodexExternalThreadSnapshot(params: {
     )) as Array<{ turnId?: unknown }> | undefined;
     const syncedTurnIds = new Set(
       (syncedRows || [])
-        .map((row) =>
-          typeof row.turnId === "string" ? row.turnId.trim() : "",
-        )
+        .map((row) => (typeof row.turnId === "string" ? row.turnId.trim() : ""))
         .filter(Boolean),
     );
     const selector =
@@ -1437,8 +1442,7 @@ export async function syncCodexExternalThreadSnapshot(params: {
       syncedTurnIds,
       localMessages: (localMessages || [])
         .filter(
-          (message) =>
-            message.role === "user" || message.role === "assistant",
+          (message) => message.role === "user" || message.role === "assistant",
         )
         .map((message) => ({
           role: message.role as "user" | "assistant",
@@ -1447,9 +1451,8 @@ export async function syncCodexExternalThreadSnapshot(params: {
         })),
       ignoredTurnId: params.ignoredTurnId,
     });
-    const conversationID = await resolveRegisteredConversationID(
-      conversationKey,
-    );
+    const conversationID =
+      await resolveRegisteredConversationID(conversationKey);
     for (const turn of resolution.imports) {
       for (const message of turn.messages) {
         await Zotero.DB.queryAsync(
@@ -1748,22 +1751,13 @@ export async function loadCodexConversation(
         return undefined;
       }
     })();
-    const screenshotImages = (() => {
-      if (typeof row.screenshotImages !== "string" || !row.screenshotImages)
-        return undefined;
-      try {
-        const parsed = JSON.parse(row.screenshotImages) as unknown;
-        const normalized = Array.isArray(parsed)
-          ? parsed.filter(
-              (entry): entry is string =>
-                typeof entry === "string" && Boolean(entry.trim()),
-            )
-          : [];
-        return normalized.length ? normalized : undefined;
-      } catch {
-        return undefined;
-      }
-    })();
+    const parsedScreenshots = parseScreenshotContexts(row.screenshotImages);
+    const screenshotImages = parsedScreenshots.images.length
+      ? parsedScreenshots.images
+      : undefined;
+    const screenshotComments = parsedScreenshots.comments.some(Boolean)
+      ? parsedScreenshots.comments
+      : undefined;
     const attachments = (() => {
       if (typeof row.attachmentsJson !== "string" || !row.attachmentsJson)
         return undefined;
@@ -1842,6 +1836,7 @@ export async function loadCodexConversation(
       citationPaperContexts,
       quoteCitations,
       screenshotImages,
+      screenshotComments,
       attachments,
       generatedImages,
       modelName: typeof row.modelName === "string" ? row.modelName : undefined,
@@ -2012,6 +2007,7 @@ export async function updateLatestCodexUserMessage(
     | "fullTextPaperContexts"
     | "citationPaperContexts"
     | "screenshotImages"
+    | "screenshotComments"
     | "attachments"
   >,
 ): Promise<void> {
@@ -2108,9 +2104,10 @@ export async function updateLatestCodexUserMessage(
               normalizePaperContextRefs(message.citationPaperContexts),
             )
           : null,
-        message.screenshotImages?.length
-          ? JSON.stringify(message.screenshotImages)
-          : null,
+        serializeScreenshotContexts(
+          message.screenshotImages,
+          message.screenshotComments,
+        ),
         message.attachments?.length
           ? JSON.stringify(message.attachments)
           : null,

@@ -70,6 +70,7 @@ export interface Message {
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   selectedTextExpandedIndex?: number;
   screenshotImages?: string[];
+  screenshotComments?: string[];
   paperContexts?: PaperContextRef[];
   pdfPaperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];
@@ -433,6 +434,7 @@ export type SendQuestionOptions = {
   contextSource?: ResolvedContextSource | null;
   question: string;
   images?: string[];
+  screenshotComments?: string[];
   model?: string;
   apiBase?: string;
   apiKey?: string;
@@ -501,6 +503,7 @@ export type EditRetryOptions = {
   selectedTextPaperContexts?: (PaperContextRef | undefined)[];
   selectedTextNoteContexts?: (NoteContextRef | undefined)[];
   screenshotImages?: string[];
+  screenshotComments?: string[];
   paperContexts?: PaperContextRef[];
   pdfPaperContexts?: PaperContextRef[];
   fullTextPaperContexts?: PaperContextRef[];

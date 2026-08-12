@@ -119,6 +119,7 @@ type SendFlowControllerDeps = {
   ) => Promise<Uint8Array<ArrayBufferLike>>;
   getSelectedFiles: (itemId: number) => ChatAttachment[];
   getSelectedImages: (itemId: number) => string[];
+  getSelectedImageComments?: (itemId: number) => string[];
   resolvePromptText: (
     text: string,
     selectedText: string,
@@ -365,6 +366,11 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
       const selectedImages = deps
         .getSelectedImages(item.id)
         .slice(0, MAX_SELECTED_IMAGES);
+      const currentImageComments =
+        deps.getSelectedImageComments?.(item.id) || [];
+      const selectedImageComments = selectedImages.map(
+        (_, index) => currentImageComments[index] || "",
+      );
       const selectedImageCountForBudget = deps.isScreenshotUnsupportedModel(
         earlyModelName,
         earlyProfile?.providerProtocol,
@@ -622,6 +628,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
             ? selectedTextNoteContexts
             : undefined,
           screenshotImages: images,
+          screenshotComments: [
+            ...selectedImageComments,
+            ...pdfPageImageDataUrls.map(() => ""),
+          ],
           paperContexts: selectedPaperContexts,
           pdfPaperContexts: pdfModePaperContexts,
           fullTextPaperContexts,
@@ -741,6 +751,10 @@ export function createSendFlowController(deps: SendFlowControllerDeps): {
         contextSource,
         question: questionForSend,
         images,
+        screenshotComments: [
+          ...selectedImageComments,
+          ...pdfPageImageDataUrls.map(() => ""),
+        ],
         model: selectedProfile?.model,
         apiBase: selectedProfile?.apiBase,
         apiKey: selectedProfile?.apiKey,
