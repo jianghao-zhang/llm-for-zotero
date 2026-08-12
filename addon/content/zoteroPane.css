@@ -2539,7 +2539,7 @@
   border-radius: 8px;
   line-height: 1.5;
   max-height: 120px;
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid var(--stroke-secondary);
   font-size: var(--llm-fs-11);
   white-space: pre-wrap;
@@ -3777,7 +3777,7 @@
   align-self: flex-end;
   width: min(95%, 620px);
   max-height: 220px;
-  overflow: auto;
+  overflow: hidden;
   padding: 8px 10px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.06);
@@ -7006,6 +7006,14 @@ label.llm-search-results-item:hover {
   padding: 72px 32px 40px;
   overflow: auto;
   background: var(--llm-mermaid-canvas-bg);
+  cursor: grab;
+  touch-action: none;
+}
+
+.llm-mermaid-viewer-viewport.llm-mermaid-is-panning,
+.llm-mermaid-window-viewport.llm-mermaid-is-panning {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .llm-mermaid-viewer-viewport svg {
@@ -7105,6 +7113,8 @@ label.llm-search-results-item:hover {
   overflow: auto;
   padding: 72px 40px 56px;
   background: var(--llm-mermaid-canvas-bg);
+  cursor: grab;
+  touch-action: none;
 }
 
 .llm-mermaid-window-stage {
@@ -7114,6 +7124,7 @@ label.llm-search-results-item:hover {
   box-sizing: border-box;
   min-width: 100%;
   min-height: 100%;
+  will-change: transform;
 }
 
 .llm-mermaid-window-svg {
@@ -7124,6 +7135,10 @@ label.llm-search-results-item:hover {
   max-height: none;
   height: auto;
   object-fit: contain;
+}
+
+.llm-mermaid-viewer-svg {
+  will-change: transform;
 }
 
 .llm-rendered-markdown .llm-mermaid-status {

@@ -25,8 +25,8 @@ const MERMAID_WINDOW_MIN_HEIGHT_PX = 420;
 const MERMAID_WINDOW_ZOOM_MIN = 0.5;
 const MERMAID_WINDOW_ZOOM_MAX = 4;
 const MERMAID_WINDOW_ZOOM_STEP = 0.25;
-const MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX = 24;
-const MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY = 0.002;
+const MERMAID_WINDOW_WHEEL_ZOOM_DELTA_MAX = 32;
+const MERMAID_WINDOW_WHEEL_ZOOM_SENSITIVITY = 0.0045;
 const MERMAID_WINDOW_ROOT_ID = "llmforzotero-standalone-mermaid-root";
 const MERMAID_WINDOW_FEATURES =
   "chrome,extrachrome,menubar,resizable,scrollbars,status,centerscreen,dialog=no,dependent=no";
@@ -34,6 +34,75 @@ const MERMAID_WINDOW_FEATURES =
 type OpenDialogWindow = Window & {
   openDialog?: (...args: unknown[]) => Window | null;
 };
+
+const DRAG_PAN_INTERACTIVE_SELECTOR =
+  "button, a, input, textarea, select, option, [contenteditable='true']";
+
+/** Add direct grab-to-pan behavior to a diagram canvas. */
+export function installMermaidDragPan(
+  viewport: HTMLElement,
+  options: { onPan?: (deltaX: number, deltaY: number) => void } = {},
+): () => void {
+  let activePointerId: number | null = null;
+  let lastX = 0;
+  let lastY = 0;
+
+  const finishDrag = (event?: PointerEvent) => {
+    if (activePointerId === null) return;
+    if (event && event.pointerId !== activePointerId) return;
+    const pointerId = activePointerId;
+    activePointerId = null;
+    viewport.classList.remove("llm-mermaid-is-panning");
+    try {
+      if (viewport.hasPointerCapture?.(pointerId)) {
+        viewport.releasePointerCapture?.(pointerId);
+      }
+    } catch {
+      // The window manager may already have released this pointer.
+    }
+  };
+  const onPointerDown = (event: PointerEvent) => {
+    if (event.button !== 0 || activePointerId !== null) return;
+    const target = event.target as Element | null;
+    if (target?.closest?.(DRAG_PAN_INTERACTIVE_SELECTOR)) return;
+    activePointerId = event.pointerId;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    viewport.classList.add("llm-mermaid-is-panning");
+    viewport.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  };
+  const onPointerMove = (event: PointerEvent) => {
+    if (event.pointerId !== activePointerId) return;
+    const deltaX = event.clientX - lastX;
+    const deltaY = event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    if (options.onPan) {
+      options.onPan(deltaX, deltaY);
+    } else {
+      viewport.scrollLeft -= deltaX;
+      viewport.scrollTop -= deltaY;
+    }
+    event.preventDefault();
+  };
+  const onPointerUp = (event: PointerEvent) => finishDrag(event);
+  const onLostPointerCapture = (event: PointerEvent) => finishDrag(event);
+
+  viewport.addEventListener("pointerdown", onPointerDown);
+  viewport.addEventListener("pointermove", onPointerMove);
+  viewport.addEventListener("pointerup", onPointerUp);
+  viewport.addEventListener("pointercancel", onPointerUp);
+  viewport.addEventListener("lostpointercapture", onLostPointerCapture);
+  return () => {
+    finishDrag();
+    viewport.removeEventListener("pointerdown", onPointerDown);
+    viewport.removeEventListener("pointermove", onPointerMove);
+    viewport.removeEventListener("pointerup", onPointerUp);
+    viewport.removeEventListener("pointercancel", onPointerUp);
+    viewport.removeEventListener("lostpointercapture", onLostPointerCapture);
+  };
+}
 
 function clampZoom(scale: number): number {
   return Math.min(
@@ -179,16 +248,23 @@ function initializeStandaloneSvgWindow(
   root.replaceChildren(toolbar, viewport);
 
   let scale = 1;
+  let panX = 0;
+  let panY = 0;
   let baseFitWidth = 0;
+  const applyPan = () => {
+    stage.style.transform = `translate(${panX}px, ${panY}px)`;
+  };
+  const resetPan = () => {
+    panX = 0;
+    panY = 0;
+    applyPan();
+  };
   const getBaseFitWidth = () => {
     const nextWidth = getViewportContentWidth(targetWin, viewport);
     if (nextWidth > 0) baseFitWidth = nextWidth;
     return baseFitWidth || 1;
   };
   const applyZoom = (nextScale: number) => {
-    const previousWidth = stage.scrollWidth || stage.clientWidth || 1;
-    const centerX = viewport.scrollLeft + viewport.clientWidth / 2;
-    const centerRatio = previousWidth > 0 ? centerX / previousWidth : 0.5;
     scale = clampZoom(nextScale);
     const baseWidth = getBaseFitWidth();
     const displayWidth = Math.max(1, Math.round(baseWidth * scale));
@@ -198,12 +274,6 @@ function initializeStandaloneSvgWindow(
     root.dataset.mermaidZoom = formatZoom(scale);
     zoomOut.disabled = scale <= MERMAID_WINDOW_ZOOM_MIN;
     zoomIn.disabled = scale >= MERMAID_WINDOW_ZOOM_MAX;
-    targetWin.requestAnimationFrame?.(() => {
-      viewport.scrollLeft = Math.max(
-        0,
-        Math.round(stage.scrollWidth * centerRatio - viewport.clientWidth / 2),
-      );
-    });
   };
   const closeWindow = () => targetWin.close();
 
@@ -215,12 +285,17 @@ function initializeStandaloneSvgWindow(
   );
   fit.addEventListener("click", () => {
     applyZoom(1);
-    viewport.scrollTop = 0;
-    viewport.scrollLeft = 0;
+    resetPan();
   });
   close.addEventListener("click", closeWindow);
+  installMermaidDragPan(viewport, {
+    onPan: (deltaX, deltaY) => {
+      panX += deltaX;
+      panY += deltaY;
+      applyPan();
+    },
+  });
   viewport.addEventListener("wheel", (event: WheelEvent) => {
-    if (!event.metaKey && !event.ctrlKey) return;
     event.preventDefault();
     applyZoom(getWheelZoomScale(scale, event.deltaY));
   });

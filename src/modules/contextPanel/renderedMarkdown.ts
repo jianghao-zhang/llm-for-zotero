@@ -16,6 +16,7 @@ import {
   invalidateMermaidSvg,
 } from "./mermaidSvgCache";
 import {
+  installMermaidDragPan,
   openStandaloneMermaidWindow,
   openStandaloneSvgWindow,
 } from "./standaloneMermaidWindow";
@@ -39,8 +40,8 @@ const MERMAID_ERROR_MESSAGE_MAX_CHARS = 220;
 const MERMAID_ZOOM_MIN = 0.5;
 const MERMAID_ZOOM_MAX = 4;
 const MERMAID_ZOOM_STEP = 0.25;
-const MERMAID_WHEEL_ZOOM_DELTA_MAX = 24;
-const MERMAID_WHEEL_ZOOM_SENSITIVITY = 0.002;
+const MERMAID_WHEEL_ZOOM_DELTA_MAX = 32;
+const MERMAID_WHEEL_ZOOM_SENSITIVITY = 0.0045;
 type MermaidThemeKey = "light" | "dark";
 const MERMAID_RENDER_VERSION = "3";
 const MERMAID_VENDOR_SCRIPT_URL = `chrome://${config.addonRef}/content/vendor/mermaid/mermaid.min.js`;
@@ -1381,6 +1382,17 @@ function openSvgViewer(
   viewer.appendChild(panel);
 
   let scale = 1;
+  let panX = 0;
+  let panY = 0;
+  let disposeDragPan = () => {};
+  const applyPan = () => {
+    svg.style.transform = `translate(${panX}px, ${panY}px)`;
+  };
+  const resetPan = () => {
+    panX = 0;
+    panY = 0;
+    applyPan();
+  };
   const applyZoom = (nextScale: number) => {
     scale = clampMermaidZoom(nextScale);
     const label = formatMermaidZoomLabel(scale);
@@ -1390,6 +1402,7 @@ function openSvgViewer(
     zoomIn.disabled = scale >= MERMAID_ZOOM_MAX;
   };
   const closeViewer = () => {
+    disposeDragPan();
     doc.removeEventListener("keydown", handleKeyDown);
     if (typeof viewer.remove === "function") {
       viewer.remove();
@@ -1405,15 +1418,20 @@ function openSvgViewer(
   zoomIn.addEventListener("click", () => applyZoom(scale + MERMAID_ZOOM_STEP));
   resetZoom.addEventListener("click", () => {
     applyZoom(1);
-    viewport.scrollTop = 0;
-    viewport.scrollLeft = 0;
+    resetPan();
   });
   close.addEventListener("click", closeViewer);
+  disposeDragPan = installMermaidDragPan(viewport, {
+    onPan: (deltaX, deltaY) => {
+      panX += deltaX;
+      panY += deltaY;
+      applyPan();
+    },
+  });
   viewer.addEventListener("click", (event: MouseEvent) => {
     if (event.target === viewer) closeViewer();
   });
   viewport.addEventListener("wheel", (event: WheelEvent) => {
-    if (!event.metaKey && !event.ctrlKey) return;
     event.preventDefault();
     applyZoom(getMermaidWheelZoomScale(scale, event.deltaY));
   });
