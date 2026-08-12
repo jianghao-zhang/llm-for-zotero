@@ -330,6 +330,72 @@ describe("Codex app-server native client", function () {
     );
   });
 
+  it("sends Zotero document context in the current turn input", async function () {
+    const processKey = "native-document-context-input-test";
+    const requests: Array<{
+      method: string;
+      params: Record<string, any>;
+    }> = [];
+    const proc = createNativeLifecycleTestProcess({
+      newThreadIds: ["thread-document-context"],
+      requests,
+    });
+    const originalSpawn = CodexAppServerProcess.spawn;
+    const originalZtoolkit = (globalThis as any).ztoolkit;
+    const restorePrefs = installDirectPathTestPrefs();
+    CodexAppServerProcess.spawn = async () => proc;
+    (globalThis as any).ztoolkit = { log: () => undefined };
+
+    try {
+      await runCodexAppServerNativeTurn({
+        scope: {
+          profileSignature: "profile-document-context-test",
+          conversationKey: 6_000_000_041,
+          libraryID: 1,
+          kind: "paper",
+          paperItemID: 5607,
+          paperTitle: "HTML Snapshot",
+        },
+        model: "glm-5.2",
+        messages: [
+          { role: "system", content: "Keep normal Codex behavior." },
+          {
+            role: "system",
+            content:
+              "Document Context:\nSelected Attachment Text:\nHTML_BODY_SENTINEL",
+          },
+          { role: "user", content: "Summarize this page." },
+        ],
+        hooks: {
+          loadProviderSessionId: async () => undefined,
+          persistProviderSessionId: async () => undefined,
+        },
+        processKey,
+      });
+    } finally {
+      CodexAppServerProcess.spawn = originalSpawn;
+      (globalThis as any).ztoolkit = originalZtoolkit;
+      destroyCachedCodexAppServerProcess(processKey, proc);
+      restorePrefs();
+    }
+
+    const threadStart = requests.find(
+      (request) => request.method === "thread/start",
+    );
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start",
+    );
+    const developerInstructions = String(
+      threadStart?.params.developerInstructions || "",
+    );
+    const inputText = JSON.stringify(turnStart?.params.input || []);
+    assert.include(developerInstructions, "Keep normal Codex behavior.");
+    assert.notInclude(developerInstructions, "HTML_BODY_SENTINEL");
+    assert.include(inputText, "Document Context:");
+    assert.include(inputText, "HTML_BODY_SENTINEL");
+    assert.include(inputText, "Summarize this page.");
+  });
+
   it("reinjects visible history into a clean configured-folder thread after a model switch", async function () {
     const processKey = "native-model-switch-clean-thread-test";
     const requests: Array<{

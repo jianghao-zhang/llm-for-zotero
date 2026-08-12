@@ -1212,14 +1212,37 @@ function extractCodexAppServerThreadSource(
   return undefined;
 }
 
-function extractSystemText(messages: ChatMessage[]): string {
-  return messages
-    .filter((message) => message.role === "system")
-    .map((message) =>
-      typeof message.content === "string" ? message.content.trim() : "",
-    )
-    .filter(Boolean)
-    .join("\n\n");
+const DOCUMENT_CONTEXT_PREFIX = "Document Context:\n";
+
+function extractMessageText(content: MessageContent): string {
+  if (typeof content === "string") return content.trim();
+  return content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text || "")
+    .join("\n")
+    .trim();
+}
+
+function partitionNativeSystemText(messages: ChatMessage[]): {
+  developerText: string;
+  documentContextText: string;
+} {
+  const developerParts: string[] = [];
+  const documentContextParts: string[] = [];
+  for (const message of messages) {
+    if (message.role !== "system") continue;
+    const text = extractMessageText(message.content);
+    if (!text) continue;
+    if (text.startsWith(DOCUMENT_CONTEXT_PREFIX)) {
+      documentContextParts.push(text);
+    } else {
+      developerParts.push(text);
+    }
+  }
+  return {
+    developerText: developerParts.join("\n\n"),
+    documentContextText: documentContextParts.join("\n\n"),
+  };
 }
 
 function extractLatestUserText(messages: ChatMessage[]): string {
@@ -1528,10 +1551,10 @@ function buildNativeMessages(params: {
   prefixLatestUserWithContext?: boolean;
   latestUserContextText?: string;
 }): ChatMessage[] {
-  const systemText = [
-    extractSystemText(params.messages),
-    params.zoteroEnvironmentText || "",
-  ]
+  const { developerText, documentContextText } = partitionNativeSystemText(
+    params.messages,
+  );
+  const systemText = [developerText, params.zoteroEnvironmentText || ""]
     .map((entry) => entry.trim())
     .filter(Boolean)
     .join("\n\n");
@@ -1559,14 +1582,21 @@ function buildNativeMessages(params: {
     ? visibleMessages.slice(0, latestUserIndex)
     : [];
   const latestUser = visibleMessages[latestUserIndex]!;
-  if (!params.prefixLatestUserWithContext) {
+  const latestUserContextText = [
+    documentContextText,
+    params.prefixLatestUserWithContext
+      ? (params.latestUserContextText || "").trim()
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  if (!latestUserContextText) {
     return [
       ...(systemText ? [{ role: "system" as const, content: systemText }] : []),
       ...history,
       latestUser,
     ];
   }
-  const latestUserContextText = (params.latestUserContextText || "").trim();
   return [
     ...(systemText ? [{ role: "system" as const, content: systemText }] : []),
     ...history,
