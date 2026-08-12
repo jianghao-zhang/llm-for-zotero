@@ -36,6 +36,20 @@ import {
 type StatusLevel = "ready" | "warning" | "error" | "sending";
 type ActiveAtToken = { slashStart: number; caretEnd: number } | null;
 
+function getScreenshotCommentDocument(fallback: Document): Document {
+  try {
+    const reader = getActiveReaderForSelectedTab();
+    return (
+      reader?._iframeWindow?.document ||
+      reader?._iframe?.contentDocument ||
+      reader?._internalReader?._lastView?._iframeWindow?.document ||
+      fallback
+    );
+  } catch {
+    return fallback;
+  }
+}
+
 type ComposeCaptureControllerDeps = {
   body: Element;
   inputBox: HTMLTextAreaElement;
@@ -70,6 +84,7 @@ type ComposeCaptureControllerDeps = {
   onScreenshotCaptured?: (params: {
     itemId: number;
     imageIndex: number;
+    document: Document;
   }) => void;
   isScreenshotUnsupportedModel?: (modelName: string) => boolean;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
@@ -307,6 +322,7 @@ export function attachComposeCaptureController(
           deps.onScreenshotCaptured?.({
             itemId: item.id,
             imageIndex: nextImages.length - 1,
+            document: getScreenshotCommentDocument(mainWindow.document),
           });
           setStatus(`Screenshot captured (${nextImages.length})`, "ready");
         } else {
