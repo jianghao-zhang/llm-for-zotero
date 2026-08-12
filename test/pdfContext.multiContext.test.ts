@@ -274,6 +274,60 @@ describe("pdfContext multi-context helpers", function () {
     assert.deepEqual(cached?.chunks, ["Plain attachment text for retrieval."]);
   });
 
+  it("caches HTML snapshots through Zotero's async attachment path", async function () {
+    const io = setupMemoryIO();
+    io.files.set(
+      "/tmp/zotero/snapshot.html",
+      bytes(
+        "<html><body><h1>Snapshot</h1><p>Readable body text.</p></body></html>",
+      ),
+    );
+    const attachment = {
+      ...mockTextAttachment({
+        id: 323,
+        filename: "snapshot.html",
+        contentType: "text/html",
+        path: "/unused-sync-path.html",
+      }),
+      getFilePathAsync: async () => "/tmp/zotero/snapshot.html",
+      getFilePath: () => false,
+    } as unknown as Zotero.Item;
+
+    await ensurePDFTextCached(attachment, { sourceMode: "html" });
+
+    const cached = pdfTextCache.get(323);
+    assert.equal(cached?.sourceType, "attachment-html");
+    assert.include(cached?.chunks.join("\n") || "", "Readable body text.");
+  });
+
+  it("retries a text attachment after its local file becomes available", async function () {
+    const io = setupMemoryIO();
+    let available = false;
+    const attachment = {
+      ...mockTextAttachment({
+        id: 324,
+        filename: "syncing.html",
+        contentType: "text/html",
+        path: "/unused-sync-path.html",
+      }),
+      getFilePathAsync: async () =>
+        available ? "/tmp/zotero/syncing.html" : false,
+      getFilePath: () => false,
+    } as unknown as Zotero.Item;
+
+    await ensurePDFTextCached(attachment, { sourceMode: "html" });
+    assert.isFalse(pdfTextCache.has(324));
+
+    io.files.set(
+      "/tmp/zotero/syncing.html",
+      bytes("<html><body>Available after sync.</body></html>"),
+    );
+    available = true;
+    await ensurePDFTextCached(attachment, { sourceMode: "html" });
+
+    assert.deepEqual(pdfTextCache.get(324)?.chunks, ["Available after sync."]);
+  });
+
   it("caches DOCX child attachments as plain text", async function () {
     const io = setupMemoryIO();
     io.files.set(

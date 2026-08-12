@@ -200,6 +200,31 @@ export async function readAttachmentBytes(path: string): Promise<Uint8Array> {
   return readBytes(path);
 }
 
+/** Resolve an existing local attachment through Zotero's canonical API. */
+export async function resolveZoteroAttachmentFilePath(
+  item: Zotero.Item | null | undefined,
+): Promise<string | null> {
+  if (!item?.isAttachment?.()) return null;
+
+  const asyncPath = await (
+    item as unknown as {
+      getFilePathAsync?: () => Promise<string | false>;
+    }
+  ).getFilePathAsync?.();
+  if (typeof asyncPath === "string" && asyncPath.trim()) {
+    return asyncPath.trim();
+  }
+
+  const syncPath = (
+    item as unknown as {
+      getFilePath?: () => string | false;
+    }
+  ).getFilePath?.();
+  return typeof syncPath === "string" && syncPath.trim()
+    ? syncPath.trim()
+    : null;
+}
+
 export async function writeAttachmentBytes(
   path: string,
   bytes: Uint8Array,

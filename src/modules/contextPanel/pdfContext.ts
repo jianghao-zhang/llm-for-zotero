@@ -39,7 +39,10 @@ import {
   mergeQuoteCitations,
 } from "./quoteCitations";
 import { readNoteSnapshot } from "./notes";
-import { readAttachmentBytes } from "./attachmentStorage";
+import {
+  readAttachmentBytes,
+  resolveZoteroAttachmentFilePath,
+} from "./attachmentStorage";
 import { pdfTextCache, pdfTextLoadingTasks } from "./state";
 import {
   buildAndWriteManifest,
@@ -335,21 +338,11 @@ async function cacheTextAttachment(
 ): Promise<void> {
   const title = getAttachmentTitle(item) || `Attachment ${item.id}`;
   try {
-    const filePath: string | undefined =
-      (
-        item as unknown as { getFilePath?: () => string | undefined }
-      ).getFilePath?.() || undefined;
+    const filePath = await resolveZoteroAttachmentFilePath(item);
     if (!filePath) {
-      pdfTextCache.set(item.id, {
-        title,
-        chunks: [],
-        chunkMeta: [],
-        chunkStats: [],
-        docFreq: {},
-        avgChunkLength: 0,
-        fullLength: 0,
-        sourceType: sourceTypeForTextAttachment(sourceMode),
-      });
+      // Missing/syncing files are transient. Do not poison the attachment's
+      // cache with a permanent metadata-only result.
+      pdfTextCache.delete(item.id);
       return;
     }
     const bytes = await readAttachmentBytes(filePath);
@@ -387,16 +380,9 @@ async function cacheTextAttachment(
     }
   } catch (error) {
     ztoolkit.log("Error caching text attachment:", error);
-    pdfTextCache.set(item.id, {
-      title,
-      chunks: [],
-      chunkMeta: [],
-      chunkStats: [],
-      docFreq: {},
-      avgChunkLength: 0,
-      fullLength: 0,
-      sourceType: sourceTypeForTextAttachment(sourceMode),
-    });
+    // Reader reloads and Zotero attachment sync can make path/file access fail
+    // temporarily. Leave the cache retryable for the next send.
+    pdfTextCache.delete(item.id);
   }
 }
 

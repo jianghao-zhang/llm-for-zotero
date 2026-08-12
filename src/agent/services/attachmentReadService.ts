@@ -1,4 +1,7 @@
-import { readAttachmentBytes } from "../../modules/contextPanel/attachmentStorage";
+import {
+  readAttachmentBytes,
+  resolveZoteroAttachmentFilePath,
+} from "../../modules/contextPanel/attachmentStorage";
 import { extractTextAttachmentContent } from "../../modules/contextPanel/textAttachmentExtraction";
 import type { TextAttachmentSourceMode } from "../../modules/contextPanel/contextAttachmentTypes";
 import { resolveContextAttachmentSupportFromMetadata } from "../../modules/contextPanel/contextAttachmentSupport";
@@ -229,8 +232,7 @@ export class AttachmentReadService {
 
     // Resolve file path
     const attachmentItem = this.zoteroGateway.getItem(params.attachmentId);
-    const filePath: string | undefined =
-      (attachmentItem as any)?.getFilePath?.() || undefined;
+    const filePath = await resolveZoteroAttachmentFilePath(attachmentItem);
     if (!filePath) {
       return {
         ...baseResult,
