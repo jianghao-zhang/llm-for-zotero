@@ -1,4 +1,5 @@
 const HTML_NS = "http://www.w3.org/1999/xhtml";
+const activeComposerCleanup = new WeakMap<Document, () => void>();
 
 type SnapshotCommentComposerOptions = {
   document: Document;
@@ -17,6 +18,7 @@ export function showSnapshotCommentComposer(
   options: SnapshotCommentComposerOptions,
 ): () => void {
   const { document: doc } = options;
+  activeComposerCleanup.get(doc)?.();
   doc
     .querySelectorAll("[data-llm-snapshot-comment-composer='true']")
     .forEach((element) => element.remove());
@@ -110,6 +112,9 @@ export function showSnapshotCommentComposer(
   const destroy = () => {
     if (closed) return;
     closed = true;
+    if (activeComposerCleanup.get(doc) === destroy) {
+      activeComposerCleanup.delete(doc);
+    }
     win?.removeEventListener("pointerdown", handleOutsidePointer, true);
     win?.removeEventListener("mousedown", handleOutsidePointer, true);
     form.remove();
@@ -151,6 +156,7 @@ export function showSnapshotCommentComposer(
   form.addEventListener("pointerdown", (event) => event.stopPropagation());
   form.addEventListener("mousedown", (event) => event.stopPropagation());
   syncSaveButton();
+  activeComposerCleanup.set(doc, destroy);
   doc.body?.appendChild(form);
   win?.requestAnimationFrame(() => {
     if (closed) return;
