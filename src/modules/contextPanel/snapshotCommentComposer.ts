@@ -3,10 +3,32 @@ const activeComposerCleanup = new WeakMap<Document, () => void>();
 
 type SnapshotCommentComposerOptions = {
   document: Document;
+  outsideDocuments?: readonly Document[];
   initialComment?: string;
   onSave: (comment: string) => void;
   onDismiss?: () => void;
 };
+
+function collectDocumentTree(
+  roots: readonly (Document | null | undefined)[],
+): Document[] {
+  const documents: Document[] = [];
+  const seen = new Set<Document>();
+  const visit = (doc: Document | null | undefined, depth: number) => {
+    if (!doc || seen.has(doc) || depth > 4) return;
+    seen.add(doc);
+    documents.push(doc);
+    try {
+      for (const frame of Array.from(doc.querySelectorAll("iframe"))) {
+        visit((frame as HTMLIFrameElement).contentDocument, depth + 1);
+      }
+    } catch {
+      // Reader frames can become dead wrappers while a tab is reloading.
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  return documents;
+}
 
 const createHtmlElement = <K extends keyof HTMLElementTagNameMap>(
   doc: Document,
@@ -103,6 +125,10 @@ export function showSnapshotCommentComposer(
   let closed = false;
   let outsideListenerInstalled = false;
   const win = doc.defaultView;
+  const outsideDocuments = collectDocumentTree([
+    doc,
+    ...(options.outsideDocuments || []),
+  ]);
   const syncSaveButton = () => {
     const enabled = Boolean(input.value.trim());
     saveButton.disabled = !enabled;
@@ -115,11 +141,22 @@ export function showSnapshotCommentComposer(
     if (activeComposerCleanup.get(doc) === destroy) {
       activeComposerCleanup.delete(doc);
     }
-    win?.removeEventListener("pointerdown", handleOutsidePointer, true);
-    win?.removeEventListener("mousedown", handleOutsidePointer, true);
+    for (const outsideDocument of outsideDocuments) {
+      outsideDocument.removeEventListener(
+        "pointerdown",
+        handleOutsidePointer,
+        true,
+      );
+      outsideDocument.removeEventListener(
+        "mousedown",
+        handleOutsidePointer,
+        true,
+      );
+    }
     form.remove();
   };
   const dismiss = () => {
+    if (closed) return;
     destroy();
     options.onDismiss?.();
   };
@@ -167,8 +204,18 @@ export function showSnapshotCommentComposer(
     win.setTimeout(() => {
       if (closed || outsideListenerInstalled) return;
       outsideListenerInstalled = true;
-      win.addEventListener("pointerdown", handleOutsidePointer, true);
-      win.addEventListener("mousedown", handleOutsidePointer, true);
+      for (const outsideDocument of outsideDocuments) {
+        outsideDocument.addEventListener(
+          "pointerdown",
+          handleOutsidePointer,
+          true,
+        );
+        outsideDocument.addEventListener(
+          "mousedown",
+          handleOutsidePointer,
+          true,
+        );
+      }
     }, 0);
   });
 

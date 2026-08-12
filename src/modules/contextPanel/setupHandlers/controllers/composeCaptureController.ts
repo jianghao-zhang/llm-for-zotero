@@ -85,6 +85,7 @@ type ComposeCaptureControllerDeps = {
     itemId: number;
     imageIndex: number;
     document: Document;
+    outsideDocuments: Document[];
   }) => void;
   isScreenshotUnsupportedModel?: (modelName: string) => boolean;
   setStatusMessage?: (message: string, level: StatusLevel) => void;
@@ -323,6 +324,7 @@ export function attachComposeCaptureController(
             itemId: item.id,
             imageIndex: nextImages.length - 1,
             document: getScreenshotCommentDocument(mainWindow.document),
+            outsideDocuments: [body.ownerDocument, mainWindow.document],
           });
           setStatus(`Screenshot captured (${nextImages.length})`, "ready");
         } else {

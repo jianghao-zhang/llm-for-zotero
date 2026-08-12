@@ -1298,12 +1298,26 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             }
           };
           const popupWindows = new Set<Window>();
-          const addPopupWindow = (candidate: unknown) => {
+          const addPopupWindow = (candidate: unknown, depth = 0) => {
             if (
               candidate &&
               typeof (candidate as Window).addEventListener === "function"
             ) {
-              popupWindows.add(candidate as Window);
+              const candidateWindow = candidate as Window;
+              if (popupWindows.has(candidateWindow) || depth > 4) return;
+              popupWindows.add(candidateWindow);
+              try {
+                for (const frame of Array.from(
+                  candidateWindow.document.querySelectorAll("iframe"),
+                )) {
+                  addPopupWindow(
+                    (frame as HTMLIFrameElement).contentWindow,
+                    depth + 1,
+                  );
+                }
+              } catch {
+                // Reader frames can become dead wrappers during tab reloads.
+              }
             }
           };
           addPopupWindow(event.doc.defaultView);

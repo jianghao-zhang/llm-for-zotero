@@ -7645,12 +7645,18 @@ export function setupHandlers(
     closeExportMenu,
     schedulePaperPickerSearch,
     updateImagePreviewPreservingScroll,
-    onScreenshotCaptured: ({ itemId, imageIndex, document }) => {
+    onScreenshotCaptured: ({
+      itemId,
+      imageIndex,
+      document,
+      outsideDocuments,
+    }) => {
       const images = selectedImageCache.get(itemId) || [];
       if (imageIndex < 0 || imageIndex >= images.length) return;
       const comments = selectedImageCommentCache.get(itemId) || [];
       showSnapshotCommentComposer({
         document,
+        outsideDocuments,
         initialComment: comments[imageIndex] || "",
         onSave: (comment) => {
           const currentImages = selectedImageCache.get(itemId) || [];
