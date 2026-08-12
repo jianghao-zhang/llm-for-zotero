@@ -1101,8 +1101,17 @@ export function setupHandlers(
     codexModelCatalogInFlight = ensureCodexAppServerModelCapabilities({
       model: getCodexRuntimeModelPref(),
       codexPath,
+      // Send-time capability discovery is intentionally short and may have
+      // cached an empty snapshot. The interactive picker gets one real,
+      // bounded refresh instead of presenting that timeout as a valid catalog.
+      forceRefresh: true,
+      timeoutMs: 8_000,
+      listRequestTimeoutMs: 5_000,
     })
       .then((catalog) => {
+        if (!catalog.models.length) {
+          throw new Error(t("Codex did not return any available models."));
+        }
         codexModelCatalogModels = catalog.models;
         codexModelCatalogStatus = "ready";
         codexModelCatalogError = "";

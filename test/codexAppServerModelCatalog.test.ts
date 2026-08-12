@@ -451,6 +451,62 @@ describe("Codex app-server model catalog", function () {
     ]);
   });
 
+  it("lets the interactive picker replace an empty send-time snapshot", async function () {
+    let listCalls = 0;
+    const base = {
+      model: "third-party/exact",
+      codexPath: "/usr/local/bin/codex",
+      configPath: null,
+      listModels: async () => {
+        listCalls += 1;
+        return listCalls === 1
+          ? { data: [] }
+          : { data: [{ model: "third-party/exact" }] };
+      },
+    };
+
+    const first = await ensureCodexAppServerModelCapabilities(base);
+    const refreshed = await ensureCodexAppServerModelCapabilities({
+      ...base,
+      forceRefresh: true,
+    });
+    const reused = await ensureCodexAppServerModelCapabilities(base);
+
+    assert.deepEqual(first, { models: [] });
+    assert.deepEqual(
+      refreshed.models.map((entry) => entry.model),
+      ["third-party/exact"],
+    );
+    assert.deepEqual(reused, refreshed);
+    assert.equal(listCalls, 2);
+  });
+
+  it("does not erase a working snapshot with a transient empty refresh", async function () {
+    let listCalls = 0;
+    const base = {
+      model: "third-party/exact",
+      codexPath: "/usr/local/bin/codex",
+      configPath: null,
+      listModels: async () => {
+        listCalls += 1;
+        return listCalls === 1
+          ? { data: [{ model: "third-party/exact" }] }
+          : { data: [] };
+      },
+    };
+
+    const first = await ensureCodexAppServerModelCapabilities(base);
+    const emptyRefresh = await ensureCodexAppServerModelCapabilities({
+      ...base,
+      forceRefresh: true,
+    });
+    const reused = await ensureCodexAppServerModelCapabilities(base);
+
+    assert.deepEqual(emptyRefresh, { models: [] });
+    assert.deepEqual(reused, first);
+    assert.equal(listCalls, 2);
+  });
+
   it("merges a partial refresh without erasing previously registered exact limits", async function () {
     const nativeIdentity = {
       model: "third-party/original",

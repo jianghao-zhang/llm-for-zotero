@@ -519,6 +519,8 @@ export async function ensureCodexAppServerModelCapabilities(params: {
   timeoutMs?: number;
   listRequestTimeoutMs?: number;
   readTimeoutMs?: number;
+  /** Bypass a bounded send-time snapshot when an interactive surface needs a fresh catalog. */
+  forceRefresh?: boolean;
 }): Promise<CodexAppServerModelCatalog> {
   const identity = buildCodexAppServerCapabilityIdentity({
     model: params.model,
@@ -532,10 +534,12 @@ export async function ensureCodexAppServerModelCapabilities(params: {
   ]
     .map((value) => (value || "").trim().toLowerCase())
     .join("\u0000");
-  const cached = nativeCapabilityCatalogSnapshots.get(key);
-  if (cached) return cached;
-  const running = nativeCapabilityCatalogTasks.get(key);
-  if (running) return running;
+  if (!params.forceRefresh) {
+    const cached = nativeCapabilityCatalogSnapshots.get(key);
+    if (cached) return cached;
+    const running = nativeCapabilityCatalogTasks.get(key);
+    if (running) return running;
+  }
 
   const task = (async () => {
     let catalog: CodexAppServerModelCatalog = { models: [] };
@@ -561,12 +565,19 @@ export async function ensureCodexAppServerModelCapabilities(params: {
       readTextFile: params.readTextFile,
       readTimeoutMs: params.readTimeoutMs,
     });
-    nativeCapabilityCatalogSnapshots.set(key, catalog);
     return catalog;
   })();
   nativeCapabilityCatalogTasks.set(key, task);
   try {
-    return await task;
+    const catalog = await task;
+    if (nativeCapabilityCatalogTasks.get(key) === task) {
+      const previous = nativeCapabilityCatalogSnapshots.get(key);
+      // A transient empty refresh must not erase a previously working menu.
+      if (catalog.models.length || !previous) {
+        nativeCapabilityCatalogSnapshots.set(key, catalog);
+      }
+    }
+    return catalog;
   } finally {
     if (nativeCapabilityCatalogTasks.get(key) === task) {
       nativeCapabilityCatalogTasks.delete(key);
